@@ -18,6 +18,7 @@ contract CertChainRegistry is OwnableUpgradeable {
         None, // 0
         CA, // 1
         Intermediate // 2
+
     }
 
     // keccak256(cert) => type: 0) none, 1) CA; 2) leaf

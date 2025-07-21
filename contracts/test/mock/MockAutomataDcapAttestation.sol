@@ -1,7 +1,7 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { IDcapAttestation } from "src/interfaces/IDcapAttestation.sol";
+import {IDcapAttestation} from "src/interfaces/IDcapAttestation.sol";
 
 /// @title MockAutomataDcapAttestation
 contract MockAutomataDcapAttestation is IDcapAttestation {
@@ -31,11 +31,7 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
         return (true, serializeOutput(output));
     }
 
-    function verifyAndAttestWithZKProof(
-        bytes calldata journal,
-        ZkCoProcessorType,
-        bytes calldata
-    )
+    function verifyAndAttestWithZKProof(bytes calldata journal, ZkCoProcessorType, bytes calldata)
         external
         payable
         returns (bool success, bytes memory output)
