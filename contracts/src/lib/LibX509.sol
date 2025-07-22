@@ -105,11 +105,17 @@ library LibX509 {
     function _getCertHashes(bytes[] memory certs) internal pure returns (bytes32[] memory certHashes) {
         uint256 certLen = certs.length;
         certHashes = new bytes32[](certLen);
-        for (uint256 i = certLen - 1; i >= 0; i++) {
-            if (i == certLen - 1) {
-                certHashes[i] = keccak256(certs[i]);
-            } else {
-                certHashes[i] = keccak256(abi.encodePacked(certHashes[i + 1], sha256(certs[i])));
+        unchecked {
+            for (uint256 i = certLen - 1; i >= 0; i--) {
+                if (i == certLen - 1) {
+                    certHashes[i] = keccak256(certs[i]);
+                } else {
+                    certHashes[i] = keccak256(abi.encodePacked(certHashes[i + 1], sha256(certs[i])));
+                }
+
+                if (i == 0) {
+                    break; // Prevent underflow
+                }
             }
         }
     }
