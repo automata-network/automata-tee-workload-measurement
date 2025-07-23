@@ -18,7 +18,6 @@ abstract contract TestSetup is Test {
     address internal constant owner = address(0x1234);
 
     function setUp() public virtual {
-        
         _deployP256();
 
         vm.startBroadcast(owner);

@@ -304,9 +304,11 @@ library TestDataLib {
         }
     }
 
-    function getTdxGoldenMeasurementBytes(
-        TdxGoldenMeasurement memory tdxGoldenMeasurement
-    ) internal pure returns (bytes memory encoded) {
+    function getTdxGoldenMeasurementBytes(TdxGoldenMeasurement memory tdxGoldenMeasurement)
+        internal
+        pure
+        returns (bytes memory encoded)
+    {
         GoldenMeasurement memory gm;
 
         // TDX
@@ -329,9 +331,11 @@ library TestDataLib {
         encoded = abi.encode(gm);
     }
 
-    function getSnpGoldenMeasurementBytes(
-        SnpGoldenMeasurement memory snpGoldenMeasurement
-    ) internal pure returns (bytes memory encoded) {
+    function getSnpGoldenMeasurementBytes(SnpGoldenMeasurement memory snpGoldenMeasurement)
+        internal
+        pure
+        returns (bytes memory encoded)
+    {
         GoldenMeasurement memory gm;
 
         // SNP
