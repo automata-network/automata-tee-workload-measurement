@@ -8,14 +8,15 @@ import "forge-std/console.sol";
 import {TEEType, TeeReportType, CloudType} from "../src/lib/LibTEE.sol";
 
 contract GcpSnpTest is TestSetup {
-    SnpTestData internal testData;
-
     function setUp() public override {
         super.setUp();
+    }
 
-        string memory path = string.concat(vm.projectRoot(), "/test/testdata/registration_gcp_snp.json");
-        // Load test data
-        testData = TestDataLib.loadSnpData(path);
+    function testVerifyGcpSnp() public {
+        bytes32 userDataHash = 0xa4099be3cfdb31b19e300e3b68cb9c9908bcc33696b66ca551b9489a912c4458;
+
+        SnpTestData memory testData =
+            _loadTestData(string.concat(vm.projectRoot(), "/test/testdata/registration_gcp_snp.json"));
 
         // pinned July 22, 2025, 1840h UTC+8
         vm.warp(1753180800);
@@ -24,10 +25,6 @@ contract GcpSnpTest is TestSetup {
         bytes memory googleCa = testData.tpmCerts[testData.tpmCerts.length - 1];
         vm.prank(address(0));
         certChainRegistry.addCA(googleCa);
-    }
-
-    function testVerifyGcpSnp() public {
-        bytes32 userDataHash = 0xa4099be3cfdb31b19e300e3b68cb9c9908bcc33696b66ca551b9489a912c4458;
 
         WorkloadCollaterals memory wc = TestDataLib.getWc(
             abi.encodePacked(testData.reportId),
@@ -49,5 +46,9 @@ contract GcpSnpTest is TestSetup {
         bytes32 expectedMeasurementHash = keccak256(expectedMeasurement);
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
+    }
+
+    function _loadTestData(string memory path) internal view returns (SnpTestData memory) {
+        return TestDataLib.loadSnpData(path);
     }
 }

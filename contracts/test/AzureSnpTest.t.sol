@@ -8,18 +8,15 @@ import "forge-std/console.sol";
 import {TEEType, TeeReportType, CloudType} from "../src/lib/LibTEE.sol";
 
 contract AzureSnpTest is TestSetup {
-    SnpTestData internal testData;
-
     function setUp() public override {
         super.setUp();
-
-        string memory path = string.concat(vm.projectRoot(), "/test/testdata/registration_azure_snp.json");
-        // Load test data
-        testData = TestDataLib.loadSnpData(path);
     }
 
     function testVerifyAzureSnp() public {
         bytes32 userDataHash = 0xbd5f88a79dd2ae29392a9d85597be119d8ba406505ae65d139c814de928911ec;
+
+        SnpTestData memory testData =
+            _loadTestData(string.concat(vm.projectRoot(), "/test/testdata/registration_azure_snp.json"));
 
         WorkloadCollaterals memory wc = TestDataLib.getWc(
             abi.encodePacked(testData.reportId),
@@ -41,5 +38,9 @@ contract AzureSnpTest is TestSetup {
         bytes32 expectedMeasurementHash = keccak256(expectedMeasurement);
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
+    }
+
+    function _loadTestData(string memory path) internal view returns (SnpTestData memory) {
+        return TestDataLib.loadSnpData(path);
     }
 }

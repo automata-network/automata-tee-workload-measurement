@@ -5,9 +5,10 @@ libs = ["lib"]
 
 fs_permissions = [{ access = "read", path = "./" }]
 
-viaIR = true
 solc = "0.8.30"
 evm_version = "prague"
+optimizer = true
+optimizer_runs = 999999
 
 remappings = [
   '@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts',

@@ -8,19 +8,15 @@ import "forge-std/console.sol";
 import {TEEType, TeeReportType, CloudType} from "../src/lib/LibTEE.sol";
 
 contract AzureTdxTest is TestSetup {
-    TdxTestData testData;
-
     function setUp() public override {
         super.setUp();
-
-        string memory path = string.concat(vm.projectRoot(), "/test/testdata/registration_azure_tdx.json");
-
-        // Load test data
-        testData = TestDataLib.loadTdxData(path);
     }
 
     function testVerifyAzureTdx() public {
         bytes32 userDataHash = 0xacddde55453462e71daab1341ad7ddc8a5f8ea5e87a0fcacd737265ef3f0555f;
+
+        string memory path = string.concat(vm.projectRoot(), "/test/testdata/registration_azure_tdx.json");
+        TdxTestData memory testData = _loadTestData(path);
 
         WorkloadCollaterals memory wc = TestDataLib.getWc(
             testData.reportId,
@@ -39,5 +35,9 @@ contract AzureTdxTest is TestSetup {
         bytes32 expectedMeasurementHash = keccak256(expectedMeasurement);
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
+    }
+
+    function _loadTestData(string memory path) internal view returns (TdxTestData memory) {
+        return TestDataLib.loadTdxData(path);
     }
 }
