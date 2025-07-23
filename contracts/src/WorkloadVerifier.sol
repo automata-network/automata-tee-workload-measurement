@@ -11,7 +11,6 @@ import {WorkloadCollaterals, MeasureablePcr, LibTPM} from "./lib/LibTPM.sol";
 import {TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE} from "./lib/LibTEE.sol";
 import {CertPubkey} from "./lib/LibX509.sol";
 
-import {console} from "forge-std/console.sol";
 
 contract WorkloadVerifier is OwnableUpgradeable {
     IDcapAttestation public dcapAttestation;
@@ -141,30 +140,17 @@ contract WorkloadVerifier is OwnableUpgradeable {
         bytes32 _userDataHash,
         TEEVerifiedData memory _teeVerifiedData
     ) public {
-        uint256 gl = gasleft();
-
         if (_teeVerifiedData.akPub.empty()) {
             _teeVerifiedData.akPub = LibTPM.verifyAkPub(_wc.certs, certChainRegistryAddr);
         }
 
-        console.log("verifyAkPub:", gl - gasleft());
-        gl = gasleft();
-
         _wc.verifyTpmQuote(_teeVerifiedData.akPub, certChainRegistryAddr);
 
-        console.log("verifyTpmQuote:", gl - gasleft());
-        gl = gasleft();
-
         bytes32 extraDataHash = LibTPM.quoteExtraData(_wc.tpmQuote);
-        console.logBytes32(extraDataHash);
         require(extraDataHash == _userDataHash, "user report data mismatch");
-        console.log("extradata hash:", gl - gasleft());
-        gl = gasleft();
 
         LibTPM.verifyPcrs(_wc.pcrs, _wc.tpmQuote);
         LibTEE.verifyReportID(_wc, _teeVerifiedData);
-
-        console.log("LibTPM.verifyPcrs:", gl - gasleft());
     }
 
     /**

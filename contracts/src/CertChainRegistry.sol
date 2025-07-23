@@ -8,7 +8,6 @@ import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "./lib/LibX509.sol";
 import {LibP256} from "./lib/LibTEE.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
-import {console} from "forge-std/console.sol";
 
 contract CertChainRegistry is OwnableUpgradeable {
     event AddCA(bytes ca);
@@ -88,8 +87,6 @@ contract CertChainRegistry is OwnableUpgradeable {
         uint256 validityNotBefore;
         uint256 validityNotAfter;
 
-        uint256 gl = gasleft();
-
         // check verified
         for (uint256 i = 0; i < certLen; i++) {
             issuers[i] = LibX509.getCertIssuer(certs[i]);
@@ -103,9 +100,6 @@ contract CertChainRegistry is OwnableUpgradeable {
             }
         }
 
-        console.log("verify cert cached:", gl - gasleft());
-        gl = gasleft();
-
         if (verified == type(uint256).max) {
             revert("CertChainRegistry: no CA found");
         }
@@ -113,7 +107,6 @@ contract CertChainRegistry is OwnableUpgradeable {
         // check validity of leaf cert
         (validityNotBefore, validityNotAfter) = LibX509.getCertValidity(certs[0]);
         if (validityNotBefore > block.timestamp || validityNotAfter < block.timestamp) {
-            console.log(validityNotBefore, validityNotAfter, block.timestamp);
             revert("cert not valid yet");
         }
 

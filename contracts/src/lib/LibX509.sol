@@ -2,7 +2,6 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import {console} from "forge-std/console.sol";
 import {Asn1Decode, NodePtr} from "./Asn1Decode.sol";
 import {LibBytes} from "./LibBytes.sol";
 import {DateTimeLib} from "@solady/utils/DateTimeLib.sol";
@@ -77,7 +76,6 @@ library LibX509 {
         pubkey.data = der.bitstringAt(subjectPublicKeyInfoPtr);
         if (pubkey.algo == ALGO_EC) {
             if (pubkey.data.length != 65 || pubkey.data[0] != 0x04) {
-                // console.logBytes(pubkey.data);
                 revert("compressed public key not supported");
             }
         }
