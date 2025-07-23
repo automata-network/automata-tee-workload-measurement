@@ -16,10 +16,18 @@ contract GcpSnpTest is TestSetup {
         string memory path = string.concat(vm.projectRoot(), "/test/testdata/registration_gcp_snp.json");
         // Load test data
         testData = TestDataLib.loadSnpData(path);
+
+        // pinned July 22, 2025, 1840h UTC+8
+        vm.warp(1753180800);
+
+        // Upsert Google EK/AK CA Root
+        bytes memory googleCa = testData.tpmCerts[testData.tpmCerts.length - 1];
+        vm.prank(address(0));
+        certChainRegistry.addCA(googleCa);
     }
 
     function testVerifyGcpSnp() public {
-        bytes32 userDataHash = 0xacddde55453462e71daab1341ad7ddc8a5f8ea5e87a0fcacd737265ef3f0555f;
+        bytes32 userDataHash = 0xa4099be3cfdb31b19e300e3b68cb9c9908bcc33696b66ca551b9489a912c4458;
 
         WorkloadCollaterals memory wc = TestDataLib.getWc(
             abi.encodePacked(testData.reportId),
@@ -30,8 +38,11 @@ contract GcpSnpTest is TestSetup {
             testData.tpmPcrs
         );
 
+        string memory path = string.concat(vm.projectRoot(), "/test/testdata/proof_registration_gcp_snp_risc0.json");
+        ZkProof memory zkReport = TestDataLib.loadZkReport(path);
+
         bytes32 measurementHash = workloadVerifier.verifyAttestation(
-            userDataHash, TEEType.AmdSevSnp, TeeReportType.ZkSuccinct, CloudType.Azure, testData.report, wc
+            userDataHash, TEEType.AmdSevSnp, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
         );
 
         bytes memory expectedMeasurement = TestDataLib.getSnpGoldenMeasurementBytes(testData.goldenMeasurement);

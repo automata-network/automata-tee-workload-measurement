@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import {stdJson} from "forge-std/StdJson.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {WorkloadCollaterals, MeasureablePcr} from "../../src/lib/LibTPM.sol";
-import {GoldenMeasurement, GoldenMeasurementTdx, GoldenMeasurementSnp, Pcr} from "../../src/lib/LibTEE.sol";
+import {GoldenMeasurement, GoldenMeasurementTdx, GoldenMeasurementSnp, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
 import {LibBytes} from "../../src/lib/LibBytes.sol";
 
 struct SnpTestData {
@@ -269,6 +269,12 @@ library TestDataLib {
         // Parse complex fields with hex handling
         testData.tpmPcrs = parseTmpPcrsArray(json, ".tpm_pcrs");
         testData.goldenMeasurement = parseSnpGoldenMeasurement(json, ".golden_measurement");
+    }
+
+    function loadZkReport(string memory path) internal view returns (ZkProof memory zkReport) {
+        string memory json = internalVm.readFile(path);
+        zkReport.output = json.readBytes(".raw_proof.journal");
+        zkReport.proofBytes = json.readBytes(".onchain_proof");
     }
 
     function getWc(

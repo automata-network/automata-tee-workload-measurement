@@ -19,7 +19,7 @@ contract AzureSnpTest is TestSetup {
     }
 
     function testVerifyAzureSnp() public {
-        bytes32 userDataHash = 0xacddde55453462e71daab1341ad7ddc8a5f8ea5e87a0fcacd737265ef3f0555f;
+        bytes32 userDataHash = 0xbd5f88a79dd2ae29392a9d85597be119d8ba406505ae65d139c814de928911ec;
 
         WorkloadCollaterals memory wc = TestDataLib.getWc(
             abi.encodePacked(testData.reportId),
@@ -30,8 +30,11 @@ contract AzureSnpTest is TestSetup {
             testData.tpmPcrs
         );
 
+        string memory path = string.concat(vm.projectRoot(), "/test/testdata/proof_registration_azure_snp_risc0.json");
+        ZkProof memory zkReport = TestDataLib.loadZkReport(path);
+
         bytes32 measurementHash = workloadVerifier.verifyAttestation(
-            userDataHash, TEEType.AmdSevSnp, TeeReportType.ZkSuccinct, CloudType.Azure, testData.report, wc
+            userDataHash, TEEType.AmdSevSnp, TeeReportType.ZkRiscZero, CloudType.Azure, abi.encode(zkReport), wc
         );
 
         bytes memory expectedMeasurement = TestDataLib.getSnpGoldenMeasurementBytes(testData.goldenMeasurement);
