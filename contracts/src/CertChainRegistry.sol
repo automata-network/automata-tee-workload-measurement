@@ -8,7 +8,6 @@ import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "./lib/LibX509.sol";
 import {LibP256} from "./lib/LibTEE.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
-
 contract CertChainRegistry is OwnableUpgradeable {
     event AddCA(bytes ca);
     event RemoveCA(bytes ca);

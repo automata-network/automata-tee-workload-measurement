@@ -11,7 +11,6 @@ import {WorkloadCollaterals, MeasureablePcr, LibTPM} from "./lib/LibTPM.sol";
 import {TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE} from "./lib/LibTEE.sol";
 import {CertPubkey} from "./lib/LibX509.sol";
 
-
 contract WorkloadVerifier is OwnableUpgradeable {
     IDcapAttestation public dcapAttestation;
     ISnpAttestation public snpAttestation;
