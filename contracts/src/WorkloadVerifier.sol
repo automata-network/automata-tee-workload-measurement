@@ -3,6 +3,7 @@
 pragma solidity ^0.8.15;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
 import {IAttestationVerifier} from "./interfaces/IAttestationVerifier.sol";
@@ -11,7 +12,7 @@ import {WorkloadCollaterals, MeasureablePcr, LibTPM} from "./lib/LibTPM.sol";
 import {TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE} from "./lib/LibTEE.sol";
 import {CertPubkey} from "./lib/LibX509.sol";
 
-contract WorkloadVerifier is OwnableUpgradeable {
+contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
     IDcapAttestation public dcapAttestation;
     ISnpAttestation public snpAttestation;
     bool public allowMockAttestation;
@@ -21,6 +22,14 @@ contract WorkloadVerifier is OwnableUpgradeable {
 
     constructor() {
         _disableInitializers();
+    }
+
+    /**
+     * @notice Only the owner can authorize an upgrade.
+     * @param newImplementation The address of the new implementation.
+     */
+    function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
+        require(newImplementation != address(0), "Invalid implementation address");
     }
 
     function initialize(

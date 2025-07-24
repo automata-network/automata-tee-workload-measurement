@@ -3,12 +3,13 @@
 pragma solidity ^0.8.20;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {ICertChainRegistry} from "./interfaces/ICertChainRegistry.sol";
 import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "./lib/LibX509.sol";
 import {LibP256} from "./lib/LibTEE.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
-contract CertChainRegistry is OwnableUpgradeable {
+contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
     event AddCA(bytes ca);
     event RemoveCA(bytes ca);
 
@@ -27,6 +28,14 @@ contract CertChainRegistry is OwnableUpgradeable {
 
     constructor() OwnableUpgradeable() {
         _disableInitializers();
+    }
+
+    /**
+     * @notice Only the owner can authorize an upgrade.
+     * @param newImplementation The address of the new implementation.
+     */
+    function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
+        require(newImplementation != address(0), "Invalid implementation address");
     }
 
     function initialize(address _initialOwner) public initializer {
