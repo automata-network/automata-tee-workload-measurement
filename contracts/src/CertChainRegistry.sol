@@ -6,7 +6,6 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {ICertChainRegistry} from "./interfaces/ICertChainRegistry.sol";
 import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "./lib/LibX509.sol";
-import {LibP256} from "./lib/LibTEE.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
 contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
@@ -19,6 +18,8 @@ contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
         Intermediate // 2
 
     }
+
+    address public p256;
 
     // keccak256(cert) => type: 0) none, 1) CA; 2) leaf
     mapping(bytes32 => CertType) public verifiedCertIssuers;
@@ -38,8 +39,9 @@ contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
         require(newImplementation != address(0), "Invalid implementation address");
     }
 
-    function initialize(address _initialOwner) public initializer {
+    function initialize(address _initialOwner, address _p256) public initializer {
         _transferOwnership(_initialOwner);
+        p256 = _p256;
     }
 
     function addCA(bytes calldata ca) public onlyOwner {
@@ -78,7 +80,7 @@ contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
                 s := mload(offset)
             }
             (bytes32 x, bytes32 y) = pubkey.ec();
-            return LibP256.ecdsaVerify(digest, r, s, x, y);
+            return _ecdsaVerify(digest, r, s, x, y);
         } else {
             revert("CertChainRegistry: unsupported pubkey algo");
         }
@@ -133,5 +135,16 @@ contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
             verifiedCertIssuers[certHashes[i]] = CertType.Intermediate;
         }
         return issuers[0];
+    }
+
+    function _ecdsaVerify(bytes32 messageHash, bytes32 r, bytes32 s, bytes32 x, bytes32 y)
+        private
+        view
+        returns (bool verified)
+    {
+        bytes memory args = abi.encode(messageHash, r, s, x, y);
+        (bool success, bytes memory ret) = p256.staticcall(args);
+        assert(success); // never reverts, always returns 0 or 1
+        verified = abi.decode(ret, (uint256)) == 1;
     }
 }

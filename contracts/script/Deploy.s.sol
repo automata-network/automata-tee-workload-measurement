@@ -60,8 +60,9 @@ contract Deploy is DeploymentConfig, P256Configuration {
         address implAddress = deployCertchainRegistryImpl();
 
         // deploy the CertChainRegistry proxy
-        ERC1967Proxy certchainRegistryProxy =
-            new ERC1967Proxy(implAddress, abi.encodeWithSelector(CertChainRegistry.initialize.selector, owner));
+        ERC1967Proxy certchainRegistryProxy = new ERC1967Proxy(
+            implAddress, abi.encodeWithSelector(CertChainRegistry.initialize.selector, owner, simulateVerify())
+        );
         address proxyAddress = address(certchainRegistryProxy);
         console.log("CertChainRegistry proxy deployed at:", proxyAddress);
 

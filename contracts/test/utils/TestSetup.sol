@@ -16,6 +16,7 @@ abstract contract TestSetup is Test {
     WorkloadVerifier internal workloadVerifier;
 
     address internal constant owner = address(0x1234);
+    address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
 
     function setUp() public virtual {
         _deployP256();
@@ -24,7 +25,12 @@ abstract contract TestSetup is Test {
 
         dcapAttestation = new MockAutomataDcapAttestation();
         snpAttestation = new MockAutomataSnpAttestation();
-        certChainRegistry = new CertChainRegistry();
+
+        ERC1967Proxy certchainRegistryProxy = new ERC1967Proxy(
+            address(new CertChainRegistry()),
+            abi.encodeWithSelector(CertChainRegistry.initialize.selector, owner, P256_VERIFIER)
+        );
+        certChainRegistry = CertChainRegistry(address(certchainRegistryProxy));
 
         bytes memory initializeCalldata = abi.encodeWithSelector(
             WorkloadVerifier.initialize.selector,
@@ -34,10 +40,8 @@ abstract contract TestSetup is Test {
             address(certChainRegistry),
             true // allowMockAttestation
         );
-
-        ERC1967Proxy proxy = new ERC1967Proxy(address(new WorkloadVerifier()), initializeCalldata);
-
-        workloadVerifier = WorkloadVerifier(address(proxy));
+        ERC1967Proxy workloadVerifierProxy = new ERC1967Proxy(address(new WorkloadVerifier()), initializeCalldata);
+        workloadVerifier = WorkloadVerifier(address(workloadVerifierProxy));
 
         vm.stopBroadcast();
     }
@@ -49,7 +53,6 @@ abstract contract TestSetup is Test {
         require(succ, "Failed to deploy P256");
 
         // check code
-        address P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
         uint256 codesize = P256_VERIFIER.code.length;
         require(codesize > 0, "P256 deployed to the wrong address");
     }

@@ -211,18 +211,3 @@ library LibX509 {
         return DateTimeLib.dateTimeToTimestamp(yrs, mnths, dys, hrs, mins, secs);
     }
 }
-
-library LibP256 {
-    address internal constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
-
-    function ecdsaVerify(bytes32 messageHash, bytes32 r, bytes32 s, bytes32 x, bytes32 y)
-        internal
-        view
-        returns (bool verified)
-    {
-        bytes memory args = abi.encode(messageHash, r, s, x, y);
-        (bool success, bytes memory ret) = P256_VERIFIER.staticcall(args);
-        assert(success); // never reverts, always returns 0 or 1
-        verified = abi.decode(ret, (uint256)) == 1;
-    }
-}
