@@ -1,66 +1,84 @@
-## Foundry
+# Automata TEE Workload Measurement (EVM Smart Contract)
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+This document describes the onchain verification and measurement of the workload of a Confidential VM (CVM) instance hosted on cloud service providers, e.g. Azure and Google Cloud Platform (GCP).
 
-Foundry consists of:
+Code and data in CVMs are protected from tampering by the host OS (and other CVMs) with TEE hardware, such as Intel TDX and AMD SEV-SNP. Cloud service providers generally also equip CVMs with virtual TPM, to cryptographically store measurements of the boot process, ensuring integrity of the CVM image.
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+<!-- TODO: Provide more description on what the users can do with the TEE Workload Measurement contracts -->
 
-## Documentation
+TEE Onchain Workload Measurement currently consists of the following smart contracts:
 
-https://book.getfoundry.sh/
+- [`WorkloadVerifier.sol`](./src/WorkloadVerifier.sol): 
+    - Depends on (1) [Automata DCAP Attestation](https://github.com/automata-network/automata-dcap-attestation/tree/main/evm) to verify Intel TDX quotes, and (2) [Automata SEV-SNP Attestation](https://github.com/automata-network/amd-sev-snp-attestation-sdk/tree/main/zk/contracts) to verify AMD SEV SNP attestation reports.
+    - Internally verifies the TPM quote signature and the correctness of TPM measurements.
+    - Computes the **Golden Measurement Hash**.
+- [`CertChainRegistry.sol`](./src/CertChainRegistry.sol): 
+    - This contract maintains a list of trusted Certificate Authorities (CAs) issuing TPM Attestation Keys.
+    - This contract must be admin-controlled.
 
-## Usage
+## Overview
 
-### Build
+1. The user submits data hash, TEE Attestation Report, and the workload collateral to the `WorkloadVerifier.sol` contract. Workload collateral is a collection of data, consisting the TPM quote, TPM Signature, TPM Attestation Key (or AK certificate chain) and an array of PCR measurement.
 
-```shell
-$ forge build
-```
+2. TEE Attestation Report verification shows that the CVM is running in a TEE provided by genuine hardware.
+    
+    > a. If the CVM were hosted on Azure, this step also ensures that the report data must contain the hash of the TPM Attestation Key.
 
-### Test
+3. The TPM quote and signature are verified against the provided TPM Attestation Key.
+    
+    > a. If TPM Attestation Key were not checked in *step 2(a)*, the key is extracted from the leaf of the AK Certificate Chain, which must be checked for valid root of trust. `CertChainRegistry.sol` maintains a whitelist of reputable CAs.
 
-```shell
-$ forge test
-```
+4. The `extraData` value in the TPM quote is extracted, which must equal the hash of the user's expected data (`userDataHash`).
 
-### Format
+5. The list of PCR indices provided in the collateral must match with the PCR selection bitmap in the TPM quote; the hash chain of PCR measurement values yields a value that must match the PCR digest value in the TPM quote.
 
-```shell
-$ forge fmt
-```
+6. The provided Report ID must be found in both TEE Attestation Report and PCR 16 of the TPM. This step indicates the binding between TEE and TPM.
+    
+    > a. The only exception to this rule applies to Azure TDX CVM. As stated in *2(a)*, the report data provides us with information about the AK that signs the TPM quote, which is already verified in *step 3*.
 
-### Gas Snapshots
+7. Computes the Golden Measurement Hash. Developers can provide their own golden measurement hash for their applications, which can be referenced against the returned hash to check the integrity of the CVM.
 
-```shell
-$ forge snapshot
-```
+## #BUIDL 🛠️
 
-### Anvil
+1. Install [`Foundry`]().
 
-```shell
-$ anvil
-```
-
-### Deploy
+2. Make sure you are on the `/contracts` directory, then install the dependencies.
 
 ```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+forge install
 ```
 
-### Cast
+3. Compile the contracts.
 
 ```shell
-$ cast <subcommand>
+forge build --sizes
 ```
 
-### Help
+4. Run the tests.
 
 ```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+forge test
 ```
+
+## Gas Benchmark
+
+The table below shows our initial finding on gas costs to measure CVMs with various TEEs hosted on Azure and GCP.
+
+|  | TEE Report Verification Gas Cost | AK Pubkey Verification Gas Cost | TPM Signature Verification Gas Cost | PCRs Matching Gas Cost | Report ID Binding Check Gas Cost | Golden Measurement Hashing Gas Cost |
+| --- | --- | --- | --- | --- | --- | --- |
+| Azure TDX | ~5M[^1] gas (Onchain DCAP) | 49k[^2] gas | 37k gas (RSA) | 7k gas | 3k gas | 13k gas |
+| Azure AMD-SEV-SNP | 300k[^3] gas (RiscZero Groth16) | 49k[^2] gas | 37k gas (RSA) | 7k gas | 3k gas | 13k gas |
+| GCP TDX | ~5M[^1] gas (Onchain DCAP) | 384k[^1][^4] gas | 335k[^1] gas (secp256r1) | 7k gas | 484k[^5] gas | 26k gas |
+| GCP AMD-SEV-SNP | 300k[^3] gas (RiscZero Groth16) | 384k[^1][^4] gas | 335k[^1] gas (secp256r1) | 7k gas | 5k gas | 25k gas |
+
+### Remark:
+
+[^1]: Test test
+
+[^2]: Test test
+
+[^3]: Test test
+
+[^4]: Test test
+
+[^5]: Test test
