@@ -2,9 +2,10 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
+import {Pcr, WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
+import {MeasureablePcr} from "../interfaces/ITpmAttestation.sol";
 import "./LibX509.sol";
 import "./LibBytes.sol";
-import {MeasureablePcr, Pcr, LibTPM, WorkloadCollaterals} from "./LibTPM.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";
 
 using LibBytes for bytes;
@@ -142,50 +143,50 @@ library LibTEE {
         return data;
     }
 
-    function toString(TEEVerifiedData memory data) public pure returns (string memory) {
-        return string(
-            abi.encodePacked(
-                "{userReportData: ",
-                data.userReportData.toString(),
-                ", reportID: ",
-                data.reportID.toString(),
-                ", akPub: ",
-                toString(data.akPub),
-                ", tdx: ",
-                toString(data.tdx),
-                ", snp: ",
-                toString(data.snp),
-                "}"
-            )
-        );
-    }
+    // function toString(TEEVerifiedData memory data) public pure returns (string memory) {
+    //     return string(
+    //         abi.encodePacked(
+    //             "{userReportData: ",
+    //             data.userReportData.toString(),
+    //             ", reportID: ",
+    //             data.reportID.toString(),
+    //             ", akPub: ",
+    //             toString(data.akPub),
+    //             ", tdx: ",
+    //             toString(data.tdx),
+    //             ", snp: ",
+    //             toString(data.snp),
+    //             "}"
+    //         )
+    //     );
+    // }
 
-    function toString(CertPubkey memory key) public pure returns (string memory) {
-        return string(abi.encodePacked("{data: ", key.data.toString(), "}"));
-    }
+    // function toString(CertPubkey memory key) public pure returns (string memory) {
+    //     return string(abi.encodePacked("{data: ", key.data.toString(), "}"));
+    // }
 
-    function toString(SnpVerifiedData memory snp) public pure returns (string memory) {
-        return string(abi.encodePacked("{measurement: ", snp.measurement.toString(), "}"));
-    }
+    // function toString(SnpVerifiedData memory snp) public pure returns (string memory) {
+    //     return string(abi.encodePacked("{measurement: ", snp.measurement.toString(), "}"));
+    // }
 
-    function toString(TdxVerifiedData memory tdx) public pure returns (string memory) {
-        bytes memory output = abi.encodePacked(
-            "{mrtd: ",
-            tdx.mrtd.toString(),
-            ", mrseam: ",
-            tdx.mrseam.toString(),
-            ", rtmr0: ",
-            tdx.rtmr0.toString(),
-            ", rtmr1: ",
-            tdx.rtmr1.toString(),
-            ", rtmr2: ",
-            tdx.rtmr2.toString(),
-            ", rtmr3: ",
-            tdx.rtmr3.toString(),
-            "}"
-        );
-        return string(output);
-    }
+    // function toString(TdxVerifiedData memory tdx) public pure returns (string memory) {
+    //     bytes memory output = abi.encodePacked(
+    //         "{mrtd: ",
+    //         tdx.mrtd.toString(),
+    //         ", mrseam: ",
+    //         tdx.mrseam.toString(),
+    //         ", rtmr0: ",
+    //         tdx.rtmr0.toString(),
+    //         ", rtmr1: ",
+    //         tdx.rtmr1.toString(),
+    //         ", rtmr2: ",
+    //         tdx.rtmr2.toString(),
+    //         ", rtmr3: ",
+    //         tdx.rtmr3.toString(),
+    //         "}"
+    //     );
+    //     return string(output);
+    // }
 
     function tdxOutput(bytes memory output) internal pure returns (TEEVerifiedData memory data) {
         bytes4 tee = output.readBytes4(2);
@@ -216,7 +217,7 @@ library LibTEE {
     ) internal pure returns (GoldenMeasurement memory) {
         GoldenMeasurementTdx memory tdx = toGoldenMeasurementTdx(teeTdx);
         GoldenMeasurementSnp memory snp = toGoldenMeasurementSnp(teeSnp);
-        GoldenMeasurement memory gm = GoldenMeasurement({pcrs: LibTPM.toPcr(mpcrs), tdx: tdx, snp: snp});
+        GoldenMeasurement memory gm = GoldenMeasurement({pcrs: toPcr(mpcrs), tdx: tdx, snp: snp});
         return gm;
     }
 
@@ -241,65 +242,132 @@ library LibTEE {
         output.measurement = snp.measurement;
     }
 
-    function name(CloudType ct) internal pure returns (string memory) {
-        if (ct == CloudType.GCP) {
-            return "gcp";
-        } else if (ct == CloudType.Azure) {
-            return "azure";
-        } else {
-            revert("Invalid CloudType");
-        }
-    }
+    function toPcr(MeasureablePcr[] calldata mpcrs) internal pure returns (Pcr[] memory) {
+        // Cache array length to avoid multiple storage reads
+        uint256 mpcrsLength = mpcrs.length;
+        Pcr[] memory pcrs = new Pcr[](mpcrsLength);
 
-    function name(TEEType tt) internal pure returns (string memory) {
-        if (tt == TEEType.Mock) {
-            return "mock";
-        } else if (tt == TEEType.IntelTDX) {
-            return "tdx";
-        } else if (tt == TEEType.AmdSevSnp) {
-            return "snp";
-        } else {
-            revert("Invalid TEEType");
-        }
-    }
+        // Use unchecked to save gas on bounds checking where we know it's safe
+        unchecked {
+            for (uint256 i = 0; i < mpcrsLength; i++) {
+                // Cache the current MeasureablePcr to avoid multiple calldata accesses
+                MeasureablePcr calldata currentMpcr = mpcrs[i];
 
-    function toString(GoldenMeasurementTdx memory gm) internal pure returns (string memory) {
-        return string(
-            abi.encodePacked(
-                "{mrtd: ",
-                gm.mrtd.toString(),
-                ", mrseam: ",
-                gm.mrseam.toString(),
-                ", rtmr0: ",
-                gm.rtmr0.toString(),
-                ", rtmr1: ",
-                gm.rtmr1.toString(),
-                ", rtmr2: ",
-                gm.rtmr2.toString(),
-                ", rtmr3: ",
-                gm.rtmr3.toString(),
-                "}"
-            )
-        );
-    }
+                // Verify events before allocating memory for arrays
+                require(verifyEvents(currentMpcr), "Invalid all events");
 
-    function toString(GoldenMeasurementSnp memory gm) internal pure returns (string memory) {
-        return string(abi.encodePacked("{measurement: ", gm.measurement.toString(), "}"));
-    }
+                // Cache the measureEventsIdx length
+                uint256 eventsIdxLength = currentMpcr.measureEventsIdx.length;
 
-    function toString(GoldenMeasurement memory gm) public pure returns (string memory) {
-        bytes memory output = abi.encodePacked("{pcrs:[");
-        for (uint256 i = 0; i < gm.pcrs.length; i++) {
-            output = abi.encodePacked(output, gm.pcrs[i].toString());
-            if (i < gm.pcrs.length - 1) {
-                output = abi.encodePacked(output, ",");
+                // Only allocate memory if there are events to process
+                bytes32[] memory measureEvents = new bytes32[](eventsIdxLength);
+                uint256[] memory measureEventsIdx = new uint256[](eventsIdxLength);
+
+                // Process events only if there are any
+                if (eventsIdxLength > 0) {
+                    uint256 allEventsLength = currentMpcr.allEvents.length;
+
+                    for (uint256 j = 0; j < eventsIdxLength; j++) {
+                        uint256 eventIdx = currentMpcr.measureEventsIdx[j];
+                        require(eventIdx < allEventsLength, "Invalid event index");
+                        measureEvents[j] = currentMpcr.allEvents[eventIdx];
+                        measureEventsIdx[j] = eventIdx;
+                    }
+                }
+
+                // Create the PCR with the correct values
+                pcrs[i] = Pcr({
+                    index: currentMpcr.index,
+                    pcr: currentMpcr.measurePcr ? currentMpcr.pcr : bytes32(0),
+                    measureEvents: measureEvents,
+                    measureEventsIdx: measureEventsIdx
+                });
             }
         }
-        output = abi.encodePacked(output, "], tdx:", toString(gm.tdx), ",snp:", toString(gm.snp), "}");
-        return string(output);
+        return pcrs;
     }
 
-    function decodeZkProof(bytes memory zkProof) public pure returns (ZkProof memory) {
-        return abi.decode(zkProof, (ZkProof));
+    function verifyEvents(MeasureablePcr calldata mpcr) internal pure returns (bool) {
+        // Early return conditions
+        if (mpcr.pcr == bytes32(0)) {
+            return true;
+        }
+
+        uint256 allEventsLength = mpcr.allEvents.length;
+        if (allEventsLength == 0) {
+            return true;
+        }
+
+        bytes32 before = bytes32(0);
+        // Use unchecked for loop operations to save gas
+        unchecked {
+            for (uint256 i = 0; i < allEventsLength; i++) {
+                before = sha256(abi.encodePacked(before, mpcr.allEvents[i]));
+            }
+        }
+
+        return before == mpcr.pcr;
     }
+
+    // function name(CloudType ct) internal pure returns (string memory) {
+    //     if (ct == CloudType.GCP) {
+    //         return "gcp";
+    //     } else if (ct == CloudType.Azure) {
+    //         return "azure";
+    //     } else {
+    //         revert("Invalid CloudType");
+    //     }
+    // }
+
+    // function name(TEEType tt) internal pure returns (string memory) {
+    //     if (tt == TEEType.Mock) {
+    //         return "mock";
+    //     } else if (tt == TEEType.IntelTDX) {
+    //         return "tdx";
+    //     } else if (tt == TEEType.AmdSevSnp) {
+    //         return "snp";
+    //     } else {
+    //         revert("Invalid TEEType");
+    //     }
+    // }
+
+    // function toString(GoldenMeasurementTdx memory gm) internal pure returns (string memory) {
+    //     return string(
+    //         abi.encodePacked(
+    //             "{mrtd: ",
+    //             gm.mrtd.toString(),
+    //             ", mrseam: ",
+    //             gm.mrseam.toString(),
+    //             ", rtmr0: ",
+    //             gm.rtmr0.toString(),
+    //             ", rtmr1: ",
+    //             gm.rtmr1.toString(),
+    //             ", rtmr2: ",
+    //             gm.rtmr2.toString(),
+    //             ", rtmr3: ",
+    //             gm.rtmr3.toString(),
+    //             "}"
+    //         )
+    //     );
+    // }
+
+    // function toString(GoldenMeasurementSnp memory gm) internal pure returns (string memory) {
+    //     return string(abi.encodePacked("{measurement: ", gm.measurement.toString(), "}"));
+    // }
+
+    // function toString(GoldenMeasurement memory gm) public pure returns (string memory) {
+    //     bytes memory output = abi.encodePacked("{pcrs:[");
+    //     for (uint256 i = 0; i < gm.pcrs.length; i++) {
+    //         output = abi.encodePacked(output, gm.pcrs[i].toString());
+    //         if (i < gm.pcrs.length - 1) {
+    //             output = abi.encodePacked(output, ",");
+    //         }
+    //     }
+    //     output = abi.encodePacked(output, "], tdx:", toString(gm.tdx), ",snp:", toString(gm.snp), "}");
+    //     return string(output);
+    // }
+
+    // function decodeZkProof(bytes memory zkProof) public pure returns (ZkProof memory) {
+    //     return abi.decode(zkProof, (ZkProof));
+    // }
 }

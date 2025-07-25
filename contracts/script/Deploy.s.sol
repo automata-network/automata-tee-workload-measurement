@@ -9,7 +9,7 @@ import {P256Configuration} from "./utils/P256Configuration.sol";
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
 import "./utils/Salt.sol";
 
-import {CertChainRegistry} from "../src/CertChainRegistry.sol";
+import {TpmAttestation} from "../src/TpmAttestation.sol";
 import {WorkloadVerifier} from "../src/WorkloadVerifier.sol";
 
 contract Deploy is DeploymentConfig, P256Configuration {
@@ -29,19 +29,19 @@ contract Deploy is DeploymentConfig, P256Configuration {
     }
 
     function run() public broadcast {
-        deployCertchainRegistry();
+        deployTpmAttestation();
         deployWorkloadVerifier(false); // Set allowMockAttestation to false by default
     }
 
-    function deployCertchainRegistryImpl() public broadcast returns (address implAddress) {
-        // deploy the CertChainRegistry implementation
-        CertChainRegistry certchainRegistry = new CertChainRegistry{salt: CERT_CHAIN_REGISTRY_IMPL_SALT}();
-        implAddress = address(certchainRegistry);
+    function deployTpmAttestationImpl() public broadcast returns (address implAddress) {
+        // deploy the TpmAttestation implementation
+        TpmAttestation tpmAttestation = new TpmAttestation{salt: TPM_ATTESTATION_IMPL_SALT}();
+        implAddress = address(tpmAttestation);
 
-        console.log("CertChainRegistry implementation deployed at:", implAddress);
+        console.log("TpmAttestation implementation deployed at:", implAddress);
 
         // write the implementation address to JSON
-        writeToJson("CertChainRegistryImpl", implAddress);
+        writeToJson("TpmAttestationImpl", implAddress);
     }
 
     function deployWorkloadVerifierImpl() public broadcast returns (address implAddress) {
@@ -55,19 +55,19 @@ contract Deploy is DeploymentConfig, P256Configuration {
         writeToJson("WorkloadVerifierImpl", implAddress);
     }
 
-    function deployCertchainRegistry() public broadcast {
-        // deploy the CertChainRegistry implementation
-        address implAddress = deployCertchainRegistryImpl();
+    function deployTpmAttestation() public broadcast {
+        // deploy the TpmAttestation implementation
+        address implAddress = deployTpmAttestationImpl();
 
-        // deploy the CertChainRegistry proxy
-        ERC1967Proxy certchainRegistryProxy = new ERC1967Proxy(
-            implAddress, abi.encodeWithSelector(CertChainRegistry.initialize.selector, owner, simulateVerify())
+        // deploy the TpmAttestation proxy
+        ERC1967Proxy TpmAttestationProxy = new ERC1967Proxy{salt: TPM_ATTESTATION_PROXY_SALT}(
+            implAddress, abi.encodeWithSelector(TpmAttestation.initialize.selector, owner, simulateVerify())
         );
-        address proxyAddress = address(certchainRegistryProxy);
-        console.log("CertChainRegistry proxy deployed at:", proxyAddress);
+        address proxyAddress = address(TpmAttestationProxy);
+        console.log("TpmAttestation proxy deployed at:", proxyAddress);
 
         // write the proxy address to JSON
-        writeToJson("CertChainRegistryProxy", proxyAddress);
+        writeToJson("TpmAttestationProxy", proxyAddress);
     }
 
     function deployWorkloadVerifier(bool allowMockAttestation) public broadcast {
@@ -75,14 +75,14 @@ contract Deploy is DeploymentConfig, P256Configuration {
         address implAddress = deployWorkloadVerifierImpl();
 
         // deploy the WorkloadVerifier proxy
-        ERC1967Proxy workloadVerifierProxy = new ERC1967Proxy(
+        ERC1967Proxy workloadVerifierProxy = new ERC1967Proxy{salt: WORKLOAD_VERIFIER_PROXY_SALT}(
             implAddress,
             abi.encodeWithSelector(
                 WorkloadVerifier.initialize.selector,
                 owner,
                 dcapAttestationAddr,
                 snpAttestationAddr,
-                readContractAddress("CertChainRegistryProxy"),
+                readContractAddress("TpmAttestationProxy"),
                 allowMockAttestation
             )
         );
@@ -93,18 +93,17 @@ contract Deploy is DeploymentConfig, P256Configuration {
         writeToJson("WorkloadVerifierProxy", proxyAddress);
     }
 
-    function upgradeCertchainRegistry(address newImpl, bytes calldata data) public broadcast {
-        // First, check if the certchain registry proxy already exists
-        CertChainRegistry certchainRegistryProxy =
-            CertChainRegistry(payable(readContractAddress("CertChainRegistryProxy")));
+    function upgradeTpmAttestation(address newImpl, bytes calldata data) public broadcast {
+        // First, check if the TPM Attestation proxy already exists
+        TpmAttestation tpmAttestationProxy = TpmAttestation(payable(readContractAddress("TpmAttestationProxy")));
 
         if (newImpl == address(0)) {
             // Deploy the new implementation
-            newImpl = deployCertchainRegistryImpl();
+            newImpl = deployTpmAttestationImpl();
         }
 
         // Upgrade the proxy to the new implementation
-        certchainRegistryProxy.upgradeToAndCall(newImpl, data);
+        tpmAttestationProxy.upgradeToAndCall(newImpl, data);
     }
 
     function upgradeWorkloadVerifier(address newImpl, bytes calldata data) public broadcast {

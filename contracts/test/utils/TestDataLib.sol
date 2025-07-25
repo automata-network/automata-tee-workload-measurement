@@ -3,7 +3,8 @@ pragma solidity ^0.8.0;
 
 import {stdJson} from "forge-std/StdJson.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {WorkloadCollaterals, MeasureablePcr} from "../../src/lib/LibTPM.sol";
+import {WorkloadCollaterals} from "../../src/interfaces/IWorkloadVerifier.sol";
+import {MeasureablePcr} from "../../src/interfaces/ITpmAttestation.sol";
 import {GoldenMeasurement, GoldenMeasurementTdx, GoldenMeasurementSnp, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
 import {LibBytes} from "../../src/lib/LibBytes.sol";
 

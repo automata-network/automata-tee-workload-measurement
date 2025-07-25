@@ -5,18 +5,21 @@ pragma solidity ^0.8.15;
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
+import {MeasureablePcr, ITpmAttestation} from "./interfaces/ITpmAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
-import {IAttestationVerifier} from "./interfaces/IAttestationVerifier.sol";
-import {ICertChainRegistry} from "./interfaces/ICertChainRegistry.sol";
-import {WorkloadCollaterals, MeasureablePcr, LibTPM} from "./lib/LibTPM.sol";
+import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
 import {TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE} from "./lib/LibTEE.sol";
-import {CertPubkey} from "./lib/LibX509.sol";
+import {Base64} from "@solady/utils/Base64.sol";
+import {LibString} from "@solady/utils/LibString.sol";
+import {LibX509, CertPubkey} from "./lib/LibX509.sol";
 
-contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
-    IDcapAttestation public dcapAttestation;
-    ISnpAttestation public snpAttestation;
-    bool public allowMockAttestation;
-    address public certChainRegistryAddr;
+contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradeable {
+    using LibString for string;
+
+    IDcapAttestation public override dcapAttestation;
+    ISnpAttestation public override snpAttestation;
+    ITpmAttestation public override tpmAttestation;
+    bool public override allowMockAttestation;
 
     uint256[47] private __gap;
 
@@ -36,14 +39,22 @@ contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
         address _initialOwner,
         address _dcapAttestationAddr,
         address _snpAttestationAddr,
-        address _certChainRegistryAddr,
+        address _tpmAttestationAddr,
         bool _allowMockAttestation
     ) public initializer {
         dcapAttestation = IDcapAttestation(_dcapAttestationAddr);
         snpAttestation = ISnpAttestation(_snpAttestationAddr);
+        tpmAttestation = ITpmAttestation(_tpmAttestationAddr);
         allowMockAttestation = _allowMockAttestation;
-        certChainRegistryAddr = _certChainRegistryAddr;
-        _transferOwnership(_initialOwner);
+        __Ownable_init(_initialOwner);
+    }
+
+    function estimateBaseFeeVerifyOnChain(bytes calldata rawQuote) external payable override returns (uint256) {
+        uint16 bp = dcapAttestation.getBp();
+        uint256 gasBefore = gasleft();
+        dcapAttestation.verifyAndAttestOnChain{value: msg.value}(rawQuote);
+        uint256 gasAfter = gasleft();
+        return (gasBefore - gasAfter) * bp / 10000;
     }
 
     function verifyAttestation(
@@ -53,9 +64,9 @@ contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _wc
-    ) external payable returns (bytes32) {
+    ) external payable override returns (bytes32) {
         if (teeType == TEEType.Mock) {
-            if (!allowMockAttestation) revert IAttestationVerifier.MOCK_ATTESTATION_NOT_ALLOWED();
+            if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
             // in mock mode
             // TODO: use preset golden measurement hash
             return bytes32(0);
@@ -80,14 +91,14 @@ contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
         } else if (teeType == TEEType.AmdSevSnp) {
             teeVerifiedData = verifySnpAttestation(teeReportType, _report);
         } else {
-            revert IAttestationVerifier.INVALID_TEE_TYPE(teeType);
+            revert INVALID_TEE_TYPE(teeType);
         }
         if (cloudType == CloudType.Azure) {
             bytes32 localReportData = sha256(_wc.akPub);
             if (teeVerifiedData.userReportData.first != localReportData) {
-                revert IAttestationVerifier.REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
+                revert REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
             }
-            teeVerifiedData.akPub = LibTPM.varDataPubkey(string(_wc.akPub));
+            teeVerifiedData.akPub = varDataPubkey(string(_wc.akPub));
         }
         return teeVerifiedData;
     }
@@ -102,7 +113,7 @@ contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
         } else if (_reportType == TeeReportType.ZkRiscZero) {
             zkType = ISnpAttestation.ZkCoProcessorType.RiscZero;
         } else {
-            revert IAttestationVerifier.INVALID_TEE_REPORT_TYPE(_reportType);
+            revert INVALID_TEE_REPORT_TYPE(_reportType);
         }
 
         ZkProof memory zkProof = abi.decode(_report, (ZkProof));
@@ -128,16 +139,16 @@ contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
             } else if (_reportType == TeeReportType.ZkRiscZero) {
                 zkType = IDcapAttestation.ZkCoProcessorType.RiscZero;
             } else {
-                revert IAttestationVerifier.INVALID_TEE_REPORT_TYPE(_reportType);
+                revert INVALID_TEE_REPORT_TYPE(_reportType);
             }
             (succ, output) = dcapAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
         }
         if (!succ) {
-            revert IAttestationVerifier.INVALID_REPORT();
+            revert INVALID_REPORT();
         }
 
         if (output.length < 64) {
-            revert IAttestationVerifier.INVALID_REPORT_DATA();
+            revert INVALID_REPORT_DATA();
         }
 
         return LibTEE.tdxOutput(output);
@@ -147,31 +158,83 @@ contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
         WorkloadCollaterals calldata _wc,
         bytes32 _userDataHash,
         TEEVerifiedData memory _teeVerifiedData
-    ) public {
+    ) internal {
         if (_teeVerifiedData.akPub.empty()) {
-            _teeVerifiedData.akPub = LibTPM.verifyAkPub(_wc.certs, certChainRegistryAddr);
+            tpmAttestation.verifyTpmQuote(_userDataHash, _wc.tpmQuote, _wc.tpmSignature, _wc.pcrs, _wc.certs);
+        } else {
+            tpmAttestation.verifyTpmQuote(
+                _userDataHash, _wc.tpmQuote, _wc.tpmSignature, _wc.pcrs, _teeVerifiedData.akPub
+            );
         }
 
-        _wc.verifyTpmQuote(_teeVerifiedData.akPub, certChainRegistryAddr);
-
-        bytes32 extraDataHash = LibTPM.quoteExtraData(_wc.tpmQuote);
-        require(extraDataHash == _userDataHash, "user report data mismatch");
-
-        LibTPM.verifyPcrs(_wc.pcrs, _wc.tpmQuote);
         LibTEE.verifyReportID(_wc, _teeVerifiedData);
     }
 
-    /**
-     * @dev Estimates the fee for verifying the quote on-chain.
-     * @param rawQuote The raw quote data.
-     * @return The estimated fee.
-     * @notice The actual fee is determined by multiplying the base fee with the gas price.
-     */
-    function estimateBaseFeeVerifyOnChain(bytes calldata rawQuote) external payable returns (uint256) {
-        uint16 bp = dcapAttestation.getBp();
-        uint256 gasBefore = gasleft();
-        dcapAttestation.verifyAndAttestOnChain{value: msg.value}(rawQuote);
-        uint256 gasAfter = gasleft();
-        return (gasBefore - gasAfter) * bp / 10000;
+    function varDataPubkey(string memory data) internal pure returns (CertPubkey memory) {
+        uint256 off = 0;
+        uint256 pos;
+        pos = data.indexOf("\"kid\":\"HCLAkPub\"", off);
+        if (pos == type(uint256).max) {
+            revert("not found");
+        }
+        off = pos + 16;
+
+        string memory kty;
+        {
+            pos = data.indexOf("\"kty\":\"", off);
+            if (pos == type(uint256).max) {
+                revert("invalid kty");
+            }
+            off = pos + 7;
+
+            pos = data.indexOf("\"", off);
+            if (pos == type(uint256).max) {
+                revert("invalid kty");
+            }
+            kty = data.slice(off, pos);
+            require(kty.eq("RSA"), "invalid kty");
+            off = pos + 1;
+        }
+
+        // e
+        string memory eBase64;
+        {
+            pos = data.indexOf("\"e\":\"", off);
+            if (pos == type(uint256).max) {
+                revert("invalid e");
+            }
+            off = pos + 5;
+
+            pos = data.indexOf("\"", off);
+            if (pos == type(uint256).max) {
+                revert("invalid e");
+            }
+            eBase64 = data.slice(off, pos);
+            off = pos + 1;
+        }
+
+        // n
+        string memory nBase64;
+        {
+            pos = data.indexOf("\"n\":\"", off);
+            if (pos == type(uint256).max) {
+                revert("invalid n");
+            }
+            off = pos + 5;
+
+            pos = data.indexOf("\"", off);
+            if (pos == type(uint256).max) {
+                revert("invalid n");
+            }
+            nBase64 = data.slice(off, pos);
+            off = pos + 1;
+        }
+
+        pos = data.indexOf("\"kid\":\"HCLEkPub\"", off);
+        if (pos == type(uint256).max) {
+            revert("data mixed up");
+        }
+
+        return LibX509.newRsaPubkey(Base64.decode(eBase64), Base64.decode(nBase64));
     }
 }

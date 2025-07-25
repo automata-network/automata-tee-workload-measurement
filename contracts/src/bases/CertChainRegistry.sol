@@ -3,15 +3,11 @@
 pragma solidity ^0.8.20;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {ICertChainRegistry} from "./interfaces/ICertChainRegistry.sol";
-import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "./lib/LibX509.sol";
+import {ICertChainRegistry} from "../interfaces/ICertChainRegistry.sol";
+import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "../lib/LibX509.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
-contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
-    event AddCA(bytes ca);
-    event RemoveCA(bytes ca);
-
+abstract contract CertChainRegistry is ICertChainRegistry, OwnableUpgradeable {
     enum CertType {
         None, // 0
         CA, // 1
@@ -31,20 +27,12 @@ contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
         _disableInitializers();
     }
 
-    /**
-     * @notice Only the owner can authorize an upgrade.
-     * @param newImplementation The address of the new implementation.
-     */
-    function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
-        require(newImplementation != address(0), "Invalid implementation address");
-    }
-
-    function initialize(address _initialOwner, address _p256) public initializer {
-        _transferOwnership(_initialOwner);
+    function __CertChainRegistry_init(address _initialOwner, address _p256) internal onlyInitializing {
+        __Ownable_init(_initialOwner);
         p256 = _p256;
     }
 
-    function addCA(bytes calldata ca) public onlyOwner {
+    function addCA(bytes calldata ca) public override onlyOwner {
         bytes32 key = keccak256(ca);
         (, uint256 validityNotAfter) = LibX509.getCertValidity(ca);
         if (block.timestamp > validityNotAfter) {
@@ -57,37 +45,15 @@ contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
         emit AddCA(ca);
     }
 
-    function removeCA(bytes calldata ca) public onlyOwner {
+    function removeCA(bytes calldata ca) public override onlyOwner {
         bytes32 key = keccak256(ca);
         require(verifiedCertIssuers[key] == CertType.CA, "CA not found");
         delete verifiedCertIssuers[key];
         emit RemoveCA(ca);
     }
 
-    function verifySignature(bytes32 digest, bytes memory sig, CertPubkey memory pubkey) public view returns (bool) {
-        if (pubkey.algo == ALGO_RSA) {
-            (bytes memory n, bytes memory e) = LibX509.rsaPub(pubkey.data);
-            bool result = RSA.pkcs1Sha256(digest, sig, e, n);
-            return result;
-        } else if (pubkey.algo == ALGO_EC) {
-            require(sig.length == 64, "invalid r size");
-            bytes32 r;
-            bytes32 s;
-            assembly {
-                let offset := add(sig, 0x20) // length
-                r := mload(offset)
-                offset := add(offset, 0x20)
-                s := mload(offset)
-            }
-            (bytes32 x, bytes32 y) = pubkey.ec();
-            return _ecdsaVerify(digest, r, s, x, y);
-        } else {
-            revert("CertChainRegistry: unsupported pubkey algo");
-        }
-    }
-
     // certs order: leaf, intermediate, root
-    function verifyCertChain(bytes[] calldata certs) external returns (CertPubkey memory) {
+    function verifyCertChain(bytes[] calldata certs) public override returns (CertPubkey memory) {
         require(certs.length > 0, "CertChainRegistry: empty certs");
         CertPubkey[] memory issuers = new CertPubkey[](certs.length);
         bytes32[] memory certHashes = LibX509._getCertHashes(certs);
@@ -135,6 +101,33 @@ contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
             verifiedCertIssuers[certHashes[i]] = CertType.Intermediate;
         }
         return issuers[0];
+    }
+
+    function verifySignature(bytes32 digest, bytes memory sig, CertPubkey memory pubkey)
+        public
+        view
+        override
+        returns (bool)
+    {
+        if (pubkey.algo == ALGO_RSA) {
+            (bytes memory n, bytes memory e) = LibX509.rsaPub(pubkey.data);
+            bool result = RSA.pkcs1Sha256(digest, sig, e, n);
+            return result;
+        } else if (pubkey.algo == ALGO_EC) {
+            require(sig.length == 64, "invalid r size");
+            bytes32 r;
+            bytes32 s;
+            assembly {
+                let offset := add(sig, 0x20) // length
+                r := mload(offset)
+                offset := add(offset, 0x20)
+                s := mload(offset)
+            }
+            (bytes32 x, bytes32 y) = pubkey.ec();
+            return _ecdsaVerify(digest, r, s, x, y);
+        } else {
+            revert("CertChainRegistry: unsupported pubkey algo");
+        }
     }
 
     function _ecdsaVerify(bytes32 messageHash, bytes32 r, bytes32 s, bytes32 x, bytes32 y)
