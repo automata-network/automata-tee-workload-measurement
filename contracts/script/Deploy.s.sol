@@ -33,17 +33,6 @@ contract Deploy is DeploymentConfig, P256Configuration {
         deployWorkloadVerifier(false); // Set allowMockAttestation to false by default
     }
 
-    function deployTpmAttestationImpl() public broadcast returns (address implAddress) {
-        // deploy the TpmAttestation implementation
-        TpmAttestation tpmAttestation = new TpmAttestation{salt: TPM_ATTESTATION_IMPL_SALT}();
-        implAddress = address(tpmAttestation);
-
-        console.log("TpmAttestation implementation deployed at:", implAddress);
-
-        // write the implementation address to JSON
-        writeToJson("TpmAttestationImpl", implAddress);
-    }
-
     function deployWorkloadVerifierImpl() public broadcast returns (address implAddress) {
         // deploy the WorkloadVerifier implementation
         WorkloadVerifier workloadVerifier = new WorkloadVerifier{salt: WORKLOAD_VERIFIER_IMPL_SALT}();
@@ -57,17 +46,12 @@ contract Deploy is DeploymentConfig, P256Configuration {
 
     function deployTpmAttestation() public broadcast {
         // deploy the TpmAttestation implementation
-        address implAddress = deployTpmAttestationImpl();
+        TpmAttestation tpmAttestation = new TpmAttestation{salt: TPM_ATTESTATION_SALT}(owner, simulateVerify());
 
-        // deploy the TpmAttestation proxy
-        ERC1967Proxy TpmAttestationProxy = new ERC1967Proxy{salt: TPM_ATTESTATION_PROXY_SALT}(
-            implAddress, abi.encodeWithSelector(TpmAttestation.initialize.selector, owner, simulateVerify())
-        );
-        address proxyAddress = address(TpmAttestationProxy);
-        console.log("TpmAttestation proxy deployed at:", proxyAddress);
+        console.log("TpmAttestation deployed at:", address(tpmAttestation));
 
-        // write the proxy address to JSON
-        writeToJson("TpmAttestationProxy", proxyAddress);
+        // write the implementation address to JSON
+        writeToJson("TpmAttestation", address(tpmAttestation));
     }
 
     function deployWorkloadVerifier(bool allowMockAttestation) public broadcast {
@@ -91,19 +75,6 @@ contract Deploy is DeploymentConfig, P256Configuration {
 
         // write the proxy address to JSON
         writeToJson("WorkloadVerifierProxy", proxyAddress);
-    }
-
-    function upgradeTpmAttestation(address newImpl, bytes calldata data) public broadcast {
-        // First, check if the TPM Attestation proxy already exists
-        TpmAttestation tpmAttestationProxy = TpmAttestation(payable(readContractAddress("TpmAttestationProxy")));
-
-        if (newImpl == address(0)) {
-            // Deploy the new implementation
-            newImpl = deployTpmAttestationImpl();
-        }
-
-        // Upgrade the proxy to the new implementation
-        tpmAttestationProxy.upgradeToAndCall(newImpl, data);
     }
 
     function upgradeWorkloadVerifier(address newImpl, bytes calldata data) public broadcast {

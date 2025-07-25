@@ -25,12 +25,7 @@ abstract contract TestSetup is Test {
 
         dcapAttestation = new MockAutomataDcapAttestation();
         snpAttestation = new MockAutomataSnpAttestation();
-
-        ERC1967Proxy tpmAttestationProxy = new ERC1967Proxy(
-            address(new TpmAttestation()),
-            abi.encodeWithSelector(TpmAttestation.initialize.selector, owner, P256_VERIFIER)
-        );
-        tpmAttestation = TpmAttestation(address(tpmAttestationProxy));
+        tpmAttestation = new TpmAttestation(owner, P256_VERIFIER);
 
         bytes memory initializeCalldata = abi.encodeWithSelector(
             WorkloadVerifier.initialize.selector,

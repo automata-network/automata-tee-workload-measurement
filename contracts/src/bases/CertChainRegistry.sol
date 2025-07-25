@@ -2,12 +2,12 @@
 // Automata Contracts
 pragma solidity ^0.8.20;
 
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ICertChainRegistry} from "../interfaces/ICertChainRegistry.sol";
 import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "../lib/LibX509.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
-abstract contract CertChainRegistry is ICertChainRegistry, OwnableUpgradeable {
+abstract contract CertChainRegistry is ICertChainRegistry, Ownable {
     enum CertType {
         None, // 0
         CA, // 1
@@ -15,20 +15,12 @@ abstract contract CertChainRegistry is ICertChainRegistry, OwnableUpgradeable {
 
     }
 
-    address public p256;
+    address public immutable p256;
 
     // keccak256(cert) => type: 0) none, 1) CA; 2) leaf
     mapping(bytes32 => CertType) public verifiedCertIssuers;
 
-    /// @notice Storage gap for future upgrades
-    uint256[49] private __gap;
-
-    constructor() OwnableUpgradeable() {
-        _disableInitializers();
-    }
-
-    function __CertChainRegistry_init(address _initialOwner, address _p256) internal onlyInitializing {
-        __Ownable_init(_initialOwner);
+    constructor(address _intialOwner, address _p256) Ownable(_intialOwner) {
         p256 = _p256;
     }
 

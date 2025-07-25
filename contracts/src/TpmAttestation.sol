@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 
 import {ITpmAttestation, MeasureablePcr} from "./interfaces/ITpmAttestation.sol";
 import {LibX509, CertPubkey, CertChainRegistry} from "./bases/CertChainRegistry.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 // TPM Quote Layout:
 // =====================================
@@ -30,26 +29,12 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 // [44+qualified_signer_len+extra_data_len+pcr_size..44+qualified_signer_len+extra_data_len+pcr_size+pcr_digest_size]
 // END
 
-contract TpmAttestation is CertChainRegistry, ITpmAttestation, UUPSUpgradeable {
+contract TpmAttestation is CertChainRegistry, ITpmAttestation {
     uint16 internal constant HASH_SHA256 = 0x000B;
     uint16 internal constant SIG_RSA = 0x0014;
     uint16 internal constant SIG_ECDSA = 0x0018;
 
-    constructor() {
-        _disableInitializers();
-    }
-
-    /**
-     * @notice Only the owner can authorize an upgrade.
-     * @param newImplementation The address of the new implementation.
-     */
-    function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
-        require(newImplementation != address(0), "Invalid implementation address");
-    }
-
-    function initialize(address _initialOwner, address _p256) public initializer {
-        __CertChainRegistry_init(_initialOwner, _p256);
-    }
+    constructor(address _intitialOwner, address _p256) CertChainRegistry(_intitialOwner, _p256) {}
 
     function verifyTpmQuote(
         bytes32 userDataHash,
