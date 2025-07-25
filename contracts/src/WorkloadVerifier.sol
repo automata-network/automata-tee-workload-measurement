@@ -3,6 +3,7 @@
 pragma solidity ^0.8.15;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
 import {IAttestationVerifier} from "./interfaces/IAttestationVerifier.sol";
@@ -11,9 +12,7 @@ import {WorkloadCollaterals, MeasureablePcr, LibTPM} from "./lib/LibTPM.sol";
 import {TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE} from "./lib/LibTEE.sol";
 import {CertPubkey} from "./lib/LibX509.sol";
 
-import {console} from "forge-std/console.sol";
-
-contract WorkloadVerifier is OwnableUpgradeable {
+contract WorkloadVerifier is UUPSUpgradeable, OwnableUpgradeable {
     IDcapAttestation public dcapAttestation;
     ISnpAttestation public snpAttestation;
     bool public allowMockAttestation;
@@ -23,6 +22,14 @@ contract WorkloadVerifier is OwnableUpgradeable {
 
     constructor() {
         _disableInitializers();
+    }
+
+    /**
+     * @notice Only the owner can authorize an upgrade.
+     * @param newImplementation The address of the new implementation.
+     */
+    function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
+        require(newImplementation != address(0), "Invalid implementation address");
     }
 
     function initialize(
@@ -141,30 +148,17 @@ contract WorkloadVerifier is OwnableUpgradeable {
         bytes32 _userDataHash,
         TEEVerifiedData memory _teeVerifiedData
     ) public {
-        uint256 gl = gasleft();
-
         if (_teeVerifiedData.akPub.empty()) {
             _teeVerifiedData.akPub = LibTPM.verifyAkPub(_wc.certs, certChainRegistryAddr);
         }
 
-        console.log("verifyAkPub:", gl - gasleft());
-        gl = gasleft();
-
         _wc.verifyTpmQuote(_teeVerifiedData.akPub, certChainRegistryAddr);
 
-        console.log("verifyTpmQuote:", gl - gasleft());
-        gl = gasleft();
-
         bytes32 extraDataHash = LibTPM.quoteExtraData(_wc.tpmQuote);
-        console.logBytes32(extraDataHash);
         require(extraDataHash == _userDataHash, "user report data mismatch");
-        console.log("extradata hash:", gl - gasleft());
-        gl = gasleft();
 
         LibTPM.verifyPcrs(_wc.pcrs, _wc.tpmQuote);
         LibTEE.verifyReportID(_wc, _teeVerifiedData);
-
-        console.log("LibTPM.verifyPcrs:", gl - gasleft());
     }
 
     /**

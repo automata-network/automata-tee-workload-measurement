@@ -2,7 +2,6 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import {console} from "forge-std/console.sol";
 import {Bytes48, LibBytes} from "./LibBytes.sol";
 import {CertPubkey, LibX509} from "./LibX509.sol";
 import {ICertChainRegistry} from "../interfaces/ICertChainRegistry.sol";
@@ -109,7 +108,7 @@ library LibTPM {
         return ICertChainRegistry(certChainRegistry).verifyCertChain(certs);
     }
 
-    function verifyPcrs(MeasureablePcr[] calldata pcrs, bytes memory quote) internal view {
+    function verifyPcrs(MeasureablePcr[] calldata pcrs, bytes memory quote) internal pure {
         // Quote Layout:
         // =====================================
         // magic: [0..4]
@@ -179,9 +178,7 @@ library LibTPM {
         require(attType == 0x8018, "attType != 0x8018");
         require(tpmsPCRCount == 1, "tpmsPCRCount != 1");
         require(pcrDigestLen == 32, "pcrDigestLen != 32");
-        uint256 gl = gasleft();
         bytes4 selection = LibTPM.compactSelections(pcrs);
-        console.log("compactSelections: ", gl - gasleft());
         require(selection == pcrSelection, "pcrSelection != pcrs.compactSelections()");
         require(LibTPM.digest(pcrs) == pcrDigest, "pcrs.hash() != pcrDigest");
     }

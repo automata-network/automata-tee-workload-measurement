@@ -2,7 +2,6 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import {console} from "forge-std/console.sol";
 import {Asn1Decode, NodePtr} from "./Asn1Decode.sol";
 import {LibBytes} from "./LibBytes.sol";
 import {DateTimeLib} from "@solady/utils/DateTimeLib.sol";
@@ -77,7 +76,6 @@ library LibX509 {
         pubkey.data = der.bitstringAt(subjectPublicKeyInfoPtr);
         if (pubkey.algo == ALGO_EC) {
             if (pubkey.data.length != 65 || pubkey.data[0] != 0x04) {
-                // console.logBytes(pubkey.data);
                 revert("compressed public key not supported");
             }
         }
@@ -105,11 +103,17 @@ library LibX509 {
     function _getCertHashes(bytes[] memory certs) internal pure returns (bytes32[] memory certHashes) {
         uint256 certLen = certs.length;
         certHashes = new bytes32[](certLen);
-        for (uint256 i = certLen - 1; i >= 0; i++) {
-            if (i == certLen - 1) {
-                certHashes[i] = keccak256(certs[i]);
-            } else {
-                certHashes[i] = keccak256(abi.encodePacked(certHashes[i + 1], sha256(certs[i])));
+        unchecked {
+            for (uint256 i = certLen - 1; i >= 0; i--) {
+                if (i == certLen - 1) {
+                    certHashes[i] = keccak256(certs[i]);
+                } else {
+                    certHashes[i] = keccak256(abi.encodePacked(certHashes[i + 1], sha256(certs[i])));
+                }
+
+                if (i == 0) {
+                    break; // Prevent underflow
+                }
             }
         }
     }
@@ -205,20 +209,5 @@ library LibX509 {
         secs += (uint8(x509Time[offset + 10]) - 48) * 10 + uint8(x509Time[offset + 11]) - 48;
 
         return DateTimeLib.dateTimeToTimestamp(yrs, mnths, dys, hrs, mins, secs);
-    }
-}
-
-library LibP256 {
-    address internal constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
-
-    function ecdsaVerify(bytes32 messageHash, bytes32 r, bytes32 s, bytes32 x, bytes32 y)
-        internal
-        view
-        returns (bool verified)
-    {
-        bytes memory args = abi.encode(messageHash, r, s, x, y);
-        (bool success, bytes memory ret) = P256_VERIFIER.staticcall(args);
-        assert(success); // never reverts, always returns 0 or 1
-        verified = abi.decode(ret, (uint256)) == 1;
     }
 }

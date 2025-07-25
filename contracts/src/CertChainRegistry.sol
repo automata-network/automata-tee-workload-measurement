@@ -3,14 +3,12 @@
 pragma solidity ^0.8.20;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {ICertChainRegistry} from "./interfaces/ICertChainRegistry.sol";
 import {CertPubkey, LibX509, ALGO_RSA, ALGO_EC} from "./lib/LibX509.sol";
-import {LibP256} from "./lib/LibTEE.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
-import {console} from "forge-std/console.sol";
-
-contract CertChainRegistry is OwnableUpgradeable {
+contract CertChainRegistry is UUPSUpgradeable, OwnableUpgradeable {
     event AddCA(bytes ca);
     event RemoveCA(bytes ca);
 
@@ -20,6 +18,8 @@ contract CertChainRegistry is OwnableUpgradeable {
         Intermediate // 2
 
     }
+
+    address public p256;
 
     // keccak256(cert) => type: 0) none, 1) CA; 2) leaf
     mapping(bytes32 => CertType) public verifiedCertIssuers;
@@ -31,8 +31,17 @@ contract CertChainRegistry is OwnableUpgradeable {
         _disableInitializers();
     }
 
-    function initialize(address _initialOwner) public initializer {
+    /**
+     * @notice Only the owner can authorize an upgrade.
+     * @param newImplementation The address of the new implementation.
+     */
+    function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
+        require(newImplementation != address(0), "Invalid implementation address");
+    }
+
+    function initialize(address _initialOwner, address _p256) public initializer {
         _transferOwnership(_initialOwner);
+        p256 = _p256;
     }
 
     function addCA(bytes calldata ca) public onlyOwner {
@@ -71,7 +80,7 @@ contract CertChainRegistry is OwnableUpgradeable {
                 s := mload(offset)
             }
             (bytes32 x, bytes32 y) = pubkey.ec();
-            return LibP256.ecdsaVerify(digest, r, s, x, y);
+            return _ecdsaVerify(digest, r, s, x, y);
         } else {
             revert("CertChainRegistry: unsupported pubkey algo");
         }
@@ -88,8 +97,6 @@ contract CertChainRegistry is OwnableUpgradeable {
         uint256 validityNotBefore;
         uint256 validityNotAfter;
 
-        uint256 gl = gasleft();
-
         // check verified
         for (uint256 i = 0; i < certLen; i++) {
             issuers[i] = LibX509.getCertIssuer(certs[i]);
@@ -103,9 +110,6 @@ contract CertChainRegistry is OwnableUpgradeable {
             }
         }
 
-        console.log("verify cert cached:", gl - gasleft());
-        gl = gasleft();
-
         if (verified == type(uint256).max) {
             revert("CertChainRegistry: no CA found");
         }
@@ -113,7 +117,6 @@ contract CertChainRegistry is OwnableUpgradeable {
         // check validity of leaf cert
         (validityNotBefore, validityNotAfter) = LibX509.getCertValidity(certs[0]);
         if (validityNotBefore > block.timestamp || validityNotAfter < block.timestamp) {
-            console.log(validityNotBefore, validityNotAfter, block.timestamp);
             revert("cert not valid yet");
         }
 
@@ -132,5 +135,16 @@ contract CertChainRegistry is OwnableUpgradeable {
             verifiedCertIssuers[certHashes[i]] = CertType.Intermediate;
         }
         return issuers[0];
+    }
+
+    function _ecdsaVerify(bytes32 messageHash, bytes32 r, bytes32 s, bytes32 x, bytes32 y)
+        private
+        view
+        returns (bool verified)
+    {
+        bytes memory args = abi.encode(messageHash, r, s, x, y);
+        (bool success, bytes memory ret) = p256.staticcall(args);
+        assert(success); // never reverts, always returns 0 or 1
+        verified = abi.decode(ret, (uint256)) == 1;
     }
 }

@@ -2,7 +2,6 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import {console} from "forge-std/console.sol";
 import "./LibX509.sol";
 import "./LibBytes.sol";
 import {MeasureablePcr, Pcr, LibTPM, WorkloadCollaterals} from "./LibTPM.sol";
@@ -119,7 +118,6 @@ library LibTEE {
                         break;
                     }
                     if (wc.reportId.length != 32 || wc.reportId.readBytes32(0) != teeData.reportID) {
-                        console.log("report id mismatch");
                         break;
                     }
                     bytes32 expectedPcr = sha256(abi.encodePacked(new bytes(32), teeData.reportID));

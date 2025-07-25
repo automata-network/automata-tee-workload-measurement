@@ -77,8 +77,8 @@ library LibBytes {
         return abi.encodePacked(data.first, data.second);
     }
 
-    function slice(bytes memory subject, uint256 start, uint256 end) internal pure returns (bytes memory result) {
-        return SoladyLibBytes.slice(subject, start, end);
+    function slice(bytes memory subject, uint256 start, uint256 len) internal pure returns (bytes memory result) {
+        return SoladyLibBytes.slice(subject, start, start + len);
     }
 
     function toString(bytes memory data) internal pure returns (string memory) {
