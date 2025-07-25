@@ -122,7 +122,7 @@ contract TpmAttestation is CertChainRegistry, ITpmAttestation {
             return (false, "Failed to verify TPM signature");
         }
 
-        return (true, "TPM quote verified successfully");
+        return (true, "");
     }
 
     function _checkUserDataAndPcrs(bytes32 userDataHash, MeasureablePcr[] calldata tpmPcrs, bytes calldata tpmQuote)
