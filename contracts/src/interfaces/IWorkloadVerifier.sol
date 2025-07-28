@@ -48,6 +48,8 @@ interface IWorkloadVerifier {
      * @param cloudType indicates the cloud provider
      * @param _teeAttestationReport The TEE attestation report.
      * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
+     * @return The hash of the measured workload
+     * @dev can provide their own golden measurement hash to be referenced for checking the integrity of the workload.
      */
     function verifyAttestation(
         bytes32 _userDataHash,
