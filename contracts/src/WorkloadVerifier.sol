@@ -96,7 +96,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         if (cloudType == CloudType.Azure) {
             bytes32 localReportData = sha256(_wc.akPub);
             if (teeVerifiedData.userReportData.first != localReportData) {
-                revert REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
+                revert TEE_REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
             }
             teeVerifiedData.akPub = varDataPubkey(string(_wc.akPub));
         }
