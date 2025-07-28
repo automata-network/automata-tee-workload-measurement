@@ -14,6 +14,19 @@ struct MeasureablePcr {
     bool measurePcr;
 }
 
+/// PCR Golden Measurement
+struct Pcr {
+    // pcr index
+    uint256 index;
+    // sanity check: require(pcr!=0 || measureEvents.length>0)
+    // this value is zero if we don't intend to include PCR value as part of the golden measurement
+    bytes32 pcr;
+    // the subset of events to measure
+    bytes32[] measureEvents;
+    // the index of events to measure
+    uint256[] measureEventsIdx;
+}
+
 import {ICertChainRegistry, CertPubkey} from "./ICertChainRegistry.sol";
 
 interface ITpmAttestation is ICertChainRegistry {

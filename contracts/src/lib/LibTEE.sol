@@ -2,8 +2,8 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import {Pcr, WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
-import {MeasureablePcr} from "../interfaces/ITpmAttestation.sol";
+import {WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
+import {MeasureablePcr, Pcr} from "../interfaces/ITpmAttestation.sol";
 import "./LibX509.sol";
 import "./LibBytes.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";

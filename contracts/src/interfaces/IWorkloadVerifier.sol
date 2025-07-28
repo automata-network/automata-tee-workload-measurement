@@ -24,18 +24,6 @@ struct WorkloadCollaterals {
     bytes[] certs;
 }
 
-/// PCR Golden Measurement
-struct Pcr {
-    // pcr index
-    uint256 index;
-    // sanity check: require(pcr!=0 || measureEvents.length>0)
-    // set to zero if no need to measure the pcr value
-    bytes32 pcr;
-    // the events wants to measure
-    bytes32[] measureEvents;
-    uint256[] measureEventsIdx;
-}
-
 interface IWorkloadVerifier {
     error INVALID_REPORT();
     error INVALID_REPORT_DATA();
