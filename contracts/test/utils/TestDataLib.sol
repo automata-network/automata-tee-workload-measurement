@@ -5,7 +5,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {WorkloadCollaterals} from "../../src/interfaces/IWorkloadVerifier.sol";
 import {MeasureablePcr} from "../../src/interfaces/ITpmAttestation.sol";
-import {GoldenMeasurement, GoldenMeasurementTdx, GoldenMeasurementSnp, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
+import {GoldenMeasurement, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
 import {LibBytes} from "../../src/lib/LibBytes.sol";
 
 struct SnpTestData {
