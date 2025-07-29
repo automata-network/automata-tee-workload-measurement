@@ -13,3 +13,6 @@
 [submodule "contracts/lib/automata-dcap-attestation"]
 	path = contracts/lib/automata-dcap-attestation
 	url = https://github.com/automata-network/automata-dcap-attestation
+[submodule "contracts/lib/automata-tpm-attestation"]
+	path = contracts/lib/automata-tpm-attestation
+	url = https://github.com/automata-network/automata-tpm-attestation

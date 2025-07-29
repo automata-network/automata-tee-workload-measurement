@@ -4,14 +4,16 @@ pragma solidity ^0.8.15;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {
+    MeasureablePcr, ITpmAttestation
+} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {LibX509, CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
-import {MeasureablePcr, ITpmAttestation} from "./interfaces/ITpmAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
 import {TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE} from "./lib/LibTEE.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 import {LibString} from "@solady/utils/LibString.sol";
-import {LibX509, CertPubkey} from "./lib/LibX509.sol";
 
 contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradeable {
     using LibString for string;

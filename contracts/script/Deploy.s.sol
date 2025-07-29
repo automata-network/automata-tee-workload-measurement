@@ -3,19 +3,17 @@
 pragma solidity ^0.8.15;
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-
 import {console} from "forge-std/console.sol";
-import {P256Configuration} from "./utils/P256Configuration.sol";
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
-import "./utils/Salt.sol";
-
-import {TpmAttestation} from "../src/TpmAttestation.sol";
 import {WorkloadVerifier} from "../src/WorkloadVerifier.sol";
 
-contract Deploy is DeploymentConfig, P256Configuration {
+import "./utils/Salt.sol";
+
+contract Deploy is DeploymentConfig {
     address owner = vm.envAddress("OWNER");
     address dcapAttestationAddr = vm.envAddress("DCAP_ATTESTATION_ADDR");
     address snpAttestationAddr = vm.envAddress("SNP_ATTESTATION_ADDR");
+    address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
     bool locked = false;
 
     modifier broadcast() {
@@ -29,7 +27,6 @@ contract Deploy is DeploymentConfig, P256Configuration {
     }
 
     function run() public broadcast {
-        deployTpmAttestation();
         deployWorkloadVerifier(false); // Set allowMockAttestation to false by default
     }
 
@@ -44,16 +41,6 @@ contract Deploy is DeploymentConfig, P256Configuration {
         writeToJson("WorkloadVerifierImpl", implAddress);
     }
 
-    function deployTpmAttestation() public broadcast {
-        // deploy the TpmAttestation implementation
-        TpmAttestation tpmAttestation = new TpmAttestation{salt: TPM_ATTESTATION_SALT}(owner, simulateVerify());
-
-        console.log("TpmAttestation deployed at:", address(tpmAttestation));
-
-        // write the implementation address to JSON
-        writeToJson("TpmAttestation", address(tpmAttestation));
-    }
-
     function deployWorkloadVerifier(bool allowMockAttestation) public broadcast {
         // deploy the WorkloadVerifier implementation
         address implAddress = deployWorkloadVerifierImpl();
@@ -66,7 +53,7 @@ contract Deploy is DeploymentConfig, P256Configuration {
                 owner,
                 dcapAttestationAddr,
                 snpAttestationAddr,
-                readContractAddress("TpmAttestationProxy"),
+                tpmAttestationAddr,
                 allowMockAttestation
             )
         );

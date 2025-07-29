@@ -2,10 +2,12 @@
 // Automata Contracts
 pragma solidity ^0.8.0;
 
+import {
+    ITpmAttestation, MeasureablePcr
+} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+
 import {IDcapAttestation} from "./IDcapAttestation.sol";
 import {ISnpAttestation} from "./ISnpAttestation.sol";
-import {ITpmAttestation} from "./ITpmAttestation.sol";
-import {MeasureablePcr} from "./ITpmAttestation.sol";
 import {TEEType, TeeReportType, CloudType} from "../lib/LibTEE.sol";
 
 struct WorkloadCollaterals {

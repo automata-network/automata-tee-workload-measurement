@@ -2,9 +2,9 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
+import {MeasureablePcr, Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
-import {MeasureablePcr, Pcr} from "../interfaces/ITpmAttestation.sol";
-import "./LibX509.sol";
 import "./LibBytes.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";
 
