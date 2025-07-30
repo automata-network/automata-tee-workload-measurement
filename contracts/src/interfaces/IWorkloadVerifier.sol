@@ -27,20 +27,21 @@ struct WorkloadCollaterals {
 }
 
 interface IWorkloadVerifier {
-    // b0c0fe51
-    error INVALID_REPORT();
-    // d0e356d5
-    error INVALID_REPORT_DATA();
     // 8d35c978
     error MOCK_ATTESTATION_NOT_ALLOWED();
-    // 0a6fdd83
-    error TEE_REPORT_DATA_MISMATCH(bytes32 want, bytes32 got);
     // ddf0d9a4
     error INVALID_TEE_REPORT_TYPE(TeeReportType teeReportType);
     // 4536070c
     error INVALID_TEE_TYPE(TEEType teeType);
     // 0ccce91b
     error INVALID_CLOUD_TYPE(CloudType cloudType);
+    error FAILED_TO_VERIFY_TEE();
+    error INVALID_TEE_REPORT();
+    // 0a6fdd83
+    error TEE_REPORT_DATA_MISMATCH(bytes32 want, bytes32 got);
+    error FAILED_TO_VERIFY_TPM_QUOTE(string errorMessage);
+    error FAILED_TO_CHECK_PCR_MEASUREMENTS(string errorMessage);
+    error TPM_DATA_MISMATCH(bytes32 want, bytes32 got);
 
     /**
      * @dev Verifies the integrity of a CVM Workload

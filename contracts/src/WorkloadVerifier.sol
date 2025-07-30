@@ -5,13 +5,24 @@ pragma solidity ^0.8.15;
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {
-    MeasureablePcr, ITpmAttestation
+    MeasureablePcr,
+    Pcr,
+    ITpmAttestation
 } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {LibX509, CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
-import {TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE} from "./lib/LibTEE.sol";
+import {
+    TEEVerifiedData,
+    ZkProof,
+    Bytes64,
+    TEEType,
+    TeeReportType,
+    CloudType,
+    LibTEE,
+    GoldenMeasurement
+} from "./lib/LibTEE.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 import {LibString} from "@solady/utils/LibString.sol";
 
@@ -73,11 +84,13 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             // TODO: use preset golden measurement hash
             return bytes32(0);
         }
-
         TEEVerifiedData memory teeVerifiedData =
             verifyTEE(teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
         verifyWorkload(_wc, _userDataHash, teeVerifiedData);
-        return LibTEE.goldenMeasurement(_wc.pcrs, teeVerifiedData.tdx, teeVerifiedData.snp).digest();
+        Pcr[] memory pcrs = tpmAttestation.toGoldenMeasurement(_wc.pcrs);
+        GoldenMeasurement memory gm =
+            GoldenMeasurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
+        return gm.digest();
     }
 
     function verifyTEE(
@@ -146,11 +159,12 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             (succ, output) = dcapAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
         }
         if (!succ) {
-            revert INVALID_REPORT();
+            revert FAILED_TO_VERIFY_TEE();
         }
 
-        if (output.length < 64) {
-            revert INVALID_REPORT_DATA();
+        // offset 11 + SGX_REPORT_SIZE (384 bytes)
+        if (output.length < 395) {
+            revert INVALID_TEE_REPORT();
         }
 
         return LibTEE.tdxOutput(output);
@@ -161,12 +175,30 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         bytes32 _userDataHash,
         TEEVerifiedData memory _teeVerifiedData
     ) internal {
+        // Step 1: Verify TPM quote
+        bool success;
+        string memory errorMessage;
         if (_teeVerifiedData.akPub.empty()) {
-            tpmAttestation.verifyTpmQuote(_userDataHash, _wc.tpmQuote, _wc.tpmSignature, _wc.pcrs, _wc.certs);
+            (success, errorMessage) = tpmAttestation.verifyTpmQuote(_wc.tpmQuote, _wc.tpmSignature, _wc.certs);
         } else {
-            tpmAttestation.verifyTpmQuote(
-                _userDataHash, _wc.tpmQuote, _wc.tpmSignature, _wc.pcrs, _teeVerifiedData.akPub
-            );
+            (success, errorMessage) =
+                tpmAttestation.verifyTpmQuote(_wc.tpmQuote, _wc.tpmSignature, _teeVerifiedData.akPub);
+        }
+        if (!success) {
+            revert FAILED_TO_VERIFY_TPM_QUOTE(errorMessage);
+        }
+
+        // Step 2: Check PCR measurements and extract extraData from the quote
+        bytes memory extraData;
+        (success, extraData) = tpmAttestation.checkPcrMeasurements(_wc.tpmQuote, _wc.pcrs);
+        if (!success) {
+            revert FAILED_TO_CHECK_PCR_MEASUREMENTS(string(extraData));
+        }
+
+        // Step 3: Compare userDataHash with extraData
+        bytes32 data = bytes32(extraData);
+        if (data != _userDataHash) {
+            revert TPM_DATA_MISMATCH(data, _userDataHash);
         }
 
         LibTEE.verifyReportID(_wc, _teeVerifiedData);
