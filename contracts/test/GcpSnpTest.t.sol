@@ -24,7 +24,7 @@ contract GcpSnpTest is TestSetup {
         // Upsert Google EK/AK CA Root
         bytes memory googleCa = testData.tpmCerts[testData.tpmCerts.length - 1];
         vm.prank(owner);
-        certChainRegistry.addCA(googleCa);
+        tpmAttestation.addCA(googleCa);
 
         WorkloadCollaterals memory wc = TestDataLib.getWc(
             abi.encodePacked(testData.reportId),

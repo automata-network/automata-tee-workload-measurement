@@ -4,15 +4,15 @@ pragma solidity >=0.8.15;
 import {Test} from "forge-std/Test.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
 import {MockAutomataDcapAttestation} from "../mock/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../mock/MockAutomataSnpAttestation.sol";
-import {CertChainRegistry} from "../../src/CertChainRegistry.sol";
 import {WorkloadVerifier} from "../../src/WorkloadVerifier.sol";
 
 abstract contract TestSetup is Test {
     MockAutomataDcapAttestation internal dcapAttestation;
     MockAutomataSnpAttestation internal snpAttestation;
-    CertChainRegistry internal certChainRegistry;
+    TpmAttestation internal tpmAttestation;
     WorkloadVerifier internal workloadVerifier;
 
     address internal constant owner = address(0x1234);
@@ -25,19 +25,14 @@ abstract contract TestSetup is Test {
 
         dcapAttestation = new MockAutomataDcapAttestation();
         snpAttestation = new MockAutomataSnpAttestation();
-
-        ERC1967Proxy certchainRegistryProxy = new ERC1967Proxy(
-            address(new CertChainRegistry()),
-            abi.encodeWithSelector(CertChainRegistry.initialize.selector, owner, P256_VERIFIER)
-        );
-        certChainRegistry = CertChainRegistry(address(certchainRegistryProxy));
+        tpmAttestation = new TpmAttestation(owner, P256_VERIFIER);
 
         bytes memory initializeCalldata = abi.encodeWithSelector(
             WorkloadVerifier.initialize.selector,
             owner,
             address(dcapAttestation),
             address(snpAttestation),
-            address(certChainRegistry),
+            address(tpmAttestation),
             true // allowMockAttestation
         );
         ERC1967Proxy workloadVerifierProxy = new ERC1967Proxy(address(new WorkloadVerifier()), initializeCalldata);

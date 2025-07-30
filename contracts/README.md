@@ -10,13 +10,35 @@ TEE Onchain Workload Measurement currently consists of the following smart contr
 
 - [`WorkloadVerifier.sol`](./src/WorkloadVerifier.sol): 
     - Depends on (1) [Automata DCAP Attestation](https://github.com/automata-network/automata-dcap-attestation/tree/main/evm) to verify Intel TDX quotes, and (2) [Automata SEV-SNP Attestation](https://github.com/automata-network/amd-sev-snp-attestation-sdk/tree/main/zk/contracts) to verify AMD SEV SNP attestation reports.
-    - Internally verifies the TPM quote signature and the correctness of TPM measurements.
+    - Verifies the associated TPM quote via the TPM Attestation contract.
     - Computes the **Golden Measurement Hash**.
-- [`CertChainRegistry.sol`](./src/CertChainRegistry.sol): 
-    - This contract maintains a list of trusted Certificate Authorities (CAs) issuing TPM Attestation Keys.
-    - This contract must be admin-controlled.
+- [`TpmAttestation.sol`](./src/TpmAttestation.sol): 
+    - Independent contract that verifies the signature of a TPM quote, and checks the PCR measurement against the PCR digest value stated in the quote.
+    - An admin must configure a whitelist of reputable TPM AK Certificate Authorities.
 
 ## Overview
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant W as Workload Verifier
+    participant TEE as TEE Onchain Attestation
+    participant TPM as TPM Attestation
+
+    U->>W: 1. TEE Attestation Report, Workload Collateral
+    W->>TEE: 2. TEE Attestation Report
+    TEE-->>W: TEE Verification Status and Output
+    W->>TPM: 3. Workload Collateral
+    opt GCP
+        TPM-->>TPM: Extracts and verifies the AK Pubkey from a list of trusted CAs
+    end
+    TPM->>TPM: 4. Checks the user data
+    TPM->>TPM: 5. Checks PCR Digest
+    TPM-->>W: TPM quote has been successfully verified
+    W->>W: 6. Verifies the report ID to check binding between TEE and TPM
+    W->>U: 7. Returns the golden measurement hash
+
+```
 
 1. The user submits data hash, TEE Attestation Report, and the workload collateral to the `WorkloadVerifier.sol` contract. Workload collateral is a collection of data, consisting the TPM quote, TPM Signature, TPM Attestation Key (or AK certificate chain) and an array of PCR measurement.
 
@@ -26,7 +48,7 @@ TEE Onchain Workload Measurement currently consists of the following smart contr
 
 3. The TPM quote and signature are verified against the provided TPM Attestation Key.
     
-    > a. If TPM Attestation Key were not checked in *step 2(a)*, the key is extracted from the leaf of the AK Certificate Chain, which must be checked for valid root of trust. `CertChainRegistry.sol` maintains a whitelist of reputable CAs.
+    > a. If TPM Attestation Key were not checked in *step 2(a)*, the key is extracted from the leaf of the AK Certificate Chain, which must be checked for valid root of trust.
 
 4. The `extraData` value in the TPM quote is extracted, which must equal the hash of the user's expected data (`userDataHash`).
 
@@ -64,12 +86,12 @@ forge test
 
 The table below shows our initial finding on gas costs to measure CVMs with various TEEs hosted on Azure and GCP.
 
-|  | TEE Report Verification Gas Cost | AK Pubkey Verification Gas Cost | TPM Signature Verification Gas Cost | PCRs Matching Gas Cost | Report ID Binding Check Gas Cost | Golden Measurement Hashing Gas Cost |
+|  | TEE Report Verification Gas Cost | AK Pubkey Verification Gas Cost | TPM Signature Verification Gas Cost | PCRs and User Data Matching Gas Cost | Report ID Binding Check Gas Cost | Golden Measurement Hashing Gas Cost |
 | --- | --- | --- | --- | --- | --- | --- |
-| Azure TDX | ~5M[^1] gas (Onchain DCAP) | 49k[^2] gas | 37k gas (RSA) | 7k gas | 3k gas | 13k gas |
-| Azure AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 49k[^2] gas | 37k gas (RSA) | 7k gas | 3k gas | 13k gas |
-| GCP TDX | ~5M[^1] gas (Onchain DCAP) | 384k[^4] gas | 335k[^1] gas (secp256r1) | 7k gas | 484k[^5] gas | 26k gas |
-| GCP AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 384k[^4] gas | 335k[^1] gas (secp256r1) | 7k gas | 5k gas | 25k gas |
+| Azure TDX | ~5M[^1] gas (Onchain DCAP) | 49k[^2] gas | 37k gas (RSA) | 10k gas | 3k gas | 13k gas |
+| Azure AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 49k[^2] gas | 37k gas (RSA) | 10k gas | 3k gas | 13k gas |
+| GCP TDX | ~5M[^1] gas (Onchain DCAP) | 384k[^4] gas | 335k[^1] gas (secp256r1) | 10k gas | 482k[^5] gas | 26k gas |
+| GCP AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 384k[^4] gas | 335k[^1] gas (secp256r1) | 19k gas | 5k gas | 25k gas |
 
 ### Remark:
 
