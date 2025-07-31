@@ -69,14 +69,6 @@ interface IWorkloadVerifier {
     ) external payable returns (bytes32);
 
     /**
-     * @dev Estimates the fee for verifying the quote on-chain.
-     * @param rawQuote The raw quote data.
-     * @return The estimated fee.
-     * @notice The actual fee is determined by multiplying the base fee with the gas price.
-     */
-    function estimateBaseFeeVerifyOnChain(bytes calldata rawQuote) external payable returns (uint256);
-
-    /**
      * @return The DcapAttestation interface for verifying Intel DCAP Quotes
      */
     function dcapAttestation() external view returns (IDcapAttestation);

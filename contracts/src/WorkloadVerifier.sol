@@ -62,14 +62,6 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         __Ownable_init(_initialOwner);
     }
 
-    function estimateBaseFeeVerifyOnChain(bytes calldata rawQuote) external payable override returns (uint256) {
-        uint16 bp = dcapAttestation.getBp();
-        uint256 gasBefore = gasleft();
-        dcapAttestation.verifyAndAttestOnChain{value: msg.value}(rawQuote);
-        uint256 gasAfter = gasleft();
-        return (gasBefore - gasAfter) * bp / 10000;
-    }
-
     function verifyAttestation(
         bytes32 _userDataHash,
         TEEType teeType,
@@ -91,6 +83,14 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         GoldenMeasurement memory gm =
             GoldenMeasurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
         return gm.digest();
+    }
+
+    function estimateBaseFeeVerifyOnChain(bytes calldata rawQuote) external payable returns (uint256) {
+        uint16 bp = dcapAttestation.getBp();
+        uint256 gasBefore = gasleft();
+        dcapAttestation.verifyAndAttestOnChain{value: msg.value}(rawQuote);
+        uint256 gasAfter = gasleft();
+        return (gasBefore - gasAfter) * bp / 10000;
     }
 
     function verifyTEE(
