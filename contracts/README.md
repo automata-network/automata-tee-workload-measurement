@@ -1,64 +1,14 @@
 # Automata TEE Workload Measurement (EVM Smart Contract)
 
-This document describes the onchain verification and measurement of the workload of a Confidential VM (CVM) instance hosted on cloud service providers, e.g. Azure and Google Cloud Platform (GCP).
+This document describes the EVM implementation for onchain verification and measurement of the workload of a Confidential VM (CVM) instance hosted on cloud service providers.
 
-Code and data in CVMs are protected from tampering by the host OS (and other CVMs) with TEE hardware, such as Intel TDX and AMD SEV-SNP. Cloud service providers generally also equip CVMs with virtual TPM, to cryptographically store measurements of the boot process, ensuring integrity of the CVM image.
+TEE Onchain Workload Measurement implementation can be found [`WorkloadVerifier.sol`](./src/WorkloadVerifier.sol), which is dependent on:
 
-<!-- TODO: Provide more description on what the users can do with the TEE Workload Measurement contracts -->
+1. [Automata DCAP Attestation](https://github.com/automata-network/automata-dcap-attestation/tree/main/evm) to verify Intel TDX quotes
+2. [Automata SEV-SNP Attestation](https://github.com/automata-network/amd-sev-snp-attestation-sdk/tree/main/zk/contracts) to verify AMD SEV SNP attestation reports.
+3. [Automata TPM Attestation](https://github.com/automata-network/automata-tpm-attestation) to verify TPM quote, checking PCR measurements and user provided data.
 
-TEE Onchain Workload Measurement currently consists of the following smart contracts:
-
-- [`WorkloadVerifier.sol`](./src/WorkloadVerifier.sol): 
-    - Depends on (1) [Automata DCAP Attestation](https://github.com/automata-network/automata-dcap-attestation/tree/main/evm) to verify Intel TDX quotes, and (2) [Automata SEV-SNP Attestation](https://github.com/automata-network/amd-sev-snp-attestation-sdk/tree/main/zk/contracts) to verify AMD SEV SNP attestation reports.
-    - Verifies the associated TPM quote via the TPM Attestation contract.
-    - Computes the **Golden Measurement Hash**.
-- [`TpmAttestation.sol`](./src/TpmAttestation.sol): 
-    - Independent contract that verifies the signature of a TPM quote, and checks the PCR measurement against the PCR digest value stated in the quote.
-    - An admin must configure a whitelist of reputable TPM AK Certificate Authorities.
-
-## Overview
-
-```mermaid
-sequenceDiagram
-    actor U as User
-    participant W as Workload Verifier
-    participant TEE as TEE Onchain Attestation
-    participant TPM as TPM Attestation
-
-    U->>W: 1. TEE Attestation Report, Workload Collateral
-    W->>TEE: 2. TEE Attestation Report
-    TEE-->>W: TEE Verification Status and Output
-    W->>TPM: 3. Workload Collateral
-    opt GCP
-        TPM-->>TPM: Extracts and verifies the AK Pubkey from a list of trusted CAs
-    end
-    TPM->>TPM: 4. Checks the user data
-    TPM->>TPM: 5. Checks PCR Digest
-    TPM-->>W: TPM quote has been successfully verified
-    W->>W: 6. Verifies the report ID to check binding between TEE and TPM
-    W->>U: 7. Returns the golden measurement hash
-
-```
-
-1. The user submits data hash, TEE Attestation Report, and the workload collateral to the `WorkloadVerifier.sol` contract. Workload collateral is a collection of data, consisting the TPM quote, TPM Signature, TPM Attestation Key (or AK certificate chain) and an array of PCR measurement.
-
-2. TEE Attestation Report verification shows that the CVM is running in a TEE provided by genuine hardware.
-    
-    > a. If the CVM were hosted on Azure, this step also ensures that the report data must contain the hash of the TPM Attestation Key.
-
-3. The TPM quote and signature are verified against the provided TPM Attestation Key.
-    
-    > a. If TPM Attestation Key were not checked in *step 2(a)*, the key is extracted from the leaf of the AK Certificate Chain, which must be checked for valid root of trust.
-
-4. The `extraData` value in the TPM quote is extracted, which must equal the hash of the user's expected data (`userDataHash`).
-
-5. The list of PCR indices provided in the collateral must match with the PCR selection bitmap in the TPM quote; the hash chain of PCR measurement values yields a value that must match the PCR digest value in the TPM quote.
-
-6. The provided Report ID must be found in both TEE Attestation Report and PCR 16 of the TPM. This step indicates the binding between TEE and TPM.
-    
-    > a. The only exception to this rule applies to Azure TDX CVM. As stated in *2(a)*, the report data provides us with information about the AK that signs the TPM quote, which is already verified in *step 3*.
-
-7. Computes the Golden Measurement Hash. Developers can provide their own golden measurement hash for their applications, which can be referenced against the returned hash to check the integrity of the CVM.
+---
 
 ## #BUIDL 🛠️
 
@@ -81,6 +31,166 @@ forge build --sizes
 ```shell
 forge test
 ```
+
+---
+
+## Integration
+
+### Installation
+
+To integrate WorkloadVerifier into your project, install it as a Foundry dependency:
+
+```shell
+forge install automata-network/tee-workload-measurement
+```
+
+### Import Remapping
+
+Add the following remapping to your `foundry.toml` file:
+
+```toml
+[profile.default]
+remappings = [
+    "@automata-network/tee-workload-measurement/=lib/tee-workload-measurement/contracts/src/"
+]
+```
+
+### Basic Usage
+
+Here's a simple example of how to integrate WorkloadVerifier into your contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {IWorkloadVerifier, WorkloadCollaterals} from "@automata-network/tee-workload-measurement/interfaces/IWorkloadVerifier.sol";
+import {TEEType, TeeReportType, CloudType} from "@automata-network/tee-workload-measurement/lib/LibTEE.sol";
+
+contract MyContract {
+    IWorkloadVerifier public immutable workloadVerifier;
+    
+    constructor(address _workloadVerifier) {
+        workloadVerifier = IWorkloadVerifier(_workloadVerifier);
+    }
+    
+    function verifyWorkload(
+        bytes32 userDataHash,
+        TEEType teeType,
+        TeeReportType teeReportType,
+        CloudType cloudType,
+        bytes calldata teeAttestationReport,
+        WorkloadCollaterals calldata workloadCollaterals
+    ) external payable returns (bytes32 measurementHash) {
+        measurementHash = workloadVerifier.verifyAttestation(
+            userDataHash,
+            teeType,
+            teeReportType,
+            cloudType,
+            teeAttestationReport,
+            workloadCollaterals
+        );
+        
+        // Use the measurement hash for your application logic
+        // e.g., compare against expected values, store for future reference
+    }
+}
+```
+
+---
+
+## API Reference
+
+### Core Interface
+
+#### `verifyAttestation`
+
+```solidity
+function verifyAttestation(
+    bytes32 _userDataHash,
+    TEEType teeType,
+    TeeReportType teeReportType,
+    CloudType cloudType,
+    bytes calldata _teeAttestationReport,
+    WorkloadCollaterals calldata _workloadReport
+) external payable returns (bytes32);
+```
+
+Verifies the integrity of a CVM workload and returns the golden measurement hash.
+
+**Parameters:**
+- `_userDataHash`: The hash of the user data to be verified
+- `teeType`: The TEE technology used (`IntelTdx` or `AmdSevSnp`)
+- `teeReportType`: The report verification method (`Solidity` for onchain or `ZkRiscZero`/`ZkSp1` for ZK proofs)
+- `cloudType`: The cloud provider (`Azure` or `Gcp`)
+- `_teeAttestationReport`: The TEE attestation report data
+- `_workloadReport`: Additional verification data (see WorkloadCollaterals below)
+
+**Returns:**
+- `bytes32`: The golden measurement hash representing the verified workload
+
+### Data Structures
+
+#### `WorkloadCollaterals`
+
+```solidity
+struct WorkloadCollaterals {
+    bytes tpmQuote;        // TPM quote to be verified
+    bytes tpmSignature;    // Signature for the TPM quote
+    MeasureablePcr[] pcrs; // Platform Configuration Register values
+    bytes reportId;        // Report identifier (UUID for TDX on GCP)
+    bytes akPub;           // Attestation Key public key (GCP) or varDataJson (Azure)
+    bytes[] certs;         // Certificate chain (GCP only, empty for Azure)
+}
+```
+
+#### Enums
+
+- **`TEEType`**: `IntelTdx`, `AmdSevSnp`
+- **`TeeReportType`**: `Solidity`, `ZkRiscZero`, `ZkSp1`
+- **`CloudType`**: `Azure`, `Gcp`
+
+### View Functions
+
+The interface provides access to underlying attestation contracts:
+
+- `dcapAttestation()`: Returns the DCAP attestation contract for Intel TDX verification
+- `snpAttestation()`: Returns the SNP attestation contract for AMD SEV-SNP verification
+- `tpmAttestation()`: Returns the TPM attestation contract for TPM quote verification
+- `allowMockAttestation()`: Returns whether mock attestation is enabled (for testing)
+
+### Golden Measurement Hash
+
+The golden measurement hash returned by `verifyAttestation()` is a cryptographic proof of workload integrity that represents:
+
+- **Workload Identity**: A unique fingerprint of the verified CVM workload
+- **Integrity Assurance**: Cryptographic proof that the workload hasn't been tampered with
+- **Compliance Evidence**: Verifiable proof for regulatory or security requirements
+
+**Use Cases:**
+
+1. **Integrity Verification**: Compare the returned hash against expected measurement values to ensure workload authenticity
+2. **Trust Chains**: Store the hash onchain to build verifiable trust relationships between different workloads
+3. **Compliance Tracking**: Use the hash as evidence for audit trails and regulatory compliance
+4. **Access Control**: Gate access to sensitive operations based on verified workload measurements
+5. **Reputation Systems**: Build reputation scores based on consistently verified workload behavior
+
+**Example Usage:**
+
+```solidity
+// Store expected measurement for a trusted workload
+bytes32 public trustedWorkloadHash = 0x123...;
+
+function verifyTrustedWorkload(/* parameters */) external {
+    bytes32 measurementHash = workloadVerifier.verifyAttestation(/* args */);
+    
+    require(measurementHash == trustedWorkloadHash, "Untrusted workload");
+    
+    // Proceed with trusted operations
+    _executeSensitiveOperation();
+}
+```
+
+---
 
 ## Gas Benchmark
 
