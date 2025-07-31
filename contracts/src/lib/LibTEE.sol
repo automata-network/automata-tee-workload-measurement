@@ -131,19 +131,19 @@ library LibTEE {
     }
 
     function tdxOutput(bytes memory output) internal pure returns (TEEVerifiedData memory data) {
-        bytes4 tee = output.readBytes4(2);
-        if (tee == 0x00000000) {
-            // sgx, reportData = output[333:397]
-            data.userReportData = output.readBytes64(333);
+        uint16 quoteBodyType = uint16(bytes2(output.readBytes2(2)));
+        if (quoteBodyType == 1) {
+            // sgx, reportData = output[331:395]
+            data.userReportData = output.readBytes64(331);
         } else {
-            // tdx, reportData = output[533:597]
-            data.tdx.mrseam = output.readBytes48(29);
-            data.tdx.mrtd = output.readBytes48(149);
-            data.tdx.rtmr0 = output.readBytes48(341);
-            data.tdx.rtmr1 = output.readBytes48(389);
-            data.tdx.rtmr2 = output.readBytes48(437);
-            data.tdx.rtmr3 = output.readBytes48(485);
-            data.userReportData = output.readBytes64(533);
+            // tdx, reportData = output[531:595]
+            data.tdx.mrseam = output.readBytes48(27);
+            data.tdx.mrtd = output.readBytes48(147);
+            data.tdx.rtmr0 = output.readBytes48(339);
+            data.tdx.rtmr1 = output.readBytes48(387);
+            data.tdx.rtmr2 = output.readBytes48(435);
+            data.tdx.rtmr3 = output.readBytes48(483);
+            data.userReportData = output.readBytes64(531);
         }
         return data;
     }

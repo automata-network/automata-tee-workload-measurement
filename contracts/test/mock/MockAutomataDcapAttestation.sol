@@ -7,7 +7,7 @@ import {IDcapAttestation} from "src/interfaces/IDcapAttestation.sol";
 contract MockAutomataDcapAttestation is IDcapAttestation {
     struct Output {
         uint16 quoteVersion; // serialized as BE, for EVM compatibility
-        bytes4 tee;
+        uint16 quoteBodyType; // serialized as BE, for EVM compatibility
         uint8 tcbStatus;
         bytes6 fmspcBytes;
         bytes quoteBody;
@@ -22,7 +22,7 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
         bytes calldata rawBody = input[48:48 + 584];
         Output memory output = Output({
             quoteVersion: 4,
-            tee: 0x81000000,
+            quoteBodyType: 2, // TD10
             tcbStatus: 1,
             fmspcBytes: bytes6(0),
             quoteBody: rawBody,
@@ -36,13 +36,15 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
         payable
         returns (bool success, bytes memory output)
     {
-        return (true, journal);
+        uint16 outputLength = uint16(bytes2(journal[0:2]));
+        uint256 offset = 2 + outputLength;
+        return (true, journal[2:offset]);
     }
 
     function serializeOutput(Output memory output) internal pure returns (bytes memory) {
         return abi.encodePacked(
             output.quoteVersion,
-            output.tee,
+            output.quoteBodyType,
             output.tcbStatus,
             output.fmspcBytes,
             output.quoteBody,

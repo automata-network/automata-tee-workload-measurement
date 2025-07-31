@@ -39,6 +39,12 @@ library LibBytes {
         }
     }
 
+    function readBytes2(bytes memory input, uint256 offset) internal pure returns (bytes2 output) {
+        assembly {
+            output := mload(add(add(input, 0x20), offset))
+        }
+    }
+
     function readBytes4(bytes memory input, uint256 offset) internal pure returns (bytes4 output) {
         assembly {
             output := mload(add(add(input, 0x20), offset))

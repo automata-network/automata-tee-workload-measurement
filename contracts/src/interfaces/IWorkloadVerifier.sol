@@ -35,12 +35,17 @@ interface IWorkloadVerifier {
     error INVALID_TEE_TYPE(TEEType teeType);
     // 0ccce91b
     error INVALID_CLOUD_TYPE(CloudType cloudType);
+    // 8512b796
     error FAILED_TO_VERIFY_TEE();
+    // 2a2eafda
     error INVALID_TEE_REPORT();
     // 0a6fdd83
     error TEE_REPORT_DATA_MISMATCH(bytes32 want, bytes32 got);
+    // 2a2eafda
     error FAILED_TO_VERIFY_TPM_QUOTE(string errorMessage);
+    // c5ee0cd0
     error FAILED_TO_CHECK_PCR_MEASUREMENTS(string errorMessage);
+    // 109b0230
     error TPM_DATA_MISMATCH(bytes32 want, bytes32 got);
 
     /**
