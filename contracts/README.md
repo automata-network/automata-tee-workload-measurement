@@ -143,6 +143,20 @@ struct WorkloadCollaterals {
 }
 ```
 
+#### `PCR`
+
+```solidity
+/**
+ * @dev must provide either TDX or SNP Reports. 
+ * (both cannot simultaneously contain value or empty)
+ */
+struct GoldenMeasurement {
+    Pcr[] pcrs;            // PCR values and/or selected event logs that a workload must produce
+    TdxMeasurement tdx;    // TD 1.0 Report Body
+    SnpMeasurement snp;    // AMD SEV SNP Report Body
+}
+```
+
 #### Enums
 
 - **`TEEType`**: `IntelTdx`, `AmdSevSnp`

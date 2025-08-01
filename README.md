@@ -28,7 +28,8 @@ sequenceDiagram
     TPM->>TPM: 5. Checks PCR Digest
     TPM-->>W: TPM quote has been successfully verified
     W->>W: 6. Verifies the report ID to check binding between TEE and TPM
-    W->>U: 7. Returns the golden measurement hash
+    W->>W: 7. Generates Golden Measurement by encapsulating TEE Report content and measured PCR
+    W->>U: 8. Returns the golden measurement hash
 
 ```
 
@@ -50,7 +51,11 @@ sequenceDiagram
     
     > a. The only exception to this rule applies to Azure TDX CVM. As stated in *2(a)*, the report data provides us with information about the AK that signs the TPM quote, which is already verified in *step 3*.
 
-7. Computes the Golden Measurement Hash. Developers can provide their own golden measurement hash for their applications, which can be referenced against the returned hash to check the integrity of the CVM.
+7. Generates the [Golden Measurement](https://github.com/automata-network/tee-workload-measurement/blob/e1594891136ba0f33e091cd543fdddb822ffa3d5/contracts/src/lib/LibTEE.sol#L41-L45) object. A data structure containing the content of the TEE Report and an array of measured PCRs. Each PCR may contain a deterministic PCR value and/or a list of event logs that the workload produces.
+
+    > a. External contracts may retrieve the Golden Measurement instead of the hash, if developers intend to perform additional checks on the measurement values.
+
+8. Computes the Golden Measurement Hash. Developers can provide their own golden measurement hash for their applications, which can be referenced against the returned hash to check the integrity of the CVM.
 
 ## Deployment Info
 
