@@ -143,7 +143,7 @@ struct WorkloadCollaterals {
 }
 ```
 
-#### `PCR`
+#### `GoldenMeasurement`
 
 ```solidity
 /**
