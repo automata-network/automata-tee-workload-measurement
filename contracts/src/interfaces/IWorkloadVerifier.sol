@@ -8,7 +8,7 @@ import {
 
 import {IDcapAttestation} from "./IDcapAttestation.sol";
 import {ISnpAttestation} from "./ISnpAttestation.sol";
-import {TEEType, TeeReportType, CloudType} from "../lib/LibTEE.sol";
+import {TEEType, TeeReportType, CloudType, GoldenMeasurement} from "../lib/LibTEE.sol";
 
 struct WorkloadCollaterals {
     // verified by tpmSignature
@@ -48,8 +48,16 @@ interface IWorkloadVerifier {
     // 109b0230
     error TPM_DATA_MISMATCH(bytes32 want, bytes32 got);
 
+    function verifyAttestation(
+        bytes32 _userDataHash,
+        TEEType teeType,
+        TeeReportType teeReportType,
+        CloudType cloudType,
+        bytes calldata _teeAttestationReport,
+        WorkloadCollaterals calldata _workloadReport
+    ) external payable returns (GoldenMeasurement memory);
+
     /**
-     * @dev Verifies the integrity of a CVM Workload
      * @param _userDataHash The hash of the user data.
      * @param teeType Intel TDX or AMD-SEV-SNP
      * @param teeReportType Solidity vs ZK TEE report types
@@ -59,7 +67,7 @@ interface IWorkloadVerifier {
      * @return The hash of the measured workload
      * @dev can provide their own golden measurement hash to be referenced for checking the integrity of the workload.
      */
-    function verifyAttestation(
+    function verifyAttestationHash(
         bytes32 _userDataHash,
         TEEType teeType,
         TeeReportType teeReportType,

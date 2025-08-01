@@ -27,7 +27,7 @@ contract AzureTdxTest is TestSetup {
             testData.tpmPcrs
         );
 
-        bytes32 measurementHash = workloadVerifier.verifyAttestation(
+        bytes32 measurementHash = workloadVerifier.verifyAttestationHash(
             userDataHash, TEEType.IntelTDX, TeeReportType.Solidity, CloudType.Azure, testData.report, wc
         );
 
@@ -52,7 +52,7 @@ contract AzureTdxTest is TestSetup {
         string memory zkPath = string.concat(vm.projectRoot(), "/test/testdata/proof_registration_azure_tdx_risc0.json");
         ZkProof memory zkReport = TestDataLib.loadZkReport(zkPath);
 
-        bytes32 measurementHash = workloadVerifier.verifyAttestation(
+        bytes32 measurementHash = workloadVerifier.verifyAttestationHash(
             userDataHash, TEEType.IntelTDX, TeeReportType.ZkRiscZero, CloudType.Azure, abi.encode(zkReport), wc
         );
 

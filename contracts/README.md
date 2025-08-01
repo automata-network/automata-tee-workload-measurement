@@ -80,8 +80,8 @@ contract MyContract {
         CloudType cloudType,
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata workloadCollaterals
-    ) external payable returns (bytes32 measurementHash) {
-        measurementHash = workloadVerifier.verifyAttestation(
+    ) external payable returns (GoldenMeasurement memory gm) {
+        gm = workloadVerifier.verifyAttestation(
             userDataHash,
             teeType,
             teeReportType,
@@ -90,43 +90,12 @@ contract MyContract {
             workloadCollaterals
         );
         
-        // Use the measurement hash for your application logic
-        // e.g., compare against expected values, store for future reference
+        // implement additional checks on the measured values
     }
 }
 ```
 
 ---
-
-## API Reference
-
-### Core Interface
-
-#### `verifyAttestation`
-
-```solidity
-function verifyAttestation(
-    bytes32 _userDataHash,
-    TEEType teeType,
-    TeeReportType teeReportType,
-    CloudType cloudType,
-    bytes calldata _teeAttestationReport,
-    WorkloadCollaterals calldata _workloadReport
-) external payable returns (bytes32);
-```
-
-Verifies the integrity of a CVM workload and returns the golden measurement hash.
-
-**Parameters:**
-- `_userDataHash`: The hash of the user data to be verified
-- `teeType`: The TEE technology used (`IntelTdx` or `AmdSevSnp`)
-- `teeReportType`: The report verification method (`Solidity` for onchain or `ZkRiscZero`/`ZkSp1` for ZK proofs)
-- `cloudType`: The cloud provider (`Azure` or `Gcp`)
-- `_teeAttestationReport`: The TEE attestation report data
-- `_workloadReport`: Additional verification data (see WorkloadCollaterals below)
-
-**Returns:**
-- `bytes32`: The golden measurement hash representing the verified workload
 
 ### Data Structures
 
@@ -140,6 +109,20 @@ struct WorkloadCollaterals {
     bytes reportId;        // Report identifier (UUID for TDX on GCP)
     bytes akPub;           // Attestation Key public key (GCP) or varDataJson (Azure)
     bytes[] certs;         // Certificate chain (GCP only, empty for Azure)
+}
+```
+
+#### `GoldenMeasurement`
+
+```solidity
+/**
+ * @dev must provide either TDX or SNP Reports. 
+ * (both cannot simultaneously contain value or empty)
+ */
+struct GoldenMeasurement {
+    Pcr[] pcrs;           // PCR values and/or selected event logs that a workload must produce
+    TdxMeasurement tdx;   // TD 1.0 Report Body
+    SnpMeasurement snp;   // AMD SEV SNP Report Body
 }
 ```
 
@@ -158,9 +141,61 @@ The interface provides access to underlying attestation contracts:
 - `tpmAttestation()`: Returns the TPM attestation contract for TPM quote verification
 - `allowMockAttestation()`: Returns whether mock attestation is enabled (for testing)
 
-### Golden Measurement Hash
+---
 
-The golden measurement hash returned by `verifyAttestation()` is a cryptographic proof of workload integrity that represents:
+## API Reference
+
+### Core Interface
+
+#### `verifyAttestation`
+
+```solidity
+function verifyAttestation(
+    bytes32 _userDataHash,
+    TEEType teeType,
+    TeeReportType teeReportType,
+    CloudType cloudType,
+    bytes calldata _teeAttestationReport,
+    WorkloadCollaterals calldata _workloadReport
+) external payable returns (GoldenMeasurement);
+```
+
+Verifies the integrity of a CVM workload and returns the Golden Measurement. 
+
+Alternatively, you may opt for calling the `verifyAttestationHash` method if your use case doesn't require reading the entire Golden Measurement object. Saving gas cost from memory reads.
+
+**Parameters:**
+- `_userDataHash`: The hash of the user data to be verified
+- `teeType`: The TEE technology used (`IntelTdx` or `AmdSevSnp`)
+- `teeReportType`: The report verification method (`Solidity` for onchain or `ZkRiscZero`/`ZkSp1` for ZK proofs)
+- `cloudType`: The cloud provider (`Azure` or `Gcp`)
+- `_teeAttestationReport`: The TEE attestation report data
+- `_workloadReport`: Additional verification data (see WorkloadCollaterals below)
+
+**Returns:**
+- `GoldenMeasurement`: Golden Measurement object
+
+#### `verifyAttestationHash`
+
+```solidity
+function verifyAttestationHash(
+    bytes32 _userDataHash,
+    TEEType teeType,
+    TeeReportType teeReportType,
+    CloudType cloudType,
+    bytes calldata _teeAttestationReport,
+    WorkloadCollaterals calldata _workloadReport
+) external payable returns (bytes32);
+```
+
+**Returns:**
+- `bytes32`: The golden measurement hash representing the verified workload
+
+---
+
+### Golden Measurement
+
+The golden measurement or its hash is a proof of workload integrity that represents:
 
 - **Workload Identity**: A unique fingerprint of the verified CVM workload
 - **Integrity Assurance**: Cryptographic proof that the workload hasn't been tampered with
@@ -181,7 +216,7 @@ The golden measurement hash returned by `verifyAttestation()` is a cryptographic
 bytes32 public trustedWorkloadHash = 0x123...;
 
 function verifyTrustedWorkload(/* parameters */) external {
-    bytes32 measurementHash = workloadVerifier.verifyAttestation(/* args */);
+    bytes32 measurementHash = workloadVerifier.verifyAttestationHash(/* args */);
     
     require(measurementHash == trustedWorkloadHash, "Untrusted workload");
     
