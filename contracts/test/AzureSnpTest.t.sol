@@ -2,7 +2,7 @@
 pragma solidity >=0.8.15;
 
 import {TestSetup} from "./utils/TestSetup.sol";
-import "./utils/TestDataLib.sol";
+import "../script/utils/TestDataLib.sol";
 import "forge-std/console.sol";
 
 import {TEEType, TeeReportType, CloudType} from "../src/lib/LibTEE.sol";
@@ -34,8 +34,8 @@ contract AzureSnpTest is TestSetup {
             userDataHash, TEEType.AmdSevSnp, TeeReportType.ZkRiscZero, CloudType.Azure, abi.encode(zkReport), wc
         );
 
-        bytes memory expectedMeasurement = TestDataLib.getSnpGoldenMeasurementBytes(testData.goldenMeasurement);
-        bytes32 expectedMeasurementHash = keccak256(expectedMeasurement);
+        GoldenMeasurement memory expectedMeasurement = TestDataLib.getSnpGoldenMeasurement(testData.goldenMeasurement);
+        bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
     }

@@ -9,7 +9,7 @@ abstract contract DeploymentConfig is Script {
         string memory deploymentDir =
             string.concat(vm.projectRoot(), "/", "deployment", "/", vm.toString(block.chainid), ".json");
         if (!vm.exists(deploymentDir)) {
-            revert("Cannot find deployment file");
+            revert(string.concat("Deployment file does not exist at: ", deploymentDir));
         }
         string memory jsonStr = vm.readFile(deploymentDir);
         contractAddress = stdJson.readAddress(jsonStr, string.concat(".", contractName));
