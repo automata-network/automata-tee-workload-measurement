@@ -10,8 +10,8 @@ import {TEEType, TeeReportType, CloudType} from "../src/lib/LibTEE.sol";
 contract GcpTdxTest is TestSetup {
     bytes32 userDataHash = 0xc8e1fafb31b51005b7c05296bf4a766352ff3ac4733ebc1a653c5f28a0254fc2;
 
-        string path = string.concat(vm.projectRoot(), "/test/testdata/registration_gcp_tdx.json");
-    
+    string path = string.concat(vm.projectRoot(), "/test/testdata/registration_gcp_tdx.json");
+
     function setUp() public override {
         super.setUp();
     }
@@ -36,7 +36,7 @@ contract GcpTdxTest is TestSetup {
             testData.tpmPcrs
         );
 
-        bytes32 measurementHash = workloadVerifier.verifyAttestation(
+        bytes32 measurementHash = workloadVerifier.verifyAttestationHash(
             userDataHash, TEEType.IntelTDX, TeeReportType.Solidity, CloudType.GCP, testData.report, wc
         );
 
@@ -69,7 +69,7 @@ contract GcpTdxTest is TestSetup {
         string memory zkPath = string.concat(vm.projectRoot(), "/test/testdata/proof_registration_gcp_tdx_risc0.json");
         ZkProof memory zkReport = TestDataLib.loadZkReport(zkPath);
 
-        bytes32 measurementHash = workloadVerifier.verifyAttestation(
+        bytes32 measurementHash = workloadVerifier.verifyAttestationHash(
             userDataHash, TEEType.IntelTDX, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
         );
 

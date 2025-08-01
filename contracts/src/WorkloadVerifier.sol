@@ -69,20 +69,32 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _wc
-    ) external payable override returns (bytes32) {
+    ) external payable override returns (GoldenMeasurement memory gm) {
+        if (teeType == TEEType.Mock) {
+            if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
+            return gm;
+        }
+        gm = _verifyAttestation(_userDataHash, teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
+    }
+
+    function verifyAttestationHash(
+        bytes32 _userDataHash,
+        TEEType teeType,
+        TeeReportType teeReportType,
+        CloudType cloudType,
+        bytes calldata _teeAttestationReport,
+        WorkloadCollaterals calldata _wc
+    ) external payable override returns (bytes32 gmHash) {
         if (teeType == TEEType.Mock) {
             if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
             // in mock mode
             // TODO: use preset golden measurement hash
-            return bytes32(0);
+            return gmHash;
+        } else {
+            GoldenMeasurement memory gm =
+                _verifyAttestation(_userDataHash, teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
+            gmHash = gm.digest();
         }
-        TEEVerifiedData memory teeVerifiedData =
-            verifyTEE(teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
-        verifyWorkload(_wc, _userDataHash, teeVerifiedData);
-        Pcr[] memory pcrs = tpmAttestation.toGoldenMeasurement(_wc.pcrs);
-        GoldenMeasurement memory gm =
-            GoldenMeasurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
-        return gm.digest();
     }
 
     function estimateBaseFeeVerifyOnChain(bytes calldata rawQuote) external payable returns (uint256) {
@@ -93,18 +105,33 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         return (gasBefore - gasAfter) * bp / 10000;
     }
 
-    function verifyTEE(
+    function _verifyAttestation(
+        bytes32 _userDataHash,
+        TEEType teeType,
+        TeeReportType teeReportType,
+        CloudType cloudType,
+        bytes calldata _teeAttestationReport,
+        WorkloadCollaterals calldata _wc
+    ) private returns (GoldenMeasurement memory gm) {
+        TEEVerifiedData memory teeVerifiedData =
+            _verifyTEE(teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
+        _verifyWorkload(_wc, _userDataHash, teeVerifiedData);
+        Pcr[] memory pcrs = tpmAttestation.toGoldenMeasurement(_wc.pcrs);
+        gm = GoldenMeasurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
+    }
+
+    function _verifyTEE(
         TEEType teeType,
         TeeReportType teeReportType,
         CloudType cloudType,
         bytes calldata _report,
         WorkloadCollaterals calldata _wc
-    ) internal returns (TEEVerifiedData memory) {
+    ) private returns (TEEVerifiedData memory) {
         TEEVerifiedData memory teeVerifiedData;
         if (teeType == TEEType.IntelTDX) {
-            teeVerifiedData = verifyTdxAttestation(teeReportType, _report);
+            teeVerifiedData = _verifyTdxAttestation(teeReportType, _report);
         } else if (teeType == TEEType.AmdSevSnp) {
-            teeVerifiedData = verifySnpAttestation(teeReportType, _report);
+            teeVerifiedData = _verifySnpAttestation(teeReportType, _report);
         } else {
             revert INVALID_TEE_TYPE(teeType);
         }
@@ -113,13 +140,13 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             if (teeVerifiedData.userReportData.first != localReportData) {
                 revert TEE_REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
             }
-            teeVerifiedData.akPub = varDataPubkey(string(_wc.akPub));
+            teeVerifiedData.akPub = _varDataPubkey(string(_wc.akPub));
         }
         return teeVerifiedData;
     }
 
-    function verifySnpAttestation(TeeReportType _reportType, bytes calldata _report)
-        internal
+    function _verifySnpAttestation(TeeReportType _reportType, bytes calldata _report)
+        private
         returns (TEEVerifiedData memory teeVerifiedData)
     {
         ISnpAttestation.ZkCoProcessorType zkType;
@@ -137,8 +164,8 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         return LibTEE.snpOutput(output.rawReport);
     }
 
-    function verifyTdxAttestation(TeeReportType _reportType, bytes calldata _report)
-        internal
+    function _verifyTdxAttestation(TeeReportType _reportType, bytes calldata _report)
+        private
         returns (TEEVerifiedData memory)
     {
         bool succ;
@@ -170,11 +197,11 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         return LibTEE.tdxOutput(output);
     }
 
-    function verifyWorkload(
+    function _verifyWorkload(
         WorkloadCollaterals calldata _wc,
         bytes32 _userDataHash,
         TEEVerifiedData memory _teeVerifiedData
-    ) internal {
+    ) private {
         // Step 1: Verify TPM quote
         bool success;
         string memory errorMessage;
@@ -204,7 +231,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         LibTEE.verifyReportID(_wc, _teeVerifiedData);
     }
 
-    function varDataPubkey(string memory data) internal pure returns (CertPubkey memory) {
+    function _varDataPubkey(string memory data) private pure returns (CertPubkey memory) {
         uint256 off = 0;
         uint256 pos;
         pos = data.indexOf("\"kid\":\"HCLAkPub\"", off);
