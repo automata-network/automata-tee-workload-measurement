@@ -306,13 +306,11 @@ library TestDataLib {
         }
     }
 
-    function getTdxGoldenMeasurementBytes(TdxGoldenMeasurement memory tdxGoldenMeasurement)
+    function getTdxGoldenMeasurement(TdxGoldenMeasurement memory tdxGoldenMeasurement)
         internal
         pure
-        returns (bytes memory encoded)
+        returns (GoldenMeasurement memory gm)
     {
-        GoldenMeasurement memory gm;
-
         // TDX
         gm.tdx.mrtd = tdxGoldenMeasurement.tdx.mrtd.toBytes48();
         gm.tdx.mrseam = tdxGoldenMeasurement.tdx.mrseam.toBytes48();
@@ -329,17 +327,13 @@ library TestDataLib {
             gm.pcrs[i].measureEvents = tdxGoldenMeasurement.pcrs[i].measuredEvents;
             gm.pcrs[i].measureEventsIdx = tdxGoldenMeasurement.pcrs[i].measureEventsIdx;
         }
-
-        encoded = abi.encode(gm);
     }
 
-    function getSnpGoldenMeasurementBytes(SnpGoldenMeasurement memory snpGoldenMeasurement)
+    function getSnpGoldenMeasurement(SnpGoldenMeasurement memory snpGoldenMeasurement)
         internal
         pure
-        returns (bytes memory encoded)
+        returns (GoldenMeasurement memory gm)
     {
-        GoldenMeasurement memory gm;
-
         // SNP
         gm.snp.measurement = snpGoldenMeasurement.snp.measurement.toBytes48();
 
@@ -351,7 +345,5 @@ library TestDataLib {
             gm.pcrs[i].measureEvents = snpGoldenMeasurement.pcrs[i].measuredEvents;
             gm.pcrs[i].measureEventsIdx = snpGoldenMeasurement.pcrs[i].measureEventsIdx;
         }
-
-        encoded = abi.encode(gm);
     }
 }

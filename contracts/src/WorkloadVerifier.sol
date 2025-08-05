@@ -54,7 +54,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         address _snpAttestationAddr,
         address _tpmAttestationAddr,
         bool _allowMockAttestation
-    ) public initializer {
+    ) external initializer {
         dcapAttestation = IDcapAttestation(_dcapAttestationAddr);
         snpAttestation = ISnpAttestation(_snpAttestationAddr);
         tpmAttestation = ITpmAttestation(_tpmAttestationAddr);

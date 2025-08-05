@@ -2,7 +2,7 @@
 pragma solidity >=0.8.15;
 
 import {TestSetup} from "./utils/TestSetup.sol";
-import "./utils/TestDataLib.sol";
+import "../script/utils/TestDataLib.sol";
 import "forge-std/console.sol";
 
 import {TEEType, TeeReportType, CloudType} from "../src/lib/LibTEE.sol";
@@ -31,8 +31,8 @@ contract AzureTdxTest is TestSetup {
             userDataHash, TEEType.IntelTDX, TeeReportType.Solidity, CloudType.Azure, testData.report, wc
         );
 
-        bytes memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurementBytes(testData.goldenMeasurement);
-        bytes32 expectedMeasurementHash = keccak256(expectedMeasurement);
+        GoldenMeasurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
+        bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
     }
@@ -56,8 +56,8 @@ contract AzureTdxTest is TestSetup {
             userDataHash, TEEType.IntelTDX, TeeReportType.ZkRiscZero, CloudType.Azure, abi.encode(zkReport), wc
         );
 
-        bytes memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurementBytes(testData.goldenMeasurement);
-        bytes32 expectedMeasurementHash = keccak256(expectedMeasurement);
+        GoldenMeasurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
+        bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
     }
