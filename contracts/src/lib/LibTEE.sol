@@ -3,7 +3,7 @@
 pragma solidity ^0.8.15;
 
 import {MeasureablePcr, Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {Pubkey} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
 import {WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
 import "./LibBytes.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";
@@ -51,7 +51,7 @@ struct TEEVerifiedData {
     // TDX: UUID
     // SNP: sev-snp.report_id
     bytes32 reportID;
-    CertPubkey akPub; // verified akPub
+    Pubkey akPub; // verified akPub
     TdxMeasurement tdx;
     SnpMeasurement snp;
 }

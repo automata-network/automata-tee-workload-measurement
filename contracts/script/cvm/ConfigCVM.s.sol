@@ -10,7 +10,6 @@ import {TEEType, GoldenMeasurement} from "../../src/lib/LibTEE.sol";
 import {CVMVerifier} from "../../src/usecases/CVMVerifier.sol";
 
 contract ConfigCVM is DeploymentConfig {
-
     using stdJson for string;
 
     address owner = vm.envAddress("OWNER");
@@ -29,15 +28,14 @@ contract ConfigCVM is DeploymentConfig {
         (GoldenMeasurement memory goldenMeasurement,) = readGmJson(gmPath);
 
         // Register the golden measurement in the CVMVerifier contract
-        CVMVerifier(cvmVerifier).registerGm(
-            goldenMeasurement
-        );
+        CVMVerifier(cvmVerifier).registerGm(goldenMeasurement);
     }
 
-    function readGmJson(string memory gmPath) public view returns (
-        GoldenMeasurement memory goldenMeasurement,
-        bytes32 gmHash
-    ) {
+    function readGmJson(string memory gmPath)
+        public
+        view
+        returns (GoldenMeasurement memory goldenMeasurement, bytes32 gmHash)
+    {
         string memory gmJson = vm.readFile(gmPath);
 
         TEEType teeType;
@@ -49,7 +47,7 @@ contract ConfigCVM is DeploymentConfig {
             revert("Invalid JSON or unsupported TEE type in golden measurement");
         }
 
-        console.log("Parsing Golden Measurement for TEE type:", uint(teeType));
+        console.log("Parsing Golden Measurement for TEE type:", uint256(teeType));
 
         if (teeType == TEEType.IntelTDX) {
             goldenMeasurement = TestDataLib.getTdxGoldenMeasurement(

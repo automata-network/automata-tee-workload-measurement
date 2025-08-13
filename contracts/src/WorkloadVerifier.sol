@@ -9,7 +9,7 @@ import {
     Pcr,
     ITpmAttestation
 } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {LibX509, CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {Pubkey, RSALib} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
@@ -116,7 +116,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         TEEVerifiedData memory teeVerifiedData =
             _verifyTEE(teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
         _verifyWorkload(_wc, _userDataHash, teeVerifiedData);
-        Pcr[] memory pcrs = tpmAttestation.toGoldenMeasurement(_wc.pcrs);
+        Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(_wc.pcrs);
         gm = GoldenMeasurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
     }
 
@@ -231,7 +231,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         LibTEE.verifyReportID(_wc, _teeVerifiedData);
     }
 
-    function _varDataPubkey(string memory data) private pure returns (CertPubkey memory) {
+    function _varDataPubkey(string memory data) private pure returns (Pubkey memory) {
         uint256 off = 0;
         uint256 pos;
         pos = data.indexOf("\"kid\":\"HCLAkPub\"", off);
@@ -296,6 +296,6 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             revert("data mixed up");
         }
 
-        return LibX509.newRsaPubkey(Base64.decode(eBase64), Base64.decode(nBase64));
+        return RSALib.newRsaPubkey(Base64.decode(eBase64), Base64.decode(nBase64));
     }
 }

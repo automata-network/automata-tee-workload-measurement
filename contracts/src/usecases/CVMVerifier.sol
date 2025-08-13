@@ -2,25 +2,20 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import { IWorkloadVerifier, WorkloadCollaterals } from "../interfaces/IWorkloadVerifier.sol";
-import { CloudType, TEEType, TeeReportType, GoldenMeasurement } from "../lib/LibTEE.sol";
+import {IWorkloadVerifier, WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
+import {CloudType, TEEType, TeeReportType, GoldenMeasurement} from "../lib/LibTEE.sol";
 
-import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 contract CVMVerifier is OwnableUpgradeable, UUPSUpgradeable {
-
     IWorkloadVerifier public workloadVerifier;
-    mapping (bytes32 goldenMeasurementHashes => bool registered) private _goldenMeasurementHashes;
+    mapping(bytes32 goldenMeasurementHashes => bool registered) private _goldenMeasurementHashes;
     uint256[47] private __gap;
 
-    event GoldenMeasurementAdded(
-        bytes32 indexed goldenMeasurementHash
-    );
+    event GoldenMeasurementAdded(bytes32 indexed goldenMeasurementHash);
 
-    event GoldenMeasurementRemoved(
-        bytes32 indexed goldenMeasurementHash
-    );
+    event GoldenMeasurementRemoved(bytes32 indexed goldenMeasurementHash);
 
     constructor() {
         _disableInitializers();
@@ -39,17 +34,12 @@ contract CVMVerifier is OwnableUpgradeable, UUPSUpgradeable {
         require(newImplementation != address(0), "Invalid implementation address");
     }
 
-    function initialize(
-        address _intialOwner,
-        address _workloadVerifier
-    ) external initializer {
+    function initialize(address _intialOwner, address _workloadVerifier) external initializer {
         workloadVerifier = IWorkloadVerifier(_workloadVerifier);
         __Ownable_init(_intialOwner);
     }
 
-    function registerGm(
-        GoldenMeasurement calldata goldenMeasurement
-    ) external onlyOwner returns (bytes32 gmHash) {
+    function registerGm(GoldenMeasurement calldata goldenMeasurement) external onlyOwner returns (bytes32 gmHash) {
         gmHash = goldenMeasurement.digest();
 
         if (_goldenMeasurementHashes[gmHash]) {
@@ -60,9 +50,7 @@ contract CVMVerifier is OwnableUpgradeable, UUPSUpgradeable {
         emit GoldenMeasurementAdded(gmHash);
     }
 
-    function deregisterGm(
-        bytes32 gmHash
-    ) external onlyOwner {
+    function deregisterGm(bytes32 gmHash) external onlyOwner {
         if (!_goldenMeasurementHashes[gmHash]) {
             revert GM_NOT_FOUND(gmHash);
         }
@@ -80,17 +68,11 @@ contract CVMVerifier is OwnableUpgradeable, UUPSUpgradeable {
         WorkloadCollaterals calldata workloadReport
     ) external payable {
         bytes32 gmHash = workloadVerifier.verifyAttestationHash(
-            userDataHash,
-            teeType,
-            teeReportType,
-            cloudType,
-            teeAttestationReport,
-            workloadReport
+            userDataHash, teeType, teeReportType, cloudType, teeAttestationReport, workloadReport
         );
 
         if (!_goldenMeasurementHashes[gmHash]) {
             revert GM_NOT_FOUND(gmHash);
         }
     }
-
 }

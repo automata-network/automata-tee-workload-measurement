@@ -40,8 +40,7 @@ contract DeployCVM is DeploymentConfig {
 
         // deploy the CVMVerifier proxy
         ERC1967Proxy cvmVerifierProxy = new ERC1967Proxy{salt: CVM_VERIFIER_PROXY_SALT}(
-            implAddress,
-            abi.encodeWithSelector(CVMVerifier.initialize.selector, owner, workloadVerifier)
+            implAddress, abi.encodeWithSelector(CVMVerifier.initialize.selector, owner, workloadVerifier)
         );
         address proxyAddress = address(cvmVerifierProxy);
 
