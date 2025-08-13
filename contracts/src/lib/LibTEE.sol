@@ -10,7 +10,7 @@ import {Sha2Ext} from "./Sha2Ext.sol";
 
 using LibBytes for bytes;
 using LibBytes for bytes32;
-using LibTEE for GoldenMeasurement global;
+using LibTEE for Measurement global;
 using LibTEE for TEEType global;
 using LibTEE for CloudType global;
 
@@ -38,7 +38,7 @@ struct ZkProof {
     bytes proofBytes;
 }
 
-struct GoldenMeasurement {
+struct Measurement {
     Pcr[] pcrs;
     TdxMeasurement tdx;
     SnpMeasurement snp;
@@ -148,7 +148,7 @@ library LibTEE {
         return data;
     }
 
-    function digest(GoldenMeasurement memory gm) internal pure returns (bytes32) {
+    function digest(Measurement memory gm) internal pure returns (bytes32) {
         return keccak256(abi.encode(gm));
     }
 }

@@ -31,7 +31,7 @@ contract AzureTdxTest is TestSetup {
             userDataHash, TEEType.IntelTDX, TeeReportType.Solidity, CloudType.Azure, testData.report, wc
         );
 
-        GoldenMeasurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
+        Measurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
@@ -56,7 +56,7 @@ contract AzureTdxTest is TestSetup {
             userDataHash, TEEType.IntelTDX, TeeReportType.ZkRiscZero, CloudType.Azure, abi.encode(zkReport), wc
         );
 
-        GoldenMeasurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
+        Measurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");

@@ -42,7 +42,7 @@ contract GcpSnpTest is TestSetup {
             userDataHash, TEEType.AmdSevSnp, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
         );
 
-        GoldenMeasurement memory expectedMeasurement = TestDataLib.getSnpGoldenMeasurement(testData.goldenMeasurement);
+        Measurement memory expectedMeasurement = TestDataLib.getSnpGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");

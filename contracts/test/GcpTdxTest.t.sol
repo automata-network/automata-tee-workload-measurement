@@ -40,7 +40,7 @@ contract GcpTdxTest is TestSetup {
             userDataHash, TEEType.IntelTDX, TeeReportType.Solidity, CloudType.GCP, testData.report, wc
         );
 
-        GoldenMeasurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
+        Measurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
@@ -73,7 +73,7 @@ contract GcpTdxTest is TestSetup {
             userDataHash, TEEType.IntelTDX, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
         );
 
-        GoldenMeasurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
+        Measurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");

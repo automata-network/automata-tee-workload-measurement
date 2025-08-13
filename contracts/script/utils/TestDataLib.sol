@@ -6,7 +6,7 @@ import {MeasureablePcr} from "@automata-network/automata-tpm-attestation/interfa
 import {stdJson} from "forge-std/StdJson.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {WorkloadCollaterals} from "../../src/interfaces/IWorkloadVerifier.sol";
-import {GoldenMeasurement, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
+import {Measurement, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
 import {LibBytes} from "../../src/lib/LibBytes.sol";
 
 struct SnpTestData {
@@ -309,7 +309,7 @@ library TestDataLib {
     function getTdxGoldenMeasurement(TdxGoldenMeasurement memory tdxGoldenMeasurement)
         internal
         pure
-        returns (GoldenMeasurement memory gm)
+        returns (Measurement memory gm)
     {
         // TDX
         gm.tdx.mrtd = tdxGoldenMeasurement.tdx.mrtd.toBytes48();
@@ -332,7 +332,7 @@ library TestDataLib {
     function getSnpGoldenMeasurement(SnpGoldenMeasurement memory snpGoldenMeasurement)
         internal
         pure
-        returns (GoldenMeasurement memory gm)
+        returns (Measurement memory gm)
     {
         // SNP
         gm.snp.measurement = snpGoldenMeasurement.snp.measurement.toBytes48();

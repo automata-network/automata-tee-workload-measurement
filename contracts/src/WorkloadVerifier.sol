@@ -14,14 +14,7 @@ import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
 import {
-    TEEVerifiedData,
-    ZkProof,
-    Bytes64,
-    TEEType,
-    TeeReportType,
-    CloudType,
-    LibTEE,
-    GoldenMeasurement
+    TEEVerifiedData, ZkProof, Bytes64, TEEType, TeeReportType, CloudType, LibTEE, Measurement
 } from "./lib/LibTEE.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 import {LibString} from "@solady/utils/LibString.sol";
@@ -69,7 +62,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _wc
-    ) external payable override returns (GoldenMeasurement memory gm) {
+    ) external payable override returns (Measurement memory gm) {
         if (teeType == TEEType.Mock) {
             if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
             return gm;
@@ -91,7 +84,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             // TODO: use preset golden measurement hash
             return gmHash;
         } else {
-            GoldenMeasurement memory gm =
+            Measurement memory gm =
                 _verifyAttestation(_userDataHash, teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
             gmHash = gm.digest();
         }
@@ -112,12 +105,12 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _wc
-    ) private returns (GoldenMeasurement memory gm) {
+    ) private returns (Measurement memory gm) {
         TEEVerifiedData memory teeVerifiedData =
             _verifyTEE(teeType, teeReportType, cloudType, _teeAttestationReport, _wc);
         _verifyWorkload(_wc, _userDataHash, teeVerifiedData);
         Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(_wc.pcrs);
-        gm = GoldenMeasurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
+        gm = Measurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
     }
 
     function _verifyTEE(

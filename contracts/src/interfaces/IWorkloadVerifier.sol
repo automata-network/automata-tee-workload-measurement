@@ -8,7 +8,7 @@ import {
 
 import {IDcapAttestation} from "./IDcapAttestation.sol";
 import {ISnpAttestation} from "./ISnpAttestation.sol";
-import {TEEType, TeeReportType, CloudType, GoldenMeasurement} from "../lib/LibTEE.sol";
+import {TEEType, TeeReportType, CloudType, Measurement} from "../lib/LibTEE.sol";
 
 struct WorkloadCollaterals {
     // verified by tpmSignature
@@ -55,7 +55,7 @@ interface IWorkloadVerifier {
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    ) external payable returns (GoldenMeasurement memory);
+    ) external payable returns (Measurement memory);
 
     /**
      * @param _userDataHash The hash of the user data.

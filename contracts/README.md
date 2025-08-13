@@ -80,8 +80,8 @@ contract MyContract {
         CloudType cloudType,
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata workloadCollaterals
-    ) external payable returns (GoldenMeasurement memory gm) {
-        gm = workloadVerifier.verifyAttestation(
+    ) external payable returns (Measurement memory measurement) {
+        measurement = workloadVerifier.verifyAttestation(
             userDataHash,
             teeType,
             teeReportType,
@@ -112,14 +112,14 @@ struct WorkloadCollaterals {
 }
 ```
 
-#### `GoldenMeasurement`
+#### `Measurement`
 
 ```solidity
 /**
  * @dev must provide either TDX or SNP Reports. 
  * (both cannot simultaneously contain value or empty)
  */
-struct GoldenMeasurement {
+struct Measurement {
     Pcr[] pcrs;           // PCR values and/or selected event logs that a workload must produce
     TdxMeasurement tdx;   // TD 1.0 Report Body
     SnpMeasurement snp;   // AMD SEV SNP Report Body
@@ -157,7 +157,7 @@ function verifyAttestation(
     CloudType cloudType,
     bytes calldata _teeAttestationReport,
     WorkloadCollaterals calldata _workloadReport
-) external payable returns (GoldenMeasurement);
+) external payable returns (Measurement);
 ```
 
 Verifies the integrity of a CVM workload and returns the Golden Measurement. 
@@ -173,7 +173,7 @@ Alternatively, you may opt for calling the `verifyAttestationHash` method if you
 - `_workloadReport`: Additional verification data (see WorkloadCollaterals below)
 
 **Returns:**
-- `GoldenMeasurement`: Golden Measurement object
+- `Measurement`: The final Measurement object
 
 #### `verifyAttestationHash`
 
@@ -213,12 +213,12 @@ The golden measurement or its hash is a proof of workload integrity that represe
 
 ```solidity
 // Store expected measurement for a trusted workload
-bytes32 public trustedWorkloadHash = 0x123...;
+bytes32 public goldenMeasurementHash = 0x123...;
 
 function verifyTrustedWorkload(/* parameters */) external {
     bytes32 measurementHash = workloadVerifier.verifyAttestationHash(/* args */);
     
-    require(measurementHash == trustedWorkloadHash, "Untrusted workload");
+    require(measurementHash == goldenMeasurementHash, "Untrusted workload");
     
     // Proceed with trusted operations
     _executeSensitiveOperation();
