@@ -38,14 +38,15 @@ contract GcpSnpTest is TestSetup {
         string memory path = string.concat(vm.projectRoot(), "/test/testdata/proof_registration_gcp_snp_risc0.json");
         ZkProof memory zkReport = TestDataLib.loadZkReport(path);
 
-        bytes32 measurementHash = workloadVerifier.verifyAttestationHash(
-            userDataHash, TEEType.AmdSevSnp, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
+        (, bytes32 measurementHash, bytes memory tpmExtraData) = workloadVerifier.verifyAttestationHash(
+            TEEType.AmdSevSnp, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
         );
 
         Measurement memory expectedMeasurement = TestDataLib.getSnpGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
+        assertEq(userDataHash, bytes32(tpmExtraData), "User data hash mismatch");
     }
 
     function _loadTestData(string memory path) internal view returns (SnpTestData memory) {

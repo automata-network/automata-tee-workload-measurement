@@ -5,6 +5,7 @@ pragma solidity ^0.8.0;
 import {
     ITpmAttestation, MeasureablePcr
 } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {Pubkey} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
 
 import {IDcapAttestation} from "./IDcapAttestation.sol";
 import {ISnpAttestation} from "./ISnpAttestation.sol";
@@ -24,6 +25,8 @@ struct WorkloadCollaterals {
     // gcp: certs
     // azure: empty
     bytes[] certs;
+    // The CVM Identity
+    Pubkey cvmIdentity;
 }
 
 interface IWorkloadVerifier {
@@ -45,36 +48,31 @@ interface IWorkloadVerifier {
     error FAILED_TO_VERIFY_TPM_QUOTE(string errorMessage);
     // c5ee0cd0
     error FAILED_TO_CHECK_PCR_MEASUREMENTS(string errorMessage);
-    // 109b0230
-    error TPM_DATA_MISMATCH(bytes32 want, bytes32 got);
 
     function verifyAttestation(
-        bytes32 _userDataHash,
         TEEType teeType,
         TeeReportType teeReportType,
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    ) external payable returns (Measurement memory);
+    ) external payable returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
 
     /**
-     * @param _userDataHash The hash of the user data.
      * @param teeType Intel TDX or AMD-SEV-SNP
      * @param teeReportType Solidity vs ZK TEE report types
      * @param cloudType indicates the cloud provider
      * @param _teeAttestationReport The TEE attestation report.
      * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
-     * @return The hash of the measured workload
+     * @return teeOutput along with the measurement hash and the extracted data from the TPM quote.
      * @dev can provide their own golden measurement hash to be referenced for checking the integrity of the workload.
      */
     function verifyAttestationHash(
-        bytes32 _userDataHash,
         TEEType teeType,
         TeeReportType teeReportType,
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    ) external payable returns (bytes32);
+    ) external payable returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
 
     /**
      * @return The DcapAttestation interface for verifying Intel DCAP Quotes

@@ -36,14 +36,15 @@ contract GcpTdxTest is TestSetup {
             testData.tpmPcrs
         );
 
-        bytes32 measurementHash = workloadVerifier.verifyAttestationHash(
-            userDataHash, TEEType.IntelTDX, TeeReportType.Solidity, CloudType.GCP, testData.report, wc
+        (, bytes32 measurementHash, bytes memory tpmExtraData) = workloadVerifier.verifyAttestationHash(
+            TEEType.IntelTDX, TeeReportType.Solidity, CloudType.GCP, testData.report, wc
         );
 
         Measurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
+        assertEq(userDataHash, bytes32(tpmExtraData), "User data hash mismatch");
     }
 
     function testVerifyGcpZkTdx() public {
@@ -69,14 +70,15 @@ contract GcpTdxTest is TestSetup {
         string memory zkPath = string.concat(vm.projectRoot(), "/test/testdata/proof_registration_gcp_tdx_risc0.json");
         ZkProof memory zkReport = TestDataLib.loadZkReport(zkPath);
 
-        bytes32 measurementHash = workloadVerifier.verifyAttestationHash(
-            userDataHash, TEEType.IntelTDX, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
+        (, bytes32 measurementHash, bytes memory tpmExtraData) = workloadVerifier.verifyAttestationHash(
+            TEEType.IntelTDX, TeeReportType.ZkRiscZero, CloudType.GCP, abi.encode(zkReport), wc
         );
 
         Measurement memory expectedMeasurement = TestDataLib.getTdxGoldenMeasurement(testData.goldenMeasurement);
         bytes32 expectedMeasurementHash = keccak256(abi.encode(expectedMeasurement));
 
         assertEq(measurementHash, expectedMeasurementHash, "Measurement hash mismatch");
+        assertEq(userDataHash, bytes32(tpmExtraData), "User data hash mismatch");
     }
 
     function _loadTestData() internal view returns (TdxTestData memory) {
