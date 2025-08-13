@@ -106,6 +106,19 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         return (gasBefore - gasAfter) * bp / 10000;
     }
 
+    function parseTeeOutput(TEEType teeType, bytes memory teeOutput)
+        public
+        pure
+        override
+        returns (TEEVerifiedData memory teeVerifiedData)
+    {
+        if (teeType == TEEType.IntelTDX) {
+            teeVerifiedData = LibTEE.tdxOutput(teeOutput);
+        } else if (teeType == TEEType.AmdSevSnp) {
+            teeVerifiedData = LibTEE.snpOutput(teeOutput);
+        }
+    }
+
     function _verifyAttestation(
         TEEType teeType,
         TeeReportType teeReportType,
@@ -195,14 +208,9 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         // Step 0: pre-process teeOutput to get TEE Verified Data
         TEEVerifiedData memory teeVerifiedData;
         {
-            if (teeType == TEEType.IntelTDX) {
-                teeVerifiedData = LibTEE.tdxOutput(teeOutput);
-                tdx = teeVerifiedData.tdx;
-            } else if (teeType == TEEType.AmdSevSnp) {
-                teeVerifiedData = LibTEE.snpOutput(teeOutput);
-                snp = teeVerifiedData.snp;
-            }
-
+            teeVerifiedData = parseTeeOutput(teeType, teeOutput);
+            tdx = teeVerifiedData.tdx;
+            snp = teeVerifiedData.snp;
             if (cloudType == CloudType.Azure) {
                 bytes32 localReportData = sha256(wc.akPub);
                 if (teeVerifiedData.userReportData.first != localReportData) {

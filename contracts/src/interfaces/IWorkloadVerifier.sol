@@ -9,7 +9,7 @@ import {Pubkey} from "@automata-network/automata-tpm-attestation/types/Crypto.so
 
 import {IDcapAttestation} from "./IDcapAttestation.sol";
 import {ISnpAttestation} from "./ISnpAttestation.sol";
-import {TEEType, TeeReportType, CloudType, Measurement} from "../lib/LibTEE.sol";
+import {TEEType, TeeReportType, CloudType, Measurement, TEEVerifiedData} from "../lib/LibTEE.sol";
 
 struct WorkloadCollaterals {
     // verified by tpmSignature
@@ -73,6 +73,11 @@ interface IWorkloadVerifier {
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
     ) external payable returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
+
+    /**
+     * @notice Helper Method to parse raw TEE output
+     */
+    function parseTeeOutput(TEEType teeType, bytes memory teeOutput) external pure returns (TEEVerifiedData memory);
 
     /**
      * @return The DcapAttestation interface for verifying Intel DCAP Quotes

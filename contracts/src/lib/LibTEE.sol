@@ -13,6 +13,8 @@ using LibBytes for bytes32;
 using LibTEE for Measurement global;
 using LibTEE for TEEType global;
 using LibTEE for CloudType global;
+using LibTEE for TdxMeasurement global;
+using LibTEE for SnpMeasurement global;
 
 enum TEEType {
     Mock,
@@ -128,6 +130,15 @@ library LibTEE {
         data.reportID = snpReport.readBytes32(320);
         data.snp.measurement = snpReport.readBytes48(144);
         return data;
+    }
+
+    function isEmpty(TdxMeasurement memory tdx) internal pure returns (bool) {
+        return tdx.mrtd.isZero() && tdx.mrseam.isZero() && tdx.rtmr0.isZero() && tdx.rtmr1.isZero()
+            && tdx.rtmr2.isZero() && tdx.rtmr3.isZero();
+    }
+
+    function isEmpty(SnpMeasurement memory snp) internal pure returns (bool) {
+        return snp.measurement.isZero();
     }
 
     function tdxOutput(bytes memory output) internal pure returns (TEEVerifiedData memory data) {
