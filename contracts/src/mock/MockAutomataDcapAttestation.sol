@@ -1,7 +1,7 @@
-//SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {IDcapAttestation} from "src/interfaces/IDcapAttestation.sol";
+import {IDcapAttestation} from "../interfaces/IDcapAttestation.sol";
 
 /// @title MockAutomataDcapAttestation
 contract MockAutomataDcapAttestation is IDcapAttestation {
