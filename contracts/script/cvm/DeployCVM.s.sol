@@ -25,7 +25,7 @@ contract DeployCVM is DeploymentConfig {
 
     function deployCVMRegistryImpl() public broadcast returns (address implAddress) {
         // deploy the CVMRegistry implementation
-        CVMRegistry registry = new CVMRegistry{salt: CVM_REGISTRY_IMPL_SALT}();
+        CVMRegistry registry = new CVMRegistry{salt: CVM_REGISTRY_IMPL_SALT}(workloadVerifier);
         implAddress = address(registry);
 
         console.log("CVMRegistry implementation deployed at:", implAddress);
@@ -40,7 +40,7 @@ contract DeployCVM is DeploymentConfig {
 
         // deploy the CVMRegistry proxy
         ERC1967Proxy CVMRegistryProxy = new ERC1967Proxy{salt: CVM_REGISTRY_PROXY_SALT}(
-            implAddress, abi.encodeWithSelector(CVMRegistry.initialize.selector, owner, workloadVerifier)
+            implAddress, abi.encodeWithSelector(CVMRegistry.initialize.selector, owner)
         );
         address proxyAddress = address(CVMRegistryProxy);
 
