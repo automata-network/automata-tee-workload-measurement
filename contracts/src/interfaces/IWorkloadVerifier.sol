@@ -80,6 +80,11 @@ interface IWorkloadVerifier {
     function parseTeeOutput(TEEType teeType, bytes memory teeOutput) external pure returns (TEEVerifiedData memory);
 
     /**
+     * @notice Helper method to parse the varKey json string to extract the AK public key
+     */
+    function parseVarKeyJson(string calldata varKey) external pure returns (Pubkey memory akPub);
+
+    /**
      * @return The DcapAttestation interface for verifying Intel DCAP Quotes
      */
     function dcapAttestation() external view returns (IDcapAttestation);

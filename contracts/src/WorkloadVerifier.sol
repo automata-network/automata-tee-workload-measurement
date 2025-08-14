@@ -119,6 +119,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         }
     }
 
+    function parseVarKeyJson(string calldata varKey) external pure override returns (Pubkey memory akPub) {
+        return _varDataPubkey(varKey);
+    }
+
     function _verifyAttestation(
         TEEType teeType,
         TeeReportType teeReportType,
