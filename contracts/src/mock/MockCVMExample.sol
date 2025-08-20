@@ -2,11 +2,12 @@
 pragma solidity ^0.8.0;
 
 import {CVMRegistry} from "../usecases/CVMRegistry.sol";
+import {CVMSignature} from "../usecases/bases/CVMSignature.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {Pubkey, Crypto} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
 import {TPM_ALG_ECDSA} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
 
-contract MockCVMExample {
+contract MockCVMExample is CVMSignature {
     CVMRegistry public immutable cvmRegistry;
     address public owner;
     mapping(bytes32 goldenMeasurementHash => bool) public goldenMeasurements;
@@ -58,6 +59,6 @@ contract MockCVMExample {
         // Step 2: Verify CVM Signature
         Pubkey memory cvmIdentityKey = cvmRegistry.getCvmIdentity(cvmIdentityHash);
         address verifier = cvmIdentityKey.sigScheme == TPM_ALG_ECDSA ? cvmRegistry.tpmAttestation().p256() : address(0);
-        verified = cvmIdentityKey.verifySignature(message, signature, verifier);
+        verified = cvmIdentityKey.verifySignature(_generateMessage(message), signature, verifier);
     }
 }

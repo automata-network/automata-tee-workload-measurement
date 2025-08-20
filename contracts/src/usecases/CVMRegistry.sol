@@ -4,6 +4,7 @@ pragma solidity ^0.8.15;
 
 import {IWorkloadVerifier, WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
 import {ICVMRegistry, CVMConfig} from "../interfaces/ICVMRegistry.sol";
+import {CVMSignature} from "./bases/CVMSignature.sol";
 import {CloudType, TEEType, TeeReportType, Measurement, TEEVerifiedData} from "../lib/LibTEE.sol";
 import {BytesUtils} from "../lib/BytesUtils.sol";
 
@@ -13,7 +14,7 @@ import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interf
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
+contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     using BytesUtils for bytes;
 
     IWorkloadVerifier public immutable workloadVerifier;
@@ -75,8 +76,9 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
 
         // Step 1: Verify attestation reports and the workload TPM measurements
         bytes memory tpmExtraData;
-        (config.teeAttestationOutput, measurements, tpmExtraData) =
-            workloadVerifier.verifyAttestation(config.teeType, teeReportType, config.cloudType, teeAttestationReport, wc);
+        (config.teeAttestationOutput, measurements, tpmExtraData) = workloadVerifier.verifyAttestation(
+            config.teeType, teeReportType, config.cloudType, teeAttestationReport, wc
+        );
 
         // Step 2: Check whether the TPM contains the CVM identity
         bytes32 tpmIdentity = _parseIdentityFromTpmData(tpmExtraData);
@@ -108,15 +110,11 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
             revert UNSUPPORTED_HASH_ALGORITHM(cvmIdentity.hashAlgo);
         }
         {
-            bytes memory message = abi.encodePacked(
-                "CVM_WORKLOAD_REATTEST_TPM",
-                uint16(block.chainid),
-                address(this),
-                _nonces[cvmIdentityHash]++,
-                sha256(wc.tpmQuote)
-            );
+            bytes memory message = abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote));
             address verifier = cvmIdentity.sigScheme == TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
-            bool verified = cvmIdentity.verifySignature(message, signature, verifier);
+            bool verified = cvmIdentity.verifySignature(
+                _generateMessageWithCustomPrefix("CVM_WORKLOAD_REATTEST_TPM", message), signature, verifier
+            );
             if (!verified) {
                 revert INVALID_SIGNATURE();
             }
@@ -181,16 +179,11 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
             revert UNSUPPORTED_HASH_ALGORITHM(cvmIdentity.hashAlgo);
         }
         {
-            bytes memory message = abi.encodePacked(
-                "CVM_WORKLOAD_TTL_CONFIG",
-                uint16(block.chainid),
-                address(this),
-                _nonces[cvmIdentityHash]++,
-                teeTTL,
-                tpmTTL
-            );
+            bytes memory message = abi.encodePacked(_nonces[cvmIdentityHash]++, teeTTL, tpmTTL);
             address verifier = cvmIdentity.sigScheme == TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
-            bool verified = cvmIdentity.verifySignature(message, signature, verifier);
+            bool verified = cvmIdentity.verifySignature(
+                _generateMessageWithCustomPrefix("CVM_WORKLOAD_TTL_CONFIG", message), signature, verifier
+            );
             if (!verified) {
                 revert INVALID_SIGNATURE();
             }
