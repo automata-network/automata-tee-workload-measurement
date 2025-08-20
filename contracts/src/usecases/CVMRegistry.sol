@@ -35,7 +35,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     modifier onlyRegistered(bytes32 cvmIdentityHash) {
-        if (_configs[cvmIdentityHash].cloudType == CloudType.Unset) {
+        if (!hasRegistered(cvmIdentityHash)) {
             revert CVM_NOT_REGISTERED();
         }
         _;
@@ -53,24 +53,28 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
         __Ownable_init(_intialOwner);
     }
 
-    function registerCvm(
+    function attestCvm(
         CloudType cloudType,
         TEEType teeType,
         TeeReportType teeReportType,
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata wc
     ) external override returns (Measurement memory measurements) {
-        // Step 0: Check whether the user has already registered the CVM
+        // Step 0: Preliminary Checks
         bytes32 identity = _computeCvmIdentityHash(wc.cvmIdentity);
         CVMConfig storage config = _configs[identity];
-        if (config.cloudType != CloudType.Unset) {
-            revert CVM_REGISTERED(identity);
+
+        if (!hasRegistered(identity)) {
+            config.teeType = teeType;
+            config.cloudType = cloudType;
+            config.teeTTL = DEFAULT_TEE_TTL;
+            config.tpmTTL = DEFAULT_TPM_TTL;
         }
 
         // Step 1: Verify attestation reports and the workload TPM measurements
         bytes memory tpmExtraData;
         (config.teeAttestationOutput, measurements, tpmExtraData) =
-            workloadVerifier.verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
+            workloadVerifier.verifyAttestation(config.teeType, teeReportType, config.cloudType, teeAttestationReport, wc);
 
         // Step 2: Check whether the TPM contains the CVM identity
         bytes32 tpmIdentity = _parseIdentityFromTpmData(tpmExtraData);
@@ -80,15 +84,12 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
 
         // Step 3: Register the identity
         uint64 currentTimestamp = uint64(block.timestamp);
-        config.teeType = teeType;
-        config.cloudType = cloudType;
-        config.teeTTL = DEFAULT_TEE_TTL;
-        config.tpmTTL = DEFAULT_TPM_TTL;
+        config.cvmIdentity = wc.cvmIdentity;
         config.teeRecentTimestamp = currentTimestamp;
         config.tpmRecentTimestamp = currentTimestamp;
         config.measurementHash = measurements.digest();
 
-        emit CVMRegistered(identity);
+        emit CVMUpdated(identity);
     }
 
     function reattestCvmWithTpm(bytes32 cvmIdentityHash, bytes calldata signature, WorkloadCollaterals calldata wc)
@@ -106,7 +107,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
         }
         {
             bytes memory message = abi.encodePacked(
-                "CVM_WORKLOAD_REATTTEST_TPM",
+                "CVM_WORKLOAD_REATTEST_TPM",
                 uint16(block.chainid),
                 address(this),
                 _nonces[cvmIdentityHash]++,
@@ -156,79 +157,12 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
             if (tpmIdentityHash != wcIdentityHash) {
                 revert CVM_IDENTITY_MISMATCH(tpmIdentityHash, wcIdentityHash);
             }
-            CVMConfig storage newConfig = _rotateCvmIdentity(cvmIdentityHash, wcIdentityHash, wcIdentity);
-            newConfig.measurementHash = measurements.digest();
-            newConfig.tpmRecentTimestamp = currentTimestamp;
-            emit CVMIdentityRotated(wcIdentityHash, cvmIdentityHash);
-            emit CVMCollateralUpdated(wcIdentityHash, newConfig.teeRecentTimestamp, currentTimestamp);
+            _rotateCvmIdentity(cvmIdentityHash, wcIdentityHash, wcIdentity, currentTimestamp, measurements.digest());
+            emit CVMUpdated(wcIdentityHash);
         } else {
             config.measurementHash = measurements.digest();
             config.tpmRecentTimestamp = currentTimestamp;
-            emit CVMCollateralUpdated(cvmIdentityHash, config.teeRecentTimestamp, currentTimestamp);
-        }
-    }
-
-    function reattestCvmFully(
-        bytes32 cvmIdentityHash,
-        TeeReportType teeReportType,
-        bytes calldata signature,
-        bytes calldata teeReport,
-        WorkloadCollaterals calldata wc
-    ) external override onlyRegistered(cvmIdentityHash) returns (Measurement memory measurements) {
-        CVMConfig storage config = _configs[cvmIdentityHash];
-
-        // Step 1: Verify the signature against CVM Identity
-        Pubkey memory cvmIdentity = config.cvmIdentity;
-        if (cvmIdentity.hashAlgo != TPM_ALG_SHA256) {
-            revert UNSUPPORTED_HASH_ALGORITHM(cvmIdentity.hashAlgo);
-        }
-        {
-            bytes memory message = abi.encodePacked(
-                "CVM_WORKLOAD_REATTTEST_ALL",
-                uint16(block.chainid),
-                address(this),
-                _nonces[cvmIdentityHash]++,
-                sha256(teeReport),
-                sha256(wc.tpmQuote)
-            );
-            address verifier = cvmIdentity.sigScheme == TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
-            bool verified = cvmIdentity.verifySignature(message, signature, verifier);
-            if (!verified) {
-                revert INVALID_SIGNATURE();
-            }
-        }
-
-        // Step 2: Re-verify the workload
-        bytes memory teeOutput;
-        bytes memory tpmExtraData;
-        (teeOutput, measurements, tpmExtraData) =
-            workloadVerifier.verifyAttestation(config.teeType, teeReportType, config.cloudType, teeReport, wc);
-
-        // Step 3: If Extra Data contains a different identity hash from the current CVM Identity
-        // that means a key rotation is occurring, check whether it matches with the new identity
-        // provided as workload collateral
-        Pubkey memory wcIdentity = wc.cvmIdentity;
-        bytes32 wcIdentityHash = _computeCvmIdentityHash(wcIdentity);
-        uint64 currentTimestamp = uint64(block.timestamp);
-        if (wcIdentityHash != cvmIdentityHash) {
-            // First, check TPM data matches with the new identity hash
-            bytes32 tpmIdentityHash = _parseIdentityFromTpmData(tpmExtraData);
-            if (tpmIdentityHash != wcIdentityHash) {
-                revert CVM_IDENTITY_MISMATCH(tpmIdentityHash, wcIdentityHash);
-            }
-            CVMConfig storage newConfig = _rotateCvmIdentity(cvmIdentityHash, wcIdentityHash, wcIdentity);
-            newConfig.measurementHash = measurements.digest();
-            newConfig.tpmRecentTimestamp = currentTimestamp;
-            newConfig.teeRecentTimestamp = currentTimestamp;
-            newConfig.teeAttestationOutput = teeOutput;
-            emit CVMIdentityRotated(wcIdentityHash, cvmIdentityHash);
-            emit CVMCollateralUpdated(wcIdentityHash, currentTimestamp, currentTimestamp);
-        } else {
-            config.measurementHash = measurements.digest();
-            config.tpmRecentTimestamp = currentTimestamp;
-            config.teeRecentTimestamp = currentTimestamp;
-            config.teeAttestationOutput = teeOutput;
-            emit CVMCollateralUpdated(cvmIdentityHash, currentTimestamp, currentTimestamp);
+            emit CVMUpdated(cvmIdentityHash);
         }
     }
 
@@ -262,11 +196,15 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
 
         config.teeTTL = teeTTL;
         config.tpmTTL = tpmTTL;
-        emit CVMTTLUpdated(cvmIdentityHash, teeTTL, tpmTTL);
+        emit CVMTTLUpdated(cvmIdentityHash);
     }
 
     function nonces(bytes32 cvmIdentityHash) external view override onlyRegistered(cvmIdentityHash) returns (uint256) {
         return _nonces[cvmIdentityHash];
+    }
+
+    function hasRegistered(bytes32 cvmIdentityHash) public view override returns (bool) {
+        return _configs[cvmIdentityHash].cloudType != CloudType.Unset;
     }
 
     function checkTEEValidity(bytes32 cvmIdentityHash)
@@ -335,12 +273,15 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
         cvmIdentityHash = bytes32(tpmExtraData.substring(4, 32));
     }
 
-    function _rotateCvmIdentity(bytes32 oldCvmIdentityHash, bytes32 newCvmIdentityHash, Pubkey memory newCvmIdentity)
-        private
-        returns (CVMConfig storage newConfig)
-    {
+    function _rotateCvmIdentity(
+        bytes32 oldCvmIdentityHash,
+        bytes32 newCvmIdentityHash,
+        Pubkey memory newCvmIdentity,
+        uint64 tpmRecentTimestamp,
+        bytes32 measurementHash
+    ) private {
         CVMConfig storage oldConfig = _configs[oldCvmIdentityHash];
-        newConfig = _configs[newCvmIdentityHash];
+        CVMConfig storage newConfig = _configs[newCvmIdentityHash];
 
         // Copy all fields from oldConfig to newConfig
         newConfig.cloudType = oldConfig.cloudType;
@@ -348,9 +289,10 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
         newConfig.teeTTL = oldConfig.teeTTL;
         newConfig.tpmTTL = oldConfig.tpmTTL;
         newConfig.teeRecentTimestamp = oldConfig.teeRecentTimestamp;
-        newConfig.tpmRecentTimestamp = oldConfig.tpmRecentTimestamp;
         newConfig.teeAttestationOutput = oldConfig.teeAttestationOutput;
         newConfig.cvmIdentity = newCvmIdentity;
+        newConfig.tpmRecentTimestamp = tpmRecentTimestamp;
+        newConfig.measurementHash = measurementHash;
 
         delete _configs[oldCvmIdentityHash];
     }
