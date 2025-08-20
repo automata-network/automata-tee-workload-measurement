@@ -23,6 +23,7 @@ interface ICVMRegistry {
     error CVM_IDENTITY_MISMATCH(bytes32 expected, bytes32 actual);
     error INVALID_SIGNATURE();
     error UNSUPPORTED_HASH_ALGORITHM(uint16 hashAlgo);
+    error INVALID_TPM_DATA_LENGTH();
     error INVALID_TPM_QUOTE(string err);
     error INVALID_TPM_MEASUREMENT(string err);
 
