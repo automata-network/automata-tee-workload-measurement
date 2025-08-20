@@ -210,7 +210,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function checkTEEValidity(bytes32 cvmIdentityHash)
-        public
+        external
         view
         override
         onlyRegistered(cvmIdentityHash)
@@ -221,7 +221,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function checkTPMValidity(bytes32 cvmIdentityHash)
-        public
+        external
         view
         override
         onlyRegistered(cvmIdentityHash)
@@ -232,7 +232,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function getMeasurementHash(bytes32 cvmIdentityHash)
-        public
+        external
         view
         override
         onlyRegistered(cvmIdentityHash)
@@ -243,7 +243,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function getCvmIdentity(bytes32 cvmIdentityHash)
-        public
+        external
         view
         override
         onlyRegistered(cvmIdentityHash)
@@ -254,7 +254,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function getCvmConfig(bytes32 cvmIdentityHash)
-        public
+        external
         view
         override
         onlyRegistered(cvmIdentityHash)
