@@ -33,17 +33,15 @@ contract CvmTest is TestSetup {
             ownerInitData
         )));
         vm.stopBroadcast();
-
-        console.log("CVMRegistry deployed at:", address(registry));
     }
 
     function testGcpTdxCvm() public {
-        // pinned August 25th, 2025, 0945h UTC
-        vm.warp(1756115100);
-        TdxTestData memory testData = TestDataLib.loadTdxData(
-            string.concat(vm.projectRoot(), "/test/testdata/cy/registration_gcp_tdx.json")
-        );
-        bytes memory googleCa = testData.tpmCerts[testData.tpmCerts.length - 1];
+        // pinned August 26th, 2025, 0745h UTC
+        vm.warp(1756194300);
+        bytes memory googleCa = vm.readFileBinary(string.concat(
+            vm.projectRoot(),
+            "/test/testdata/gcp-tdx/tpmAkRoot.der"
+        ));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);
 
@@ -51,7 +49,7 @@ contract CvmTest is TestSetup {
         string memory json = vm.readFile(
             string.concat(
                 vm.projectRoot(),
-                "/test/testdata/xh/gcp-tdx-registration.json"
+                "/test/testdata/gcp-tdx/gcp-tdx-registration.json"
             )
         );
         string memory encodedCalldata = json.readString(".calldata");
@@ -65,7 +63,7 @@ contract CvmTest is TestSetup {
         string memory gmJson = vm.readFile(
             string.concat(
                 vm.projectRoot(),
-                "/test/testdata/xh/gcp-tdx-test-golden_measurements.json"
+                "/test/testdata/gcp-tdx/gcp-tdx-test-golden_measurements.json"
             )
         );
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
@@ -76,7 +74,7 @@ contract CvmTest is TestSetup {
         string memory reattestJson = vm.readFile(
             string.concat(
                 vm.projectRoot(),
-                "/test/testdata/xh/gcp-tdx-reattestation.json"
+                "/test/testdata/gcp-tdx/gcp-tdx-reattestation.json"
             )
         );
         string memory encodedReattestCalldata = reattestJson.readString(".calldata");

@@ -226,11 +226,15 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
 
         // Step 1: Verify TPM quote
         {
-            (bool success, string memory errorMessage) = teeVerifiedData.akPub.empty()
-                ? tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, wc.certs)
-                : tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, teeVerifiedData.akPub);
-            if (!success) {
-                revert FAILED_TO_VERIFY_TPM_QUOTE(errorMessage);
+            teeVerifiedData = parseTeeOutput(teeType, teeOutput);
+            tdx = teeVerifiedData.tdx;
+            snp = teeVerifiedData.snp;
+            if (cloudType == CloudType.Azure) {
+                bytes32 localReportData = sha256(wc.akPub);
+                if (teeVerifiedData.userReportData.first != localReportData) {
+                    revert TEE_REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
+                }
+                teeVerifiedData.akPub = _varDataPubkey(string(wc.akPub));
             }
         }
 
