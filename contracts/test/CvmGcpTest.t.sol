@@ -11,46 +11,31 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {CVMRegistry} from "../src/usecases/CVMRegistry.sol";
 
 contract CvmGcpTest is TestSetup {
-    
     CVMRegistry registry;
+
     using stdJson for string;
 
     function setUp() public override {
         super.setUp();
 
         vm.startBroadcast(owner);
-        CVMRegistry registryImpl = new CVMRegistry(
-            address(workloadVerifier)
-        );
+        CVMRegistry registryImpl = new CVMRegistry(address(workloadVerifier));
 
-        bytes memory ownerInitData = abi.encodeWithSelector(
-            CVMRegistry.initialize.selector, 
-            owner
-        );
-        registry = CVMRegistry(address(new ERC1967Proxy(
-            address(registryImpl),
-            ownerInitData
-        )));
+        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner);
+        registry = CVMRegistry(address(new ERC1967Proxy(address(registryImpl), ownerInitData)));
         vm.stopBroadcast();
     }
 
     function testGcpTdxCvm() public {
         // pinned August 26th, 2025, 0745h UTC
         vm.warp(1756194300);
-        bytes memory googleCa = vm.readFileBinary(string.concat(
-            vm.projectRoot(),
-            "/test/testdata/gcp/tpmAkRoot.der"
-        ));
+        bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);
 
         // read the calldata from sample file
-        string memory json = vm.readFile(
-            string.concat(
-                vm.projectRoot(),
-                "/test/testdata/gcp/tdx/gcp-tdx-registration.json"
-            )
-        );
+        string memory json =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-registration.json"));
         string memory encodedCalldata = json.readString(".calldata");
         bytes memory decodedCalldata = Base64.decode(encodedCalldata);
 
@@ -59,23 +44,15 @@ contract CvmGcpTest is TestSetup {
 
         bytes32 actualMeasurement = keccak256(result);
 
-        string memory gmJson = vm.readFile(
-            string.concat(
-                vm.projectRoot(),
-                "/test/testdata/gcp/tdx/gcp-tdx-test-golden_measurements.json"
-            )
-        );
+        string memory gmJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-test-golden_measurements.json"));
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
         bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
 
         assertEq(expectedMeasurement, actualMeasurement);
 
-        string memory reattestJson = vm.readFile(
-            string.concat(
-                vm.projectRoot(),
-                "/test/testdata/gcp/tdx/gcp-tdx-reattestation.json"
-            )
-        );
+        string memory reattestJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-reattestation.json"));
         string memory encodedReattestCalldata = reattestJson.readString(".calldata");
         bytes memory decodedReattestCalldata = Base64.decode(encodedReattestCalldata);
 
@@ -86,20 +63,13 @@ contract CvmGcpTest is TestSetup {
     function testGcpSevSnp() public {
         // pinned August 26th, 2025, 0745h UTC
         vm.warp(1756194300);
-        bytes memory googleCa = vm.readFileBinary(string.concat(
-            vm.projectRoot(),
-            "/test/testdata/gcp/tpmAkRoot.der"
-        ));
+        bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);
 
         // read the calldata from sample file
-        string memory json = vm.readFile(
-            string.concat(
-                vm.projectRoot(),
-                "/test/testdata/gcp/snp/gcp-snp-registration.json"
-            )
-        );
+        string memory json =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-registration.json"));
         string memory encodedCalldata = json.readString(".calldata");
         bytes memory decodedCalldata = Base64.decode(encodedCalldata);
 
@@ -108,23 +78,15 @@ contract CvmGcpTest is TestSetup {
 
         bytes32 actualMeasurement = keccak256(result);
 
-        string memory gmJson = vm.readFile(
-            string.concat(
-                vm.projectRoot(),
-                "/test/testdata/gcp/snp/gcp-snp-test-golden_measurements.json"
-            )
-        );
+        string memory gmJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-test-golden_measurements.json"));
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
         bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
 
         assertEq(expectedMeasurement, actualMeasurement);
 
-        string memory reattestJson = vm.readFile(
-            string.concat(
-                vm.projectRoot(),
-                "/test/testdata/gcp/snp/gcp-snp-reattestation.json"
-            )
-        );
+        string memory reattestJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-reattestation.json"));
         string memory encodedReattestCalldata = reattestJson.readString(".calldata");
         bytes memory decodedReattestCalldata = Base64.decode(encodedReattestCalldata);
 

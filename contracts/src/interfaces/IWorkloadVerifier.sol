@@ -67,7 +67,10 @@ interface IWorkloadVerifier {
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    ) external payable returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData);
+    )
+        external
+        payable
+        returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData);
 
     /**
      * @notice Call this method if you are only interested in getting the Workload Measurement

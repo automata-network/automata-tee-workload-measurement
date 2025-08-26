@@ -70,12 +70,18 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         CloudType cloudType,
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata wc
-    ) external payable override returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData) {
+    )
+        external
+        payable
+        override
+        returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData)
+    {
         if (teeType == TEEType.Mock) {
             if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
             return (teeOutput, teeVerifiedData, tpmExtraData);
         }
-        (teeOutput, teeVerifiedData, tpmExtraData) = _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
+        (teeOutput, teeVerifiedData, tpmExtraData) =
+            _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
     }
 
     function verifyAttestationAndGetMeasurement(
@@ -91,13 +97,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         }
 
         TEEVerifiedData memory teeVerifiedData;
-        (teeOutput, teeVerifiedData, tpmExtraData) = _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
+        (teeOutput, teeVerifiedData, tpmExtraData) =
+            _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
         Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(wc.pcrs);
-        m = Measurement({
-            pcrs: pcrs,
-            tdx: teeVerifiedData.tdx,
-            snp: teeVerifiedData.snp
-        });
+        m = Measurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
     }
 
     function verifyAttestationAndGetMeasurementHash(
@@ -114,13 +117,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             return (teeOutput, measurementHash, tpmExtraData);
         } else {
             TEEVerifiedData memory teeVerifiedData;
-            (teeOutput, teeVerifiedData, tpmExtraData) = _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
+            (teeOutput, teeVerifiedData, tpmExtraData) =
+                _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
             Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(wc.pcrs);
-            Measurement memory m = Measurement({
-                pcrs: pcrs,
-                tdx: teeVerifiedData.tdx,
-                snp: teeVerifiedData.snp
-            });
+            Measurement memory m = Measurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
             measurementHash = m.digest();
         }
     }
@@ -266,7 +266,8 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
                     teeVerifiedData.akPub = abi.decode(ret, (Pubkey));
                 }
             } else {
-                (success, errorMessage) = tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, teeVerifiedData.akPub);
+                (success, errorMessage) =
+                    tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, teeVerifiedData.akPub);
             }
 
             if (!success) {

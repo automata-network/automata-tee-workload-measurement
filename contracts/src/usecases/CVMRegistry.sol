@@ -132,7 +132,8 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         }
 
         // Step 2: Verify the TPM quote and measurement
-        (bool tpmVerified, string memory err) = tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, config.tpmAk);
+        (bool tpmVerified, string memory err) =
+            tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, config.tpmAk);
         if (!tpmVerified) {
             revert INVALID_TPM_QUOTE(err);
         }
