@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity >=0.8.15;
 
-import {TestSetup} from "./utils/TestSetup.sol";
-import "../script/utils/TestDataLib.sol";
 import "forge-std/console.sol";
+import {TestSetup} from "./utils/TestSetup.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 import {Base64} from "solady/utils/Base64.sol";
 import {Measurement} from "../src/lib/LibTEE.sol";
@@ -11,7 +10,7 @@ import {Measurement} from "../src/lib/LibTEE.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {CVMRegistry} from "../src/usecases/CVMRegistry.sol";
 
-contract CvmTest is TestSetup {
+contract CvmAzureTest is TestSetup {
     
     CVMRegistry registry;
     using stdJson for string;
@@ -35,21 +34,12 @@ contract CvmTest is TestSetup {
         vm.stopBroadcast();
     }
 
-    function testGcpTdxCvm() public {
-        // pinned August 26th, 2025, 0745h UTC
-        vm.warp(1756194300);
-        bytes memory googleCa = vm.readFileBinary(string.concat(
-            vm.projectRoot(),
-            "/test/testdata/gcp-tdx/tpmAkRoot.der"
-        ));
-        vm.prank(owner);
-        tpmAttestation.addCA(googleCa);
-
+    function testAzureTdxCvm() public {
         // read the calldata from sample file
         string memory json = vm.readFile(
             string.concat(
                 vm.projectRoot(),
-                "/test/testdata/gcp-tdx/gcp-tdx-registration.json"
+                "/test/testdata/azure/tdx/azure-tdx-registration.json"
             )
         );
         string memory encodedCalldata = json.readString(".calldata");
@@ -63,7 +53,7 @@ contract CvmTest is TestSetup {
         string memory gmJson = vm.readFile(
             string.concat(
                 vm.projectRoot(),
-                "/test/testdata/gcp-tdx/gcp-tdx-test-golden_measurements.json"
+                "/test/testdata/azure/tdx/azure-tdx-test-golden_measurements.json"
             )
         );
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
@@ -74,7 +64,7 @@ contract CvmTest is TestSetup {
         string memory reattestJson = vm.readFile(
             string.concat(
                 vm.projectRoot(),
-                "/test/testdata/gcp-tdx/gcp-tdx-reattestation.json"
+                "/test/testdata/azure/tdx/azure-tdx-reattestation.json"
             )
         );
         string memory encodedReattestCalldata = reattestJson.readString(".calldata");
