@@ -14,8 +14,9 @@ struct CVMConfig {
     uint64 teeRecentTimestamp;
     uint64 tpmRecentTimestamp;
     bytes32 measurementHash;
-    Pubkey cvmIdentity;
     bytes teeAttestationOutput;
+    Pubkey cvmIdentity;
+    Pubkey tpmAk;
 }
 
 interface ICVMRegistry {
@@ -26,6 +27,7 @@ interface ICVMRegistry {
     error INVALID_TPM_DATA_LENGTH();
     error INVALID_TPM_QUOTE(string err);
     error INVALID_TPM_MEASUREMENT(string err);
+    error TPM_AK_MISMATCH(bytes32 expected, bytes32 actual);
 
     event CVMUpdated(bytes32 indexed cvmIdentityHash);
     event CVMTTLUpdated(bytes32 indexed cvmIdentityHash);

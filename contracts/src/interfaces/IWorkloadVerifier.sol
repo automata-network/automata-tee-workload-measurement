@@ -49,7 +49,38 @@ interface IWorkloadVerifier {
     // c5ee0cd0
     error FAILED_TO_CHECK_PCR_MEASUREMENTS(string errorMessage);
 
+    /**
+     * @notice Call this method if you are interested in getting TEE-verified data
+     * such as: Report ID, TPM AK Pubkey and TEE Measurements
+     * @param teeType Intel TDX or AMD-SEV-SNP
+     * @param teeReportType Solidity vs ZK TEE report types
+     * @param cloudType indicates the cloud provider
+     * @param _teeAttestationReport The TEE attestation report.
+     * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
+     * @return teeOutput the output obtained from the TEE Verifier contract
+     * @return teeVerifiedData data that have been verified by the TEE, and can be trusted
+     * @return tpmExtraData additional data extracted from the TPM quote
+     */
     function verifyAttestation(
+        TEEType teeType,
+        TeeReportType teeReportType,
+        CloudType cloudType,
+        bytes calldata _teeAttestationReport,
+        WorkloadCollaterals calldata _workloadReport
+    ) external payable returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData);
+
+    /**
+     * @notice Call this method if you are only interested in getting the Workload Measurement
+     * @param teeType Intel TDX or AMD-SEV-SNP
+     * @param teeReportType Solidity vs ZK TEE report types
+     * @param cloudType indicates the cloud provider
+     * @param _teeAttestationReport The TEE attestation report.
+     * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
+     * @return teeOutput the output obtained from the TEE Verifier contract
+     * @return measurement the Final Measurement
+     * @return tpmExtraData additional data extracted from the TPM quote
+     */
+    function verifyAttestationAndGetMeasurement(
         TEEType teeType,
         TeeReportType teeReportType,
         CloudType cloudType,
@@ -58,15 +89,18 @@ interface IWorkloadVerifier {
     ) external payable returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
 
     /**
+     * @notice Call this method if you are only interested in getting the hash of the Workload Measurement
      * @param teeType Intel TDX or AMD-SEV-SNP
      * @param teeReportType Solidity vs ZK TEE report types
      * @param cloudType indicates the cloud provider
      * @param _teeAttestationReport The TEE attestation report.
      * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
-     * @return teeOutput along with the measurement hash and the extracted data from the TPM quote.
+     * @return teeOutput the output obtained from the TEE Verifier contract
+     * @return measurementHash the hash of the Final Measurement
+     * @return tpmExtraData additional data extracted from the TPM quote
      * @dev can provide their own golden measurement hash to be referenced for checking the integrity of the workload.
      */
-    function verifyAttestationHash(
+    function verifyAttestationAndGetMeasurementHash(
         TEEType teeType,
         TeeReportType teeReportType,
         CloudType cloudType,

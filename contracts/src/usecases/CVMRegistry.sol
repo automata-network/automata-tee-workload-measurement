@@ -76,22 +76,31 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
         // Step 1: Verify attestation reports and the workload TPM measurements
         bytes memory tpmExtraData;
-        (config.teeAttestationOutput, measurements, tpmExtraData) = workloadVerifier.verifyAttestation(
+        TEEVerifiedData memory teeVerifiedData;
+        (config.teeAttestationOutput, teeVerifiedData, tpmExtraData) = workloadVerifier.verifyAttestation(
             config.teeType, teeReportType, config.cloudType, teeAttestationReport, wc
         );
 
-        // Step 2: Check whether the TPM contains the CVM identity
+        // Step 2: Check whether the TPM contains the matching CVM identity
         bytes32 tpmIdentity = _parseIdentityFromTpmData(tpmExtraData);
         if (tpmIdentity != identity) {
             revert CVM_IDENTITY_MISMATCH(identity, tpmIdentity);
         }
 
-        // Step 3: Register the identity
+        // Step 3: Get the measurement
+        measurements = Measurement({
+            pcrs: tpmAttestation.toFinalMeasurement(wc.pcrs),
+            tdx: teeVerifiedData.tdx,
+            snp: teeVerifiedData.snp
+        });
+
+        // Step 4: Register the identity
         uint64 currentTimestamp = uint64(block.timestamp);
         config.cvmIdentity = wc.cvmIdentity;
         config.teeRecentTimestamp = currentTimestamp;
         config.tpmRecentTimestamp = currentTimestamp;
         config.measurementHash = measurements.digest();
+        config.tpmAk = teeVerifiedData.akPub;
 
         emit CVMUpdated(identity);
     }
@@ -123,19 +132,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         }
 
         // Step 2: Verify the TPM quote and measurement
-        CloudType cloudType = config.cloudType;
-        bool tpmVerified;
-        string memory err;
-        if (cloudType == CloudType.Azure) {
-            Pubkey memory tpmAk = workloadVerifier.parseVarKeyJson(string(wc.akPub));
-            (tpmVerified, err) = tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, tpmAk);
-        } else if (cloudType == CloudType.GCP) {
-            bytes memory ret;
-            (tpmVerified, ret) = tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, wc.certs);
-            if (!tpmVerified) {
-                revert INVALID_TPM_QUOTE(string(ret));
-            }
-        }
+        (bool tpmVerified, string memory err) = tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, config.tpmAk);
         if (!tpmVerified) {
             revert INVALID_TPM_QUOTE(err);
         }
