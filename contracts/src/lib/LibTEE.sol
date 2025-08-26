@@ -81,7 +81,7 @@ library LibTEE {
         bool verified;
 
         for (uint256 i = 0; i < len; i++) {
-            if (wc.pcrs[i].index == 16) {
+            if (wc.pcrs[i].index == 15) {
                 if (teeData.reportID == bytes32(0)) {
                     // non-snp
                     if (wc.pcrs[i].pcr == bytes32(0)) {

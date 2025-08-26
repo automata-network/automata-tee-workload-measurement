@@ -14,6 +14,8 @@ import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interf
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
+import "forge-std/console.sol";
+
 contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     using BytesUtils for bytes;
 
@@ -112,9 +114,18 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         {
             bytes memory message = abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote));
             address verifier = cvmIdentity.sigScheme == TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
+
+            console.log("message: ");
+            console.logBytes(_generateMessageWithCustomPrefix("CVM_WORKLOAD_REATTEST_TPM", message));
+            console.log("pubkey: ");
+            console.logBytes(cvmIdentity.data);
+            console.log("sig: ");
+            console.logBytes(signature);
+
             bool verified = cvmIdentity.verifySignature(
                 _generateMessageWithCustomPrefix("CVM_WORKLOAD_REATTEST_TPM", message), signature, verifier
             );
+
             if (!verified) {
                 revert INVALID_SIGNATURE();
             }
