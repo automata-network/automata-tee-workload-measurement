@@ -11,7 +11,7 @@ import {
 } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {Pubkey, RSALib} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
-import {ISnpAttestation, VerifierJournal} from "./interfaces/ISnpAttestation.sol";
+import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/ISnpAttestation.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
 import {
     TEEVerifiedData,
@@ -220,6 +220,11 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         ZkProof memory zkProof = abi.decode(report, (ZkProof));
         VerifierJournal memory output =
             snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
+
+        if (uint8(output.result) != uint8(VerificationResult.Success)) {
+            revert FAILED_TO_VERIFY_TEE();
+        }
+
         teeOutput = output.rawReport;
     }
 

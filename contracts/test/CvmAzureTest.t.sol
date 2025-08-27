@@ -67,8 +67,9 @@ contract CvmAzureTest is TestSetup {
 
         bytes32 actualMeasurement = keccak256(result);
 
-        string memory gmJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/azure/snp/azure-snp-test-golden_measurements.json"));
+        string memory gmJson = vm.readFile(
+            string.concat(vm.projectRoot(), "/test/testdata/azure/snp/azure-snp-test-golden_measurements.json")
+        );
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
         bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
 
