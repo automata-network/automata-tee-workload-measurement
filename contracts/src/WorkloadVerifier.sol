@@ -16,7 +16,7 @@ import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVeri
 import {
     TEEVerifiedData,
     ZkProof,
-    Bytes64,
+    Bytes48,
     TEEType,
     TeeReportType,
     CloudType,
@@ -99,8 +99,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         TEEVerifiedData memory teeVerifiedData;
         (teeOutput, teeVerifiedData, tpmExtraData) =
             _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
-        Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(wc.pcrs);
-        m = Measurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
+        m = getMeasurement(teeVerifiedData, wc.pcrs);
     }
 
     function verifyAttestationAndGetMeasurementHash(
@@ -119,8 +118,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             TEEVerifiedData memory teeVerifiedData;
             (teeOutput, teeVerifiedData, tpmExtraData) =
                 _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
-            Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(wc.pcrs);
-            Measurement memory m = Measurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
+            Measurement memory m = getMeasurement(teeVerifiedData, wc.pcrs);
             measurementHash = m.digest();
         }
     }
@@ -131,6 +129,23 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         dcapAttestation.verifyAndAttestOnChain{value: msg.value}(rawQuote);
         uint256 gasAfter = gasleft();
         return (gasBefore - gasAfter) * bp / 10000;
+    }
+
+    function getMeasurement(TEEVerifiedData memory teeVerifiedData, MeasureablePcr[] memory measuredPcrs)
+        public
+        view
+        override
+        returns (Measurement memory m)
+    {
+        Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(measuredPcrs);
+
+        // exclude TDX rtmr3 values from measurement bc it contains the UUID of the attestation
+        // which gets reset when the VM reboots
+        if (!teeVerifiedData.tdx.rtmr3.isZero()) {
+            teeVerifiedData.tdx.rtmr3 = Bytes48({first: bytes32(0), second: bytes16(0)});
+        }
+
+        m = Measurement({pcrs: pcrs, tdx: teeVerifiedData.tdx, snp: teeVerifiedData.snp});
     }
 
     function parseTeeOutput(TEEType teeType, bytes memory teeOutput)

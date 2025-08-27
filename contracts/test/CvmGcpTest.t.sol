@@ -27,8 +27,8 @@ contract CvmGcpTest is TestSetup {
     }
 
     function testGcpTdxCvm() public {
-        // pinned August 26th, 2025, 0745h UTC
-        vm.warp(1756194300);
+        // pinned August 27th, 2025, 0800h UTC
+        vm.warp(1756281600);
         bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);
@@ -61,8 +61,8 @@ contract CvmGcpTest is TestSetup {
     }
 
     function testGcpSevSnp() public {
-        // pinned August 26th, 2025, 0745h UTC
-        vm.warp(1756194300);
+        // pinned August 27th, 2025, 0820h UTC
+        vm.warp(1756282800);
         bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);

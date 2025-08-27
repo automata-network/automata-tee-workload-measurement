@@ -117,6 +117,14 @@ interface IWorkloadVerifier {
     function parseTeeOutput(TEEType teeType, bytes memory teeOutput) external pure returns (TEEVerifiedData memory);
 
     /**
+     * @notice Get the Final Measurement from the TEE Verified Data and measured PCRs
+     */
+    function getMeasurement(TEEVerifiedData memory teeVerifiedData, MeasureablePcr[] memory pcrs)
+        external
+        view
+        returns (Measurement memory);
+
+    /**
      * @notice Helper method to parse the varKey json string to extract the AK public key
      */
     function parseVarKeyJson(string calldata varKey) external pure returns (Pubkey memory akPub);

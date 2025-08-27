@@ -107,7 +107,7 @@ library LibTEE {
                         verified = true;
                         break;
                     }
-                    if (wc.reportId.length != 32 || wc.reportId.readBytes32(0) != teeData.reportID) {
+                    if (wc.reportId.length > 0 && wc.reportId.readBytes32(0) != teeData.reportID) {
                         break;
                     }
                     bytes32 expectedPcr = sha256(abi.encodePacked(new bytes(32), teeData.reportID));

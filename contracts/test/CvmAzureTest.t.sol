@@ -54,4 +54,32 @@ contract CvmAzureTest is TestSetup {
         (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
         assertTrue(reattestSuccess, string(reattestResult));
     }
+
+    function testAzureSevSnp() public {
+        // read the calldata from sample file
+        string memory json =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/azure/snp/azure-snp-registration.json"));
+        string memory encodedCalldata = json.readString(".calldata");
+        bytes memory decodedCalldata = Base64.decode(encodedCalldata);
+
+        (bool success, bytes memory result) = address(registry).call(decodedCalldata);
+        assertTrue(success, string(result));
+
+        bytes32 actualMeasurement = keccak256(result);
+
+        string memory gmJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/azure/snp/azure-snp-test-golden_measurements.json"));
+        string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
+        bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
+
+        assertEq(expectedMeasurement, actualMeasurement);
+
+        string memory reattestJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/azure/snp/azure-snp-reattestation.json"));
+        string memory encodedReattestCalldata = reattestJson.readString(".calldata");
+        bytes memory decodedReattestCalldata = Base64.decode(encodedReattestCalldata);
+
+        (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
+        assertTrue(reattestSuccess, string(reattestResult));
+    }
 }

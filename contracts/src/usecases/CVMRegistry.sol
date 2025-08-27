@@ -88,11 +88,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         }
 
         // Step 3: Get the measurement
-        measurements = Measurement({
-            pcrs: tpmAttestation.toFinalMeasurement(wc.pcrs),
-            tdx: teeVerifiedData.tdx,
-            snp: teeVerifiedData.snp
-        });
+        measurements = workloadVerifier.getMeasurement(teeVerifiedData, wc.pcrs);
 
         // Step 4: Register the identity
         uint64 currentTimestamp = uint64(block.timestamp);
