@@ -3,16 +3,18 @@
 pragma solidity ^0.8.15;
 
 import {MeasureablePcr, Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {Pubkey} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
 import {WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
 import "./LibBytes.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";
 
 using LibBytes for bytes;
 using LibBytes for bytes32;
-using LibTEE for GoldenMeasurement global;
+using LibTEE for Measurement global;
 using LibTEE for TEEType global;
 using LibTEE for CloudType global;
+using LibTEE for TdxMeasurement global;
+using LibTEE for SnpMeasurement global;
 
 enum TEEType {
     Mock,
@@ -38,7 +40,7 @@ struct ZkProof {
     bytes proofBytes;
 }
 
-struct GoldenMeasurement {
+struct Measurement {
     Pcr[] pcrs;
     TdxMeasurement tdx;
     SnpMeasurement snp;
@@ -51,7 +53,7 @@ struct TEEVerifiedData {
     // TDX: UUID
     // SNP: sev-snp.report_id
     bytes32 reportID;
-    CertPubkey akPub; // verified akPub
+    Pubkey akPub; // verified akPub
     TdxMeasurement tdx;
     SnpMeasurement snp;
 }
@@ -79,7 +81,7 @@ library LibTEE {
         bool verified;
 
         for (uint256 i = 0; i < len; i++) {
-            if (wc.pcrs[i].index == 16) {
+            if (wc.pcrs[i].index == 15) {
                 if (teeData.reportID == bytes32(0)) {
                     // non-snp
                     if (wc.pcrs[i].pcr == bytes32(0)) {
@@ -105,7 +107,7 @@ library LibTEE {
                         verified = true;
                         break;
                     }
-                    if (wc.reportId.length != 32 || wc.reportId.readBytes32(0) != teeData.reportID) {
+                    if (wc.reportId.length > 0 && wc.reportId.readBytes32(0) != teeData.reportID) {
                         break;
                     }
                     bytes32 expectedPcr = sha256(abi.encodePacked(new bytes(32), teeData.reportID));
@@ -130,6 +132,15 @@ library LibTEE {
         return data;
     }
 
+    function isEmpty(TdxMeasurement memory tdx) internal pure returns (bool) {
+        return tdx.mrtd.isZero() && tdx.mrseam.isZero() && tdx.rtmr0.isZero() && tdx.rtmr1.isZero()
+            && tdx.rtmr2.isZero() && tdx.rtmr3.isZero();
+    }
+
+    function isEmpty(SnpMeasurement memory snp) internal pure returns (bool) {
+        return snp.measurement.isZero();
+    }
+
     function tdxOutput(bytes memory output) internal pure returns (TEEVerifiedData memory data) {
         uint16 quoteBodyType = uint16(bytes2(output.readBytes2(2)));
         if (quoteBodyType == 1) {
@@ -148,7 +159,7 @@ library LibTEE {
         return data;
     }
 
-    function digest(GoldenMeasurement memory gm) internal pure returns (bytes32) {
+    function digest(Measurement memory gm) internal pure returns (bytes32) {
         return keccak256(abi.encode(gm));
     }
 }

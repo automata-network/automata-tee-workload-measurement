@@ -7,7 +7,7 @@ import {console} from "forge-std/console.sol";
 import {DeploymentConfig} from "../utils/DeploymentConfig.sol";
 import "../utils/Salt.sol";
 
-import {CVMVerifier} from "../../src/usecases/CVMVerifier.sol";
+import {CVMRegistry} from "../../src/usecases/CVMRegistry.sol";
 
 contract DeployCVM is DeploymentConfig {
     address owner = vm.envAddress("OWNER");
@@ -20,49 +20,48 @@ contract DeployCVM is DeploymentConfig {
     }
 
     function run() public broadcast {
-        deployCvmVerifier();
+        deployCVMRegistry();
     }
 
-    function deployCvmVerifierImpl() public broadcast returns (address implAddress) {
-        // deploy the CVMVerifier implementation
-        CVMVerifier cvmVerifier = new CVMVerifier{salt: CVM_VERIFIER_IMPL_SALT}();
-        implAddress = address(cvmVerifier);
+    function deployCVMRegistryImpl() public broadcast returns (address implAddress) {
+        // deploy the CVMRegistry implementation
+        CVMRegistry registry = new CVMRegistry{salt: CVM_REGISTRY_IMPL_SALT}(workloadVerifier);
+        implAddress = address(registry);
 
-        console.log("CVMVerifier implementation deployed at:", implAddress);
+        console.log("CVMRegistry implementation deployed at:", implAddress);
 
         // write the implementation address to JSON
-        writeToJson("CVMVerifierImpl", implAddress);
+        writeToJson("CVMRegistryImpl", implAddress);
     }
 
-    function deployCvmVerifier() public broadcast {
-        // deploy the CVMVerifier implementation
-        address implAddress = deployCvmVerifierImpl();
+    function deployCVMRegistry() public broadcast {
+        // deploy the CVMRegistry implementation
+        address implAddress = deployCVMRegistryImpl();
 
-        // deploy the CVMVerifier proxy
-        ERC1967Proxy cvmVerifierProxy = new ERC1967Proxy{salt: CVM_VERIFIER_PROXY_SALT}(
-            implAddress,
-            abi.encodeWithSelector(CVMVerifier.initialize.selector, owner, workloadVerifier)
+        // deploy the CVMRegistry proxy
+        ERC1967Proxy CVMRegistryProxy = new ERC1967Proxy{salt: CVM_REGISTRY_PROXY_SALT}(
+            implAddress, abi.encodeWithSelector(CVMRegistry.initialize.selector, owner)
         );
-        address proxyAddress = address(cvmVerifierProxy);
+        address proxyAddress = address(CVMRegistryProxy);
 
-        console.log("CVMVerifier proxy deployed at:", proxyAddress);
+        console.log("CVMRegistry proxy deployed at:", proxyAddress);
 
         // write the proxy address to JSON
-        writeToJson("CVMVerifierProxy", proxyAddress);
+        writeToJson("CVMRegistryProxy", proxyAddress);
     }
 
-    function upgradeCvmVerifier(address newImpl, bytes memory data) public broadcast {
+    function upgradeCVMRegistry(address newImpl, bytes memory data) public broadcast {
         // Check if the proxy exists
-        CVMVerifier cvmVerifierProxy = CVMVerifier(payable(readContractAddress("CVMVerifierProxy")));
+        CVMRegistry CVMRegistryProxy = CVMRegistry(payable(readContractAddress("CVMRegistryProxy")));
 
         // deploy the new implementation
         if (newImpl == address(0)) {
-            newImpl = deployCvmVerifierImpl();
+            newImpl = deployCVMRegistryImpl();
         }
 
         // upgrade the proxy to the new implementation
-        cvmVerifierProxy.upgradeToAndCall(newImpl, data);
+        CVMRegistryProxy.upgradeToAndCall(newImpl, data);
 
-        console.log("CVMVerifier upgraded to new implementation at:", newImpl);
+        console.log("CVMRegistry upgraded to new implementation at:", newImpl);
     }
 }

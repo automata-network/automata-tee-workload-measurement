@@ -5,8 +5,8 @@ import {Test} from "forge-std/Test.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
-import {MockAutomataDcapAttestation} from "../mock/MockAutomataDcapAttestation.sol";
-import {MockAutomataSnpAttestation} from "../mock/MockAutomataSnpAttestation.sol";
+import {MockAutomataDcapAttestation} from "../../src/mock/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "../../src/mock/MockAutomataSnpAttestation.sol";
 import {WorkloadVerifier} from "../../src/WorkloadVerifier.sol";
 
 abstract contract TestSetup is Test {
