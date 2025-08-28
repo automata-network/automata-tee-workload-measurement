@@ -6,7 +6,7 @@ TEE Onchain Workload Measurement implementation can be found [`WorkloadVerifier.
 
 1. [Automata DCAP Attestation](https://github.com/automata-network/automata-dcap-attestation/tree/main/evm) to verify Intel TDX quotes
 2. [Automata SEV-SNP Attestation](https://github.com/automata-network/amd-sev-snp-attestation-sdk/tree/main/zk/contracts) to verify AMD SEV SNP attestation reports.
-3. [Automata TPM Attestation](https://github.com/automata-network/automata-tpm-attestation) to verify TPM quote, checking PCR measurements and user provided data.
+3. [Automata TPM Attestation](https://github.com/automata-network/automata-tpm-attestation) to verify TPM quote, checking PCR measurements and extract the user provided data.
 
 ---
 
@@ -74,23 +74,28 @@ contract MyContract {
     }
     
     function verifyWorkload(
-        bytes32 userDataHash,
         TEEType teeType,
         TeeReportType teeReportType,
         CloudType cloudType,
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata workloadCollaterals
-    ) external payable returns (Measurement memory measurement) {
-        measurement = workloadVerifier.verifyAttestation(
-            userDataHash,
-            teeType,
-            teeReportType,
-            cloudType,
-            teeAttestationReport,
-            workloadCollaterals
-        );
+    ) external payable {
+        bytes memory teeOutput;
+        bytes32 measurementHash;
+        bytes memory tpmExtraData;
+        (teeOutput, measurementHash, tpmExtraData) 
+            = workloadVerifier.verifyAttestationAndGetMeasurementHash(
+                teeType,
+                teeReportType,
+                cloudType,
+                teeAttestationReport,
+                workloadCollaterals
+            );
         
-        // implement additional checks on the measured values
+        // application developers can perform the following at this point:
+        // - validate the teeOutput, such as checking the TCB Status, extracting the TEE Report
+        // - check whether the meeasurement hash matches an application-specific golden measurement hash
+        // - validate TPM extra data, e.g. replay protection
     }
 }
 ```
@@ -145,27 +150,33 @@ The interface provides access to underlying attestation contracts:
 
 ## API Reference
 
-### Core Interface
+All methods shown below can be called to perform verification on your CVM workload. The choice of each method is dependent on the type of return data you may need for post verification.
 
-#### `verifyAttestation`
+### `verifyAttestation`
 
 ```solidity
 function verifyAttestation(
-    bytes32 _userDataHash,
     TEEType teeType,
     TeeReportType teeReportType,
     CloudType cloudType,
     bytes calldata _teeAttestationReport,
     WorkloadCollaterals calldata _workloadReport
-) external payable returns (Measurement);
+)
+    external
+    payable
+    returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData);
 ```
 
-Verifies the integrity of a CVM workload and returns the Golden Measurement. 
+This method returns data that can be trusted, given all values have been validated by the TEE.
 
-Alternatively, you may opt for calling the `verifyAttestationHash` method if your use case doesn't require reading the entire Golden Measurement object. Saving gas cost from memory reads.
+Use this method if you need the following:
+- TEE Measurements, which in turn can be converted to the Workload final measurement values by calling the `getMeasurement()` method.
+- The Report ID value that binds the TPM to the TEE.
+- The TPM Attestation Key used to sign the TPM Quote.
+
+Alternatively, you may opt for calling either the `verifyAttestationAndGetMeasurement` or `verifyAttestationAndGetMeasurementHash` method if your use case simply require the Workload measurement values. Saving gas cost from memory reads.
 
 **Parameters:**
-- `_userDataHash`: The hash of the user data to be verified
 - `teeType`: The TEE technology used (`IntelTdx` or `AmdSevSnp`)
 - `teeReportType`: The report verification method (`Solidity` for onchain or `ZkRiscZero`/`ZkSp1` for ZK proofs)
 - `cloudType`: The cloud provider (`Azure` or `Gcp`)
@@ -173,27 +184,47 @@ Alternatively, you may opt for calling the `verifyAttestationHash` method if you
 - `_workloadReport`: Additional verification data (see WorkloadCollaterals below)
 
 **Returns:**
-- `Measurement`: The final Measurement object
+- `teeOutput`: The output returned by the TEE Verifier contract
+- `TEEVerifiedData`: A struct consists of trusted values that are validated by the TEE
+- `tpmExtraData`: User provided data
 
-#### `verifyAttestationHash`
+### `verifyAttestationAndGetMeasurement`
 
 ```solidity
-function verifyAttestationHash(
-    bytes32 _userDataHash,
+function verifyAttestationAndGetMeasurement(
     TEEType teeType,
     TeeReportType teeReportType,
     CloudType cloudType,
     bytes calldata _teeAttestationReport,
     WorkloadCollaterals calldata _workloadReport
-) external payable returns (bytes32);
+) external payable returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
 ```
 
 **Returns:**
-- `bytes32`: The golden measurement hash representing the verified workload
+- `teeOutput`: The output returned by the TEE Verifier contract
+- `Measurement`: The final Measurement object
+- `tpmExtraData`: User provided data
+
+### `verifyAttestationAndGetMeasurementHash`
+
+```solidity
+function verifyAttestationAndGetMeasurementHash(
+    TEEType teeType,
+    TeeReportType teeReportType,
+    CloudType cloudType,
+    bytes calldata _teeAttestationReport,
+    WorkloadCollaterals calldata _workloadReport
+) external payable returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
+```
+
+**Returns:**
+- `teeOutput`: The output returned by the TEE Verifier contract
+- `measurementHash`: The measurement hash representing the verified workload
+- `tpmExtraData`: User provided data
 
 ---
 
-### Golden Measurement
+## Golden Measurement
 
 The golden measurement or its hash is a proof of workload integrity that represents:
 
@@ -209,34 +240,16 @@ The golden measurement or its hash is a proof of workload integrity that represe
 4. **Access Control**: Gate access to sensitive operations based on verified workload measurements
 5. **Reputation Systems**: Build reputation scores based on consistently verified workload behavior
 
-**Example Usage:**
-
-```solidity
-// Store expected measurement for a trusted workload
-bytes32 public goldenMeasurementHash = 0x123...;
-
-function verifyTrustedWorkload(/* parameters */) external {
-    bytes32 measurementHash = workloadVerifier.verifyAttestationHash(/* args */);
-    
-    require(measurementHash == goldenMeasurementHash, "Untrusted workload");
-    
-    // Proceed with trusted operations
-    _executeSensitiveOperation();
-}
-```
-
----
-
 ## Gas Benchmark
 
 The table below shows our initial finding on gas costs to measure CVMs with various TEEs hosted on Azure and GCP.
 
-|  | TEE Report Verification Gas Cost | AK Pubkey Verification Gas Cost | TPM Signature Verification Gas Cost | PCRs and User Data Matching Gas Cost | Report ID Binding Check Gas Cost | Golden Measurement Hashing Gas Cost |
+|  | TEE Report Verification Gas Cost | AK Pubkey Verification Gas Cost | TPM Signature Verification Gas Cost | PCR Measurement Check Gas Cost | Report ID Binding Check Gas Cost | Measurement Computation Gas Cost |
 | --- | --- | --- | --- | --- | --- | --- |
-| Azure TDX | ~5M[^1] gas (Onchain DCAP) | 49k[^2] gas | 37k gas (RSA) | 10k gas | 3k gas | 13k gas |
-| Azure AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 49k[^2] gas | 37k gas (RSA) | 10k gas | 3k gas | 13k gas |
-| GCP TDX | ~5M[^1] gas (Onchain DCAP) | 384k[^4] gas | 335k[^1] gas (secp256r1) | 10k gas | 482k[^5] gas | 26k gas |
-| GCP AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 384k[^4] gas | 335k[^1] gas (secp256r1) | 19k gas | 5k gas | 25k gas |
+| Azure TDX | ~5M[^1] gas (Onchain DCAP) | 50k[^2] gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
+| Azure AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 50k[^2] gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
+| GCP TDX | ~5M[^1] gas (Onchain DCAP) | 397k[^1][^4] gas | 339k[^1] gas (secp256r1) | 16k gas | 385k[^5] gas | 82k gas |
+| GCP AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 397k[^1][^4] gas | 339k[^1] gas (secp256r1) | 16k gas | 5k gas | 82k gas |
 
 ### Remark:
 
@@ -246,6 +259,6 @@ The table below shows our initial finding on gas costs to measure CVMs with vari
 
 [^3]: AMD-SEV-SNP attestation report currently can only be verified onchain using SNARK proofs. The proof provided in our test is generated by a [RiscZero Guest Program](https://github.com/automata-network/amd-sev-snp-attestation-sdk/tree/v2/crates/risc0-methods/risc0-verifier) that was executed in RiscZero v2.2 zkVM.
 
-[^4]: CVMs on GCP must provide the TPM AK Certificate Chain to the Workload Verifier to extract the TPM AK Key.
+[^4]: CVMs on GCP must provide the TPM AK Certificate Chain to the Workload Verifier to extract the TPM AK Key. Upon successful verification of the chain, the TPM Attestation contract caches intermediate certificates, which could reduce gas costs for future verifications.
 
 [^5]: Upon spawning a TDX CVM instance on GCP, a UUID is generated and stored in `rtmr3` of the TD module as `sha384(0x00 || sha384(UUID))`. Computing `sha384` onchain without a precompile is expensive.

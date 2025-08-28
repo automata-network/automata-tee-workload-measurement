@@ -12,28 +12,27 @@ Ideally, the goal of this project is to be platform agnostic, covering as wide r
 
 ```mermaid
 sequenceDiagram
-    actor U as User
+    participant A as Application Contracts
     participant W as Workload Verifier
     participant TEE as TEE Onchain Attestation
     participant TPM as TPM Attestation
 
-    U->>W: 1. TEE Attestation Report, Workload Collateral
+    A->>W: 1. TEE Attestation Report, Workload Collateral
     W->>TEE: 2. TEE Attestation Report
     TEE-->>W: TEE Verification Status and Output
     W->>TPM: 3. Workload Collateral
     opt GCP
         TPM-->>TPM: Extracts and verifies the AK Pubkey from a list of trusted CAs
     end
-    TPM->>TPM: 4. Checks the user data
-    TPM->>TPM: 5. Checks PCR Digest
-    TPM-->>W: TPM quote has been successfully verified
-    W->>W: 6. Verifies the report ID to check binding between TEE and TPM
-    W->>W: 7. Generates the measurement structure, encapsulating the TEE Report content and measured PCR values.
-    W->>U: 8. Returns the hash of the measurement
+    TPM->>TPM: 4. Checks PCR Digest
+    TPM-->>W: TPM quote has been successfully verified and returns `extraData` value to the caller.
+    W->>W: 5. Verifies the report ID to check binding between TEE and TPM
+    W->>W: 6. Generates the measurement structure, encapsulating the TEE Report content and measured PCR values.
+    W->>A: 7. Returns the hash of the measurement and TPM `extraData` value.
 
 ```
 
-1. The user submits data hash, TEE Attestation Report, and the workload collateral to the `WorkloadVerifier.sol` contract. Workload collateral is a collection of data, consisting the TPM quote, TPM Signature, TPM Attestation Key (or AK certificate chain) and an array of PCR measurement.
+1. The application submits the TEE Attestation Report, and the workload collateral to the `WorkloadVerifier.sol` contract. Workload collateral is a collection of data, consisting the TPM quote, TPM Signature, TPM Attestation Key (or AK certificate chain) and an array of PCR measurement.
 
 2. TEE Attestation Report verification shows that the CVM is running in a TEE provided by genuine hardware.
     
@@ -43,19 +42,17 @@ sequenceDiagram
     
     > a. If TPM Attestation Key were not checked in *step 2(a)*, the key is extracted from the leaf of the AK Certificate Chain, which must be checked for valid root of trust.
 
-4. The `extraData` value in the TPM quote is extracted, which must equal the hash of the user's expected data (`userDataHash`).
+4. The list of PCR indices provided in the collateral must match with the PCR selection bitmap in the TPM quote; the hash chain of PCR measurement values yields a value that must match the PCR digest value in the TPM quote.
 
-5. The list of PCR indices provided in the collateral must match with the PCR selection bitmap in the TPM quote; the hash chain of PCR measurement values yields a value that must match the PCR digest value in the TPM quote.
-
-6. The provided Report ID must be found in both TEE Attestation Report and PCR 16 of the TPM. This step indicates the binding between TEE and TPM.
+5. The provided Report ID must be found in both TEE Attestation Report and PCR 16 of the TPM. This step indicates the binding between TEE and TPM.
     
     > a. The only exception to this rule applies to Azure TDX CVM. As stated in *2(a)*, the report data provides us with information about the AK that signs the TPM quote, which is already verified in *step 3*.
 
-7. Generates the `Measurement` object. A data structure containing the content of the TEE Report and an array of measured PCRs. Each PCR may contain a deterministic PCR value and/or a list of event logs that the workload produces.
+6. Generates the `Measurement` object. A data structure containing the content of the TEE Report and an array of measured PCRs. Each PCR may contain a deterministic PCR value and/or a list of event logs that the workload produces.
 
     > a. External contracts may retrieve the Golden Measurement instead of the hash, if developers intend to perform additional checks on the measurement values.
 
-8. Optionally, computes the measurement hash, which is a holistic representation of the state of the CVM. Developers can provide a reference measurement as a policy that CVM workloads must comply, also known as the **Golden Measurement** value.
+7. Optionally, computes the measurement hash, which is a holistic representation of the state of the CVM. Application developers can provide a reference measurement as a policy that CVM workloads must comply, also known as the **Golden Measurement** value. Developers should also check for the correctness of TPM `extraData` value.
 
 ## Deployment Info
 
