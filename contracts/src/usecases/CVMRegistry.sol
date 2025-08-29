@@ -142,8 +142,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
         // Step 4: Get the final measurement
         TEEVerifiedData memory teeData = workloadVerifier.parseTeeOutput(config.teeType, config.teeAttestationOutput);
-        measurements =
-            Measurement({pcrs: tpmAttestation.toFinalMeasurement(wc.pcrs), tdx: teeData.tdx, snp: teeData.snp});
+        measurements = workloadVerifier.getMeasurement(teeData, wc.pcrs);
 
         // Step 5: If Extra Data contains a different identity hash from the current CVM Identity
         // that means a key rotation is occurring, check whether it matches with the new identity
@@ -287,9 +286,10 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         newConfig.teeTTL = oldConfig.teeTTL;
         newConfig.tpmTTL = oldConfig.tpmTTL;
         newConfig.teeRecentTimestamp = oldConfig.teeRecentTimestamp;
-        newConfig.teeAttestationOutput = oldConfig.teeAttestationOutput;
-        newConfig.cvmIdentity = newCvmIdentity;
         newConfig.tpmRecentTimestamp = tpmRecentTimestamp;
+        newConfig.teeAttestationOutput = oldConfig.teeAttestationOutput;
+        newConfig.tpmAk = oldConfig.tpmAk;
+        newConfig.cvmIdentity = newCvmIdentity;
         newConfig.measurementHash = measurementHash;
 
         delete _configs[oldCvmIdentityHash];
