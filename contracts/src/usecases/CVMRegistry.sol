@@ -174,6 +174,18 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
     {
         CVMConfig storage config = _configs[cvmIdentityHash];
 
+        // Check collateral validity first to save gas on signature verification
+        // This prevents extending TTL after collaterals have already expired
+        bool teeValid = (block.timestamp - config.teeRecentTimestamp) < config.teeTTL;
+        bool tpmValid = (block.timestamp - config.tpmRecentTimestamp) < config.tpmTTL;
+        
+        if (!teeValid) {
+            revert TEE_COLLATERAL_EXPIRED();
+        }
+        if (!tpmValid) {
+            revert TPM_COLLATERAL_EXPIRED();
+        }
+
         // Verify the signature against CVM Identity
         Pubkey memory cvmIdentity = config.cvmIdentity;
         if (cvmIdentity.hashAlgo != TPM_ALG_SHA256) {

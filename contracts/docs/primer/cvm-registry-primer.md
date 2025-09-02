@@ -165,10 +165,11 @@ Severity legend: High / Medium / Low / Informational
    - Previously omission risked failed future TPM quote verifications post-rotation.  
    - Fix merged: preserves continuous attestation capability across identity rotations.
 
-3. Medium: TTL Change Does Not Enforce Current Freshness  
-   - Comment: `sig + TEE and TPM validity` but function only checks signature.  
-   - Potential for extending TTL after collateral already expired.  
-   - Fix: Require `checkTEEValidity` and `checkTPMValidity` true before update, or bound how far timestamps can lag.
+3. Medium (RESOLVED): TTL Change Does Not Enforce Current Freshness  
+   - Previously comment stated `sig + TEE and TPM validity` but function only checked signature.  
+   - Fix merged: Added validation that both TEE and TPM collaterals are still valid before signature verification (gas-optimized ordering).  
+   - Uses custom errors `TEE_COLLATERAL_EXPIRED()` and `TPM_COLLATERAL_EXPIRED()` to indicate which specific collateral has expired.  
+   - Prevents extending TTL after collaterals have already expired, saving gas costs by checking validity before expensive signature verification.
 
 4. Medium: Unbounded TTL Inputs  
    - Accepts zero (permanent invalidity) or excessively large values (stale acceptance risk).  
@@ -183,9 +184,10 @@ Severity legend: High / Medium / Low / Informational
    - Rotation resets nonce to 0 for new identity; acceptable but should be explicit.  
    - Document to avoid mistaken reliance on continuity.
 
-7. Low: `_parseIdentityFromTpmData` Missing Explicit Length Check  
-   - If `tpmExtraData.length < 33`, internal `substring` reverts with generic error instead of custom `INVALID_TPM_DATA_LENGTH`.  
-   - Fix: Add `require(tpmExtraData.length >= 33, "INVALID_TPM_DATA_LENGTH");`.
+7. Low (RESOLVED): `_parseIdentityFromTpmData` Missing Explicit Length Check  
+   - Previously if `tpmExtraData.length < 33`, internal `substring` would revert with generic error.  
+   - Fix merged: Added explicit length validation `if (tpmExtraData.length < TPM_DATA_MIN_LENGTH || tpmExtraData.length > TPM_DATA_MAX_LENGTH)` with custom `INVALID_TPM_DATA_LENGTH` error.  
+   - Now properly validates TPM extra data is between 33 and 50 bytes.
 
 8. Low: No Revocation Mechanism  
    - Cannot explicitly deactivate an identity before TTL expiry.  
@@ -210,10 +212,10 @@ Severity legend: High / Medium / Low / Informational
 |---------|--------|
 | 1 | Implemented: `reattestCvmWithTpm` uses `getMeasurement` (normalization applied). |
 | 2 | Implemented: `_rotateCvmIdentity` now copies `tpmAk`. |
-| 3 | Enforce freshness in `setCollateralTTL`. |
+| 3 | Implemented: Added collateral validity checks before signature verification in `setCollateralTTL`. |
 | 4 | Add bounds: e.g. `1 day ≤ TTL ≤ 90 days`. |
 | 5 | Revert on mismatched `cloudType` / `teeType` during existing registration. |
-| 7 | Add explicit min length check in `_parseIdentityFromTpmData`. |
+| 7 | Implemented: Added explicit length check (33-50 bytes) in `_parseIdentityFromTpmData`. |
 | 8 | Optional `revokeCvm()` + `CVMRevoked` event. |
 | 11 | Add dedicated rotation event. |
 
