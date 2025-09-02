@@ -19,7 +19,9 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
     IWorkloadVerifier public immutable workloadVerifier;
     ITpmAttestation public immutable tpmAttestation;
-
+    
+    // consists of (uint8 magic_prefix || bytes32 cvmIdentityHash)
+    uint8 constant TPM_DATA_MIN_LENGTH = 33;
     // min CSP limitations (Azure: 50 bytes; GCP: 64 bytes; AWS: 66 bytes)
     uint8 constant TPM_DATA_MAX_LENGTH = 50;
     /// The default TTL (in seconds) for TEE Reports (30 days, tentative)
@@ -264,7 +266,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
     /// @dev the TPM data consists of
     /// uint8 magic_prefix || bytes32 cvmIdentityHash || bytes nonce
     function _parseIdentityFromTpmData(bytes memory tpmExtraData) private pure returns (bytes32 cvmIdentityHash) {
-        if (tpmExtraData.length > TPM_DATA_MAX_LENGTH) {
+        if (tpmExtraData.length < TPM_DATA_MIN_LENGTH || tpmExtraData.length > TPM_DATA_MAX_LENGTH) {
             revert INVALID_TPM_DATA_LENGTH();
         }
         cvmIdentityHash = bytes32(tpmExtraData.substring(1, 32));
