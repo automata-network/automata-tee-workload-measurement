@@ -28,6 +28,8 @@ interface ICVMRegistry {
     error INVALID_TPM_QUOTE(string err);
     error INVALID_TPM_MEASUREMENT(string err);
     error TPM_AK_MISMATCH(bytes32 expected, bytes32 actual);
+    error TEE_COLLATERAL_EXPIRED();
+    error TPM_COLLATERAL_EXPIRED();
 
     event CVMUpdated(bytes32 indexed cvmIdentityHash);
     event CVMTTLUpdated(bytes32 indexed cvmIdentityHash);

@@ -2,11 +2,12 @@
 cache/
 out/
 
-# Ignores broadcast logs
+# Ignores development broadcast logs
 /broadcast
-
-# Docs
-docs/
+/deployment/31337.json
 
 # Dotenv file
 .env
+
+# Deployment Keys
+keystore/

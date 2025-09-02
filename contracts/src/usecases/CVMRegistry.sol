@@ -19,7 +19,9 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
     IWorkloadVerifier public immutable workloadVerifier;
     ITpmAttestation public immutable tpmAttestation;
-
+    
+    // consists of (uint8 magic_prefix || bytes32 cvmIdentityHash)
+    uint8 constant TPM_DATA_MIN_LENGTH = 33;
     // min CSP limitations (Azure: 50 bytes; GCP: 64 bytes; AWS: 66 bytes)
     uint8 constant TPM_DATA_MAX_LENGTH = 50;
     /// The default TTL (in seconds) for TEE Reports (30 days, tentative)
@@ -142,8 +144,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
         // Step 4: Get the final measurement
         TEEVerifiedData memory teeData = workloadVerifier.parseTeeOutput(config.teeType, config.teeAttestationOutput);
-        measurements =
-            Measurement({pcrs: tpmAttestation.toFinalMeasurement(wc.pcrs), tdx: teeData.tdx, snp: teeData.snp});
+        measurements = workloadVerifier.getMeasurement(teeData, wc.pcrs);
 
         // Step 5: If Extra Data contains a different identity hash from the current CVM Identity
         // that means a key rotation is occurring, check whether it matches with the new identity
@@ -172,6 +173,18 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         onlyRegistered(cvmIdentityHash)
     {
         CVMConfig storage config = _configs[cvmIdentityHash];
+
+        // Check collateral validity first to save gas on signature verification
+        // This prevents extending TTL after collaterals have already expired
+        bool teeValid = (block.timestamp - config.teeRecentTimestamp) < config.teeTTL;
+        bool tpmValid = (block.timestamp - config.tpmRecentTimestamp) < config.tpmTTL;
+        
+        if (!teeValid) {
+            revert TEE_COLLATERAL_EXPIRED();
+        }
+        if (!tpmValid) {
+            revert TPM_COLLATERAL_EXPIRED();
+        }
 
         // Verify the signature against CVM Identity
         Pubkey memory cvmIdentity = config.cvmIdentity;
@@ -265,7 +278,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
     /// @dev the TPM data consists of
     /// uint8 magic_prefix || bytes32 cvmIdentityHash || bytes nonce
     function _parseIdentityFromTpmData(bytes memory tpmExtraData) private pure returns (bytes32 cvmIdentityHash) {
-        if (tpmExtraData.length > TPM_DATA_MAX_LENGTH) {
+        if (tpmExtraData.length < TPM_DATA_MIN_LENGTH || tpmExtraData.length > TPM_DATA_MAX_LENGTH) {
             revert INVALID_TPM_DATA_LENGTH();
         }
         cvmIdentityHash = bytes32(tpmExtraData.substring(1, 32));
@@ -287,9 +300,10 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         newConfig.teeTTL = oldConfig.teeTTL;
         newConfig.tpmTTL = oldConfig.tpmTTL;
         newConfig.teeRecentTimestamp = oldConfig.teeRecentTimestamp;
-        newConfig.teeAttestationOutput = oldConfig.teeAttestationOutput;
-        newConfig.cvmIdentity = newCvmIdentity;
         newConfig.tpmRecentTimestamp = tpmRecentTimestamp;
+        newConfig.teeAttestationOutput = oldConfig.teeAttestationOutput;
+        newConfig.tpmAk = oldConfig.tpmAk;
+        newConfig.cvmIdentity = newCvmIdentity;
         newConfig.measurementHash = measurementHash;
 
         delete _configs[oldCvmIdentityHash];
