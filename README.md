@@ -56,7 +56,17 @@ sequenceDiagram
 
 ## Deployment Info
 
-TBD
+### Workload Verifier
+
+| Network | Contract Address |
+| --- | --- |
+| Automata Testnet | [0xDb99cc64cb856EB388DAca7B89aee9e844f63aFd](https://explorer-testnet.ata.network/address/0xDb99cc64cb856EB388DAca7B89aee9e844f63aFd) |
+
+### CVM Registry
+
+| Network | Contract Address |
+| --- | --- |
+| Automata Testnet | [0x262eAcF7DC665a6dc416AdDB45a4dB5F1e79aF38](https://explorer-testnet.ata.network/address/0x262eAcF7DC665a6dc416AdDB45a4dB5F1e79aF38) |
 
 ## Licensing
 
