@@ -13,18 +13,13 @@ contract DeployCVM is DeploymentConfig {
     address owner = vm.envAddress("OWNER");
     address workloadVerifier = readContractAddress("WorkloadVerifierProxy");
 
-    modifier broadcast() {
-        vm.startBroadcast(owner);
-        _;
-        vm.stopBroadcast();
-    }
-
-    function run() public broadcast {
+    function run() public {
         deployCVMRegistry();
     }
 
-    function deployCVMRegistryImpl() public broadcast returns (address implAddress) {
+    function deployCVMRegistryImpl() public returns (address implAddress) {
         // deploy the CVMRegistry implementation
+        vm.broadcast(owner);
         CVMRegistry registry = new CVMRegistry{salt: CVM_REGISTRY_IMPL_SALT}(workloadVerifier);
         implAddress = address(registry);
 
@@ -34,11 +29,12 @@ contract DeployCVM is DeploymentConfig {
         writeToJson("CVMRegistryImpl", implAddress);
     }
 
-    function deployCVMRegistry() public broadcast {
+    function deployCVMRegistry() public {
         // deploy the CVMRegistry implementation
         address implAddress = deployCVMRegistryImpl();
 
         // deploy the CVMRegistry proxy
+        vm.broadcast(owner);
         ERC1967Proxy CVMRegistryProxy = new ERC1967Proxy{salt: CVM_REGISTRY_PROXY_SALT}(
             implAddress, abi.encodeWithSelector(CVMRegistry.initialize.selector, owner)
         );
@@ -50,7 +46,7 @@ contract DeployCVM is DeploymentConfig {
         writeToJson("CVMRegistryProxy", proxyAddress);
     }
 
-    function upgradeCVMRegistry(address newImpl, bytes memory data) public broadcast {
+    function upgradeCVMRegistry(address newImpl, bytes memory data) public {
         // Check if the proxy exists
         CVMRegistry CVMRegistryProxy = CVMRegistry(payable(readContractAddress("CVMRegistryProxy")));
 
@@ -60,6 +56,7 @@ contract DeployCVM is DeploymentConfig {
         }
 
         // upgrade the proxy to the new implementation
+        vm.broadcast(owner);
         CVMRegistryProxy.upgradeToAndCall(newImpl, data);
 
         console.log("CVMRegistry upgraded to new implementation at:", newImpl);

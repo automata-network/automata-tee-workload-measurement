@@ -16,22 +16,13 @@ contract Deploy is DeploymentConfig {
     address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
     bool locked = false;
 
-    modifier broadcast() {
-        if (!locked) {
-            locked = true;
-            vm.startBroadcast(owner);
-            _;
-            vm.stopBroadcast();
-            locked = false;
-        }
-    }
-
-    function run() public broadcast {
+    function run() public {
         deployWorkloadVerifier(false); // Set allowMockAttestation to false by default
     }
 
-    function deployWorkloadVerifierImpl() public broadcast returns (address implAddress) {
+    function deployWorkloadVerifierImpl() public returns (address implAddress) {
         // deploy the WorkloadVerifier implementation
+        vm.broadcast(owner);
         WorkloadVerifier workloadVerifier = new WorkloadVerifier{salt: WORKLOAD_VERIFIER_IMPL_SALT}();
         implAddress = address(workloadVerifier);
 
@@ -41,11 +32,12 @@ contract Deploy is DeploymentConfig {
         writeToJson("WorkloadVerifierImpl", implAddress);
     }
 
-    function deployWorkloadVerifier(bool allowMockAttestation) public broadcast {
+    function deployWorkloadVerifier(bool allowMockAttestation) public {
         // deploy the WorkloadVerifier implementation
         address implAddress = deployWorkloadVerifierImpl();
 
         // deploy the WorkloadVerifier proxy
+        vm.broadcast(owner);
         ERC1967Proxy workloadVerifierProxy = new ERC1967Proxy{salt: WORKLOAD_VERIFIER_PROXY_SALT}(
             implAddress,
             abi.encodeWithSelector(
@@ -64,7 +56,7 @@ contract Deploy is DeploymentConfig {
         writeToJson("WorkloadVerifierProxy", proxyAddress);
     }
 
-    function upgradeWorkloadVerifier(address newImpl, bytes calldata data) public broadcast {
+    function upgradeWorkloadVerifier(address newImpl, bytes calldata data) public {
         // First, check if the workload verifier proxy already exists
         WorkloadVerifier workloadVerifierProxy = WorkloadVerifier(payable(readContractAddress("WorkloadVerifierProxy")));
 
@@ -74,6 +66,7 @@ contract Deploy is DeploymentConfig {
         }
 
         // Upgrade the proxy to the new implementation
+        vm.broadcast(owner);
         workloadVerifierProxy.upgradeToAndCall(newImpl, data);
     }
 }
