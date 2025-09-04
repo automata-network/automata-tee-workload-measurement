@@ -18,6 +18,6 @@ abstract contract CVMSignature {
         virtual
         returns (bytes memory)
     {
-        return abi.encodePacked(bytes(prefix), uint16(block.chainid), address(this), userData);
+        return abi.encodePacked(bytes(prefix), block.chainid, address(this), userData);
     }
 }
