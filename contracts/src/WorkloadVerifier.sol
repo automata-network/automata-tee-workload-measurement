@@ -64,6 +64,15 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         __Ownable_init(initialOwner);
     }
 
+    function updateDependencies(address dcapAttestationAddr, address snpAttestationAddr, address tpmAttestationAddr)
+        external
+        onlyOwner
+    {
+        dcapAttestation = IDcapAttestation(dcapAttestationAddr);
+        snpAttestation = ISnpAttestation(snpAttestationAddr);
+        tpmAttestation = ITpmAttestation(tpmAttestationAddr);
+    }
+
     function verifyAttestation(
         TEEType teeType,
         TeeReportType teeReportType,

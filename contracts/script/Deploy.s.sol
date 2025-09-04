@@ -69,4 +69,13 @@ contract Deploy is DeploymentConfig {
         vm.broadcast(owner);
         workloadVerifierProxy.upgradeToAndCall(newImpl, data);
     }
+
+    function setWorkloadVerifierDependencies() public {
+        // First, check if the workload verifier proxy already exists
+        WorkloadVerifier workloadVerifierProxy = WorkloadVerifier(payable(readContractAddress("WorkloadVerifierProxy")));
+
+        // Set the new dependencies
+        vm.broadcast(owner);
+        workloadVerifierProxy.updateDependencies(dcapAttestationAddr, snpAttestationAddr, tpmAttestationAddr);
+    }
 }
