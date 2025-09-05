@@ -61,12 +61,14 @@ sequenceDiagram
 | Network | Contract Address |
 | --- | --- |
 | Automata Testnet | [0xDb99cc64cb856EB388DAca7B89aee9e844f63aFd](https://explorer-testnet.ata.network/address/0xDb99cc64cb856EB388DAca7B89aee9e844f63aFd) |
+| Sepolia Testnet | [0xa6DF41BCe5cA0352042E5a53f33c9C9226AD2119](https://sepolia.etherscan.io/address/0xa6DF41BCe5cA0352042E5a53f33c9C9226AD2119) |
 
 ### CVM Registry
 
 | Network | Contract Address |
 | --- | --- |
 | Automata Testnet | [0x262eAcF7DC665a6dc416AdDB45a4dB5F1e79aF38](https://explorer-testnet.ata.network/address/0x262eAcF7DC665a6dc416AdDB45a4dB5F1e79aF38) |
+| Sepolia Testnet | [0xE626f5503B455F775AA9845843B46033a26A635d](https://sepolia.etherscan.io/address/0xE626f5503B455F775AA9845843B46033a26A635d) |
 
 ## Licensing
 
