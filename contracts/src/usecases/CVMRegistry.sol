@@ -6,16 +6,18 @@ import {IWorkloadVerifier, WorkloadCollaterals} from "../interfaces/IWorkloadVer
 import {ICVMRegistry, CVMConfig} from "../interfaces/ICVMRegistry.sol";
 import {CVMSignature} from "./bases/CVMSignature.sol";
 import {CloudType, TEEType, TeeReportType, Measurement, TEEVerifiedData} from "../lib/LibTEE.sol";
-import {BytesUtils} from "../lib/BytesUtils.sol";
+import {BytesUtils} from "@automata-network/automata-tpm-attestation/lib/BytesUtils.sol";
 
-import {Pubkey, Crypto} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
-import {TPM_ALG_SHA256, TPM_ALG_ECDSA} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
+import {CertPubkey, SignatureAlgorithm, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {LibX509Verify} from "@automata-network/automata-tpm-attestation/lib/LibX509Verify.sol";
+import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
     using BytesUtils for bytes;
+    using LibX509Verify for CertPubkey;
 
     IWorkloadVerifier public immutable workloadVerifier;
     ITpmAttestation public immutable tpmAttestation;
@@ -112,16 +114,15 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         CVMConfig storage config = _configs[cvmIdentityHash];
 
         // Step 1: Verify the signature against the CVM identity
-        Pubkey memory cvmIdentity = config.cvmIdentity;
-        if (cvmIdentity.hashAlgo != TPM_ALG_SHA256) {
-            revert UNSUPPORTED_HASH_ALGORITHM(cvmIdentity.hashAlgo);
-        }
+        CertPubkey memory cvmIdentity = config.cvmIdentity;
         {
-            bytes memory message = abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote));
-            address verifier = cvmIdentity.sigScheme == TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
-
+            address verifier = cvmIdentity.algo == TPMConstants.TPM_ALG_ECC ? tpmAttestation.p256() : address(0);
             bool verified = cvmIdentity.verifySignature(
-                _generateMessageWithCustomPrefix("CVM_WORKLOAD_REATTEST_TPM", message), signature, verifier
+                SignatureAlgorithm({
+                scheme: TPMConstants.TPM_ALG_ECDSA,
+                hashAlgo: TPMConstants.TPM_ALG_SHA256
+            }),
+                _generateMessageWithCustomPrefix("CVM_WORKLOAD_REATTEST_TPM", abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote))), signature, verifier
             );
 
             if (!verified) {
@@ -131,7 +132,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
         // Step 2: Verify the TPM quote and measurement
         (bool tpmVerified, string memory err) =
-            tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, config.tpmAk);
+            tpmAttestation.verifyTpmQuoteWithTrustedAkPub(wc.tpmQuote, wc.tpmSignature, config.tpmAk);
         if (!tpmVerified) {
             revert INVALID_TPM_QUOTE(err);
         }
@@ -142,6 +143,8 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
             revert INVALID_TPM_MEASUREMENT(string(extraData));
         }
 
+        bytes32 cvmIdentityHash = cvmIdentityHash;
+
         // Step 4: Get the final measurement
         TEEVerifiedData memory teeData = workloadVerifier.parseTeeOutput(config.teeType, config.teeAttestationOutput);
         measurements = workloadVerifier.getMeasurement(teeData, wc.pcrs);
@@ -149,16 +152,17 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         // Step 5: If Extra Data contains a different identity hash from the current CVM Identity
         // that means a key rotation is occurring, check whether it matches with the new identity
         // provided as workload collateral
-        Pubkey memory wcIdentity = wc.cvmIdentity;
+        CertPubkey memory wcIdentity = wc.cvmIdentity;
         bytes32 wcIdentityHash = _computeCvmIdentityHash(wcIdentity);
         uint64 currentTimestamp = uint64(block.timestamp);
         if (wcIdentityHash != cvmIdentityHash) {
+            bytes32 digest = measurements.digest();
             // First, check TPM data matches with the new identity hash
             bytes32 tpmIdentityHash = _parseIdentityFromTpmData(extraData);
             if (tpmIdentityHash != wcIdentityHash) {
                 revert CVM_IDENTITY_MISMATCH(tpmIdentityHash, wcIdentityHash);
             }
-            _rotateCvmIdentity(cvmIdentityHash, wcIdentityHash, wcIdentity, currentTimestamp, measurements.digest());
+            _rotateCvmIdentity(cvmIdentityHash, wcIdentityHash, wcIdentity, currentTimestamp, digest);
             emit CVMUpdated(wcIdentityHash);
         } else {
             config.measurementHash = measurements.digest();
@@ -187,14 +191,15 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         }
 
         // Verify the signature against CVM Identity
-        Pubkey memory cvmIdentity = config.cvmIdentity;
-        if (cvmIdentity.hashAlgo != TPM_ALG_SHA256) {
-            revert UNSUPPORTED_HASH_ALGORITHM(cvmIdentity.hashAlgo);
-        }
+        CertPubkey memory cvmIdentity = config.cvmIdentity;
+        SignatureAlgorithm memory sigAlgo = SignatureAlgorithm({
+            scheme: TPMConstants.TPM_ALG_ECDSA,
+            hashAlgo: TPMConstants.TPM_ALG_SHA256
+        });
         {
             bytes memory message = abi.encodePacked(_nonces[cvmIdentityHash]++, teeTTL, tpmTTL);
-            address verifier = cvmIdentity.sigScheme == TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
-            bool verified = cvmIdentity.verifySignature(
+            address verifier = cvmIdentity.algo == TPMConstants.TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
+            bool verified = cvmIdentity.verifySignature(sigAlgo,
                 _generateMessageWithCustomPrefix("CVM_WORKLOAD_TTL_CONFIG", message), signature, verifier
             );
             if (!verified) {
@@ -253,7 +258,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         view
         override
         onlyRegistered(cvmIdentityHash)
-        returns (Pubkey memory identity)
+        returns (CertPubkey memory identity)
     {
         CVMConfig storage config = _configs[cvmIdentityHash];
         identity = config.cvmIdentity;
@@ -269,9 +274,9 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         config = _configs[cvmIdentityHash];
     }
 
-    function _computeCvmIdentityHash(Pubkey memory cvmIdentity) private pure returns (bytes32) {
+    function _computeCvmIdentityHash(CertPubkey memory cvmIdentity) private pure returns (bytes32) {
         return keccak256(
-            abi.encodePacked(cvmIdentity.sigScheme, cvmIdentity.curve, cvmIdentity.hashAlgo, cvmIdentity.data)
+            abi.encodePacked(cvmIdentity.algo, cvmIdentity.params, cvmIdentity.data)
         );
     }
 
@@ -287,7 +292,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
     function _rotateCvmIdentity(
         bytes32 oldCvmIdentityHash,
         bytes32 newCvmIdentityHash,
-        Pubkey memory newCvmIdentity,
+        CertPubkey memory newCvmIdentity,
         uint64 tpmRecentTimestamp,
         bytes32 measurementHash
     ) private {

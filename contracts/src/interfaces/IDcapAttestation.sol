@@ -3,14 +3,10 @@
 pragma solidity ^0.8.0;
 
 /**
- * @title Interface standard that implement attestation contracts whose verification logic can be implemented
- * both on-chain and with Risc0 ZK proofs
- * @notice The interface simply provides two verification methods for a given attestation input.
- * The user can either pay a possibly hefty gas cost to fully verify an attestation fully on-chain
- * OR
- * Provides ZK proofs from executing an off-chain program where the verification of such attestation is conducted.
- * @dev should also implement Risc0 Guest Program to use this interface.
- * See https://dev.risczero.com/api/blockchain-integration/bonsai-on-eth to learn more
+ * @title Interface for DCAP attestation verification with on-chain and ZK proof options
+ * @notice Provides two verification methods for attestation input:
+ * 1. Full on-chain verification (higher gas cost)
+ * 2. ZK proof verification via supported coprocessors (RiscZero, Succinct)
  */
 interface IDcapAttestation {
     /**

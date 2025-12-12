@@ -4,10 +4,12 @@ pragma solidity ^0.8.0;
 import {CVMRegistry} from "../usecases/CVMRegistry.sol";
 import {CVMSignature} from "../usecases/bases/CVMSignature.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {Pubkey, Crypto} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
-import {TPM_ALG_ECDSA} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
+import {CertPubkey, SignatureAlgorithm, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {LibX509Verify} from "@automata-network/automata-tpm-attestation/lib/LibX509Verify.sol";
+import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
 
 contract MockCVMExample is CVMSignature {
+    using LibX509Verify for CertPubkey;
     CVMRegistry public immutable cvmRegistry;
     address public owner;
     mapping(bytes32 goldenMeasurementHash => bool) public goldenMeasurements;
@@ -57,8 +59,12 @@ contract MockCVMExample is CVMSignature {
         }
 
         // Step 2: Verify CVM Signature
-        Pubkey memory cvmIdentityKey = cvmRegistry.getCvmIdentity(cvmIdentityHash);
-        address verifier = cvmIdentityKey.sigScheme == TPM_ALG_ECDSA ? cvmRegistry.tpmAttestation().p256() : address(0);
-        verified = cvmIdentityKey.verifySignature(_generateMessage(message), signature, verifier);
+        CertPubkey memory cvmIdentityKey = cvmRegistry.getCvmIdentity(cvmIdentityHash);
+        address verifier = cvmIdentityKey.algo == TPMConstants.TPM_ALG_ECC ? cvmRegistry.tpmAttestation().p256() : address(0);
+        SignatureAlgorithm memory sigAlgo = SignatureAlgorithm({
+            scheme: TPMConstants.TPM_ALG_ECDSA,
+            hashAlgo: TPMConstants.TPM_ALG_SHA256
+        });
+        verified = cvmIdentityKey.verifySignature(sigAlgo, _generateMessage(message), signature, verifier);
     }
 }

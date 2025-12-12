@@ -2,15 +2,16 @@
 // Automata Contracts
 pragma solidity ^0.8.0;
 
-import {
-    ITpmAttestation, MeasureablePcr
-} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {Pubkey} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
+import { ITpmAttestation, MeasureablePcr } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import { CertPubkey } from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 
-import {IDcapAttestation} from "./IDcapAttestation.sol";
-import {ISnpAttestation} from "./ISnpAttestation.sol";
-import {TEEType, TeeReportType, CloudType, Measurement, TEEVerifiedData} from "../lib/LibTEE.sol";
+import { IDcapAttestation } from "./IDcapAttestation.sol";
+import { ISnpAttestation } from "./ISnpAttestation.sol";
+import { TEEType, TeeReportType, CloudType, Measurement, TEEVerifiedData } from "../lib/LibTEE.sol";
 
+/**
+ * @custom:security-contact security@ata.network
+ */
 struct WorkloadCollaterals {
     // verified by tpmSignature
     bytes tpmQuote;
@@ -26,9 +27,12 @@ struct WorkloadCollaterals {
     // azure: empty
     bytes[] certs;
     // The CVM Identity
-    Pubkey cvmIdentity;
+    CertPubkey cvmIdentity;
 }
 
+/**
+ * @custom:security-contact security@ata.network
+ */
 interface IWorkloadVerifier {
     // 8d35c978
     error MOCK_ATTESTATION_NOT_ALLOWED();
@@ -89,7 +93,10 @@ interface IWorkloadVerifier {
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    ) external payable returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
+    )
+        external
+        payable
+        returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
 
     /**
      * @notice Call this method if you are only interested in getting the hash of the Workload Measurement
@@ -109,25 +116,39 @@ interface IWorkloadVerifier {
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    ) external payable returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
+    )
+        external
+        payable
+        returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
 
     /**
      * @notice Helper Method to parse raw TEE output
+     * @param teeType Intel TDX or AMD-SEV-SNP
+     * @param teeOutput The raw output from the TEE verifier
+     * @return The parsed TEE verified data
      */
     function parseTeeOutput(TEEType teeType, bytes memory teeOutput) external pure returns (TEEVerifiedData memory);
 
     /**
      * @notice Get the Final Measurement from the TEE Verified Data and measured PCRs
+     * @param teeVerifiedData The verified data from the TEE attestation
+     * @param pcrs The measurable PCR values to include in the measurement
+     * @return The final measurement combining TEE verified data and PCRs
      */
-    function getMeasurement(TEEVerifiedData memory teeVerifiedData, MeasureablePcr[] memory pcrs)
+    function getMeasurement(
+        TEEVerifiedData memory teeVerifiedData,
+        MeasureablePcr[] memory pcrs
+    )
         external
         view
         returns (Measurement memory);
 
     /**
      * @notice Helper method to parse the varKey json string to extract the AK public key
+     * @param varKey The JSON string containing the AK public key information
+     * @return akPub The parsed AK public key
      */
-    function parseVarKeyJson(string calldata varKey) external pure returns (Pubkey memory akPub);
+    function parseVarKeyJson(string calldata varKey) external pure returns (CertPubkey memory);
 
     /**
      * @return The DcapAttestation interface for verifying Intel DCAP Quotes
@@ -141,8 +162,4 @@ interface IWorkloadVerifier {
      * @return The TpmAttestation interface for verifying TPM Quotes
      */
     function tpmAttestation() external view returns (ITpmAttestation);
-    /**
-     * @return True if mock attestation is allowed, false otherwise.
-     */
-    function allowMockAttestation() external view returns (bool);
 }

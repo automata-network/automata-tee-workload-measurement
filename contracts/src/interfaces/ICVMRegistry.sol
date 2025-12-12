@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 
 import {TEEType, CloudType, TeeReportType, Measurement} from "../lib/LibTEE.sol";
 import {WorkloadCollaterals} from "./IWorkloadVerifier.sol";
-import {Pubkey} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
+import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 
 struct CVMConfig {
     TEEType teeType;
@@ -15,8 +15,8 @@ struct CVMConfig {
     uint64 tpmRecentTimestamp;
     bytes32 measurementHash;
     bytes teeAttestationOutput;
-    Pubkey cvmIdentity;
-    Pubkey tpmAk;
+    CertPubkey cvmIdentity;
+    CertPubkey tpmAk;
 }
 
 interface ICVMRegistry {
@@ -82,7 +82,7 @@ interface ICVMRegistry {
 
     function getMeasurementHash(bytes32 cvmIdentityHash) external view returns (bytes32 hash);
 
-    function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (Pubkey memory identity);
+    function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (CertPubkey memory identity);
 
     /// @notice use this method if you need to load everything
     /// about the registered CVM

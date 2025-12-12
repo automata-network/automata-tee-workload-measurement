@@ -7,7 +7,7 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {WorkloadCollaterals} from "../../src/interfaces/IWorkloadVerifier.sol";
 import {Measurement, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
-import {LibBytes} from "../../src/lib/LibBytes.sol";
+import {LibBytes} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
 
 struct SnpTestData {
     bytes akPub;
