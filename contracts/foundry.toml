@@ -10,7 +10,7 @@ solc = "0.8.27"
 evm_version = "prague"
 optimizer = true
 optimizer_runs = 200
-via_ir = false
+via_ir = true
 
 remappings = [
   '@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts',
