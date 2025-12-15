@@ -12,69 +12,70 @@
 [![Automata TPM Attestation](https://img.shields.io/badge/Power%20By-Automata-orange.svg)](https://github.com/automata-network)
 
 
-This repo contains the onchain program (smart contracts) for verifying the integrity and measurement of a Confidential VM (CVM) workload hosted on cloud service providers.
+This repository contains smart contracts for onchain verification and management of Confidential VM (CVM) workloads hosted on cloud service providers. It consists of two main components:
 
-Code and data in CVMs are protected from tampering by the host OS (and other CVMs) with TEE hardware, such as Intel TDX and AMD SEV-SNP. Cloud service providers generally also equip CVMs with virtual TPM, to cryptographically store measurements of the boot process, ensuring integrity of the CVM image.
+1. **TEE Workload Measurement** - Verifies the integrity and measurement of CVM workloads
+2. **CVM Registry** - Manages CVM identities and their attestation lifecycle
 
-Currently, the Workload verifier contract supports users who provisioned their CVMs equiped with Intel TDX or AMD-SEV-SNP, running on either Azure or Google Cloud Platform (GCP). The full workflow has been implemented in Solidity for EVM network. Click [here](./contracts/README.md) to learn more.
+Code and data in CVMs are protected from tampering by the host OS (and other CVMs) with TEE hardware, such as Intel TDX and AMD SEV-SNP. Cloud service providers generally equip CVMs with virtual TPM to cryptographically store measurements of the boot process, ensuring integrity of the CVM image.
+
+Currently supports CVMs equipped with Intel TDX or AMD SEV-SNP, running on Azure or Google Cloud Platform (GCP). The full workflow has been implemented in Solidity for EVM networks.
 
 Ideally, the goal of this project is to be platform agnostic, covering as wide range of users as possible. We strive to continue to work diligently to support more TEEs, cloud providers and Web3 ecosystems.
 
 ## Table of Contents
 
-- [Overview](#overview)
+- [Part 1: TEE Workload Measurement](#part-1-tee-workload-measurement)
+- [Part 2: CVM Registry](#part-2-cvm-registry)
 - [Deployment Info](#deployment-info)
   - [Workload Verifier](#workload-verifier)
-  - [CVM Registry](#cvm-registry)
+  - [CVM Registry](#cvm-registry-1)
+- [Developer Documentation](#developer-documentation)
 - [Related Projects](#related-projects)
 - [Contributing](#contributing)
 - [Support](#support)
 
-## Overview
+## Part 1: TEE Workload Measurement
 
-```mermaid
-sequenceDiagram
-    participant A as Application Contracts
-    participant W as Workload Verifier
-    participant TEE as TEE Onchain Attestation
-    participant TPM as TPM Attestation
+The **Workload Verifier** contract provides cryptographic verification of CVM workload integrity by combining TEE attestation with TPM-based boot measurements. It ensures that code running in a CVM has not been tampered with and is executing on genuine TEE hardware.
 
-    A->>W: 1. TEE Attestation Report, Workload Collateral
-    W->>TEE: 2. TEE Attestation Report
-    TEE-->>W: TEE Verification Status and Output
-    W->>TPM: 3. Workload Collateral
-    opt GCP
-        TPM-->>TPM: Extracts and verifies the AK Pubkey from a list of trusted CAs
-    end
-    TPM->>TPM: 4. Checks PCR Digest
-    TPM-->>W: TPM quote has been successfully verified and returns `extraData` value to the caller.
-    W->>W: 5. Verifies the report ID to check binding between TEE and TPM
-    W->>W: 6. Generates the measurement structure, encapsulating the TEE Report content and measured PCR values.
-    W->>A: 7. Returns the hash of the measurement and TPM `extraData` value.
+**Key Features:**
+- Verifies TEE attestation reports from Intel TDX and AMD SEV-SNP
+- Validates TPM quotes and PCR measurements
+- Ensures binding between TEE and TPM components
+- Generates canonical measurement hashes (Golden Measurements)
+- Multiple verification methods: onchain Solidity, ZK proofs (RiscZero, SP1)
 
-```
+**Use Cases:**
+- Prove workload integrity before granting access to sensitive data
 
-1. The application submits the TEE Attestation Report, and the workload collateral to the `WorkloadVerifier.sol` contract. Workload collateral is a collection of data, consisting the TPM quote, TPM Signature, TPM Attestation Key (or AK certificate chain) and an array of PCR measurement.
+For detailed integration guide and API reference, see the [Developer Guide](./contracts/docs/DEVELOPER_GUIDE.md#workload-measurement-contract) and [contracts documentation](./contracts/README.md).
 
-2. TEE Attestation Report verification shows that the CVM is running in a TEE provided by genuine hardware.
-    
-    > a. If the CVM were hosted on Azure, this step also ensures that the report data must contain the hash of the TPM Attestation Key.
+## Part 2: CVM Registry
 
-3. The TPM quote and signature are verified against the provided TPM Attestation Key.
-    
-    > a. If TPM Attestation Key were not checked in *step 2(a)*, the key is extracted from the leaf of the AK Certificate Chain, which must be checked for valid root of trust.
+The **CVM Registry** provides identity and lifecycle management for CVM workloads. It maps a CVM's workload identity (TPM/workload-generated public key) to its attestation configuration, measurement hash, and freshness metadata.
 
-4. The list of PCR indices provided in the collateral must match with the PCR selection bitmap in the TPM quote; the hash chain of PCR measurement values yields a value that must match the PCR digest value in the TPM quote.
+**Key Features:**
+- CVM Identity management for using CVM public key
+- Attested CVM identity lifecycle tracking (registration, re-attestation, TTL management)
+- Freshness enforcement via configurable TTL windows
+- Identity rotation with attestation-based proof
+- Replay protection using per-identity nonces
+- Domain separation for secure message signing
 
-5. The provided Report ID must be found in both TEE Attestation Report and PCR 16 of the TPM. This step indicates the binding between TEE and TPM.
-    
-    > a. The only exception to this rule applies to Azure TDX CVM. As stated in *2(a)*, the report data provides us with information about the AK that signs the TPM quote, which is already verified in *step 3*.
+**Key Capabilities:**
+- **Registration**: Bootstrap CVM identity using attestation
+- **Re-attestation**: Refresh TPM collateral while reusing TEE attestation, optionally update CVM identity
+- **TTL Management**: Configure custom freshness windows for TEE and TPM
+- **Key Rotation**: Securely rotate identity keys with attestation proof
 
-6. Generates the `Measurement` object. A data structure containing the content of the TEE Report and an array of measured PCRs. Each PCR may contain a deterministic PCR value and/or a list of event logs that the workload produces.
+**Use Cases:**
+- Gate onchain actions based on verified CVM identity and liveness
+- Track CVM workload states across their lifecycle
+- Enable CVMs to sign authorized messages for downstream applications
+- Implement access control based on CVM identity freshness
 
-    > a. External contracts may retrieve the Golden Measurement instead of the hash, if developers intend to perform additional checks on the measurement values.
-
-7. Optionally, computes the measurement hash, which is a holistic representation of the state of the CVM. Application developers can provide a reference measurement as a policy that CVM workloads must comply, also known as the **Golden Measurement** value. Developers should also check for the correctness of TPM `extraData` value.
+For detailed technical documentation, see the [Developer Guide](./contracts/docs/DEVELOPER_GUIDE.md#cvm-registry-contract) and [CVM Registry Primer](./contracts/docs/primer/cvm-registry-primer.md).
 
 ## Deployment Info
 
