@@ -119,7 +119,7 @@ The CVM Workload Onchain Registry provides identity and lifecycle management for
 
 **Contract Location**: [`contracts/src/usecases/CVMRegistry.sol`](../contracts/src/usecases/CVMRegistry.sol)
 
-**Key Dependencies**:
+**Dependencies**:
 - `WorkloadVerifier` - Verifies TEE report, TPM quote, and PCR measurements
 - `ITpmAttestation` - Extracts and validates TPM extra data
 
@@ -179,9 +179,7 @@ abi.encodePacked(prefix, uint16(chainid), address(this), userData)
 
 
 
-### General Workflowo
-
-## CVM Registration
+## CVM Registration Workflow
 
 ### Verification of TEE Collaterals
 The registration process involves verifying all TEE collaterals on the CVM Registry Contract. The registry Contract uses `WorkloadVerifier.sol` to verify the TEE and TPM report, retrive CVM identity, and register it on-chain.
