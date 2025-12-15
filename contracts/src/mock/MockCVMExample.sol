@@ -6,7 +6,7 @@ import {CVMSignature} from "../usecases/bases/CVMSignature.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey, SignatureAlgorithm, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {LibX509Verify} from "@automata-network/automata-tpm-attestation/lib/LibX509Verify.sol";
-import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
+import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/TPMConstants.sol";
 
 contract MockCVMExample is CVMSignature {
     using LibX509Verify for CertPubkey;
@@ -39,9 +39,7 @@ contract MockCVMExample is CVMSignature {
         emit GoldenMeasurementRemoved(measurementHash);
     }
 
-    /**
-     * @notice Checks if a provided a CVM is registered with valid measurements
-     */
+    /// @notice Checks if a provided a CVM is registered with valid measurements
     function checkCvmIsValid(bytes32 cvmIdentityHash) public view returns (bool) {
         bytes32 measurementHash = cvmRegistry.getMeasurementHash(cvmIdentityHash);
         return goldenMeasurements[measurementHash];

@@ -74,50 +74,42 @@ struct TdxMeasurement {
 error InvalidReportID();
 error UnexpectedSGXReport();
 
-/**
- * @custom:security-contact security@ata.network
- */
+/// @custom:security-contact security@ata.network
 library LibTEE {
     /// @notice Verifies the TEE report ID against TPM PCR measurements
     /// @dev This function validates that the workload report ID matches the TEE attestation data
     ///      by checking a specific TPM Platform Configuration Register (PCR), which stores
     ///      the extended hash of the report ID.
-    ///
     /// @dev Verification Logic by TEE Type and Cloud Provider:
     ///      (Examples below use typical PCR indices: 15 or 16)
-    ///
-    ///      **GCP + Intel TDX:**
+    ///      GCP + Intel TDX:
     ///      - teeData.reportID = 0 (not populated in TDX report)
     ///      - wc.reportId = UUID from workload
     ///      - PCR[pcrIndex] = SHA256_extend(0, SHA256(uuid))
     ///      - RTMR3 = SHA384_extend(0, SHA384(uuid))
     ///      - Verification: Check both PCR[pcrIndex] and RTMR3 match expected values
-    ///
-    ///      **GCP + AMD SEV-SNP:**
+    ///      GCP + AMD SEV-SNP:
     ///      - teeData.reportID = SNP report's report_id field
     ///      - wc.reportId = SNP report_id (should match teeData.reportID)
     ///      - PCR[pcrIndex] = SHA256_extend(0, reportID)
     ///      - Verification: Check PCR[pcrIndex] matches and wc.reportId equals teeData.reportID
-    ///
-    ///      **Azure + Intel TDX:**
+    ///      Azure + Intel TDX:
     ///      - teeData.reportID = 0
     ///      - wc.reportId = bytes16(0) (empty)
     ///      - PCR[pcrIndex] = SHA256_extend(0, 0)
     ///      - RTMR3 = 0
     ///      - Verification: If PCR[pcrIndex] is zero, verification passes (no UUID tracking)
-    ///
-    ///      **Azure + AMD SEV-SNP:**
+    ///      Azure + AMD SEV-SNP:
     ///      - teeData.reportID = SNP report's report_id
     ///      - PCR[pcrIndex] may be zero (binding disabled, akPub provides binding instead)
-    ///      - Verification: If cloudType is Azure and PCR[pcrIndex] is zero, skip check; otherwise verify it matches
-    ///
+    ///      - Verification: If cloudType is Azure and PCR[pcrIndex] is zero, skip check;
+    ///        otherwise verify it matches
     /// @param cloudType The cloud provider type (GCP or Azure)
     /// @param wc The workload collaterals containing PCR measurements and report ID
-    /// @param pcrIndex The TPM PCR index to verify against (typically 15 or 16).
-    ///                 Different cloud providers and TEE types may use different indices:
-    ///                 - Common practice: PCR 15 for general attestation, PCR 16 for report ID
+    /// @param pcrIndex The TPM PCR index to verify against (typically 15 or 16). Different cloud
+    ///        providers and TEE types may use different indices:
+    ///        - Common practice: PCR 15 for general attestation, PCR 16 for report ID
     /// @param teeData The verified TEE data extracted from the attestation report
-    ///
     /// @dev Reverts with "Invalid reportID" if:
     ///      - Specified PCR index is not found in the workload collaterals
     ///      - PCR value doesn't match the expected hash extension

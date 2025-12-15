@@ -34,10 +34,8 @@ interface ICVMRegistry {
     event CVMUpdated(bytes32 indexed cvmIdentityHash);
     event CVMTTLUpdated(bytes32 indexed cvmIdentityHash);
 
-    /**
-     * @notice invoke this method to attest their CVM and
-     * register the workload generated key as their onchain identity
-     */
+    /// @notice Invoke this method to attest their CVM and
+    ///         register the workload generated key as their onchain identity
     function attestCvm(
         CloudType cloudType,
         TEEType teeType,
@@ -46,27 +44,21 @@ interface ICVMRegistry {
         WorkloadCollaterals calldata wc
     ) external returns (Measurement memory measurements);
 
-    /**
-     * @notice call this method if:
-     * (1) TPM report is stale, but TEE is still fresh.
-     * (2) Users intend to rotate their identity keys
-     *
-     * @dev must check TEE validity
-     * @dev must verify signature against existing CVM identity
-     *
-     * @dev if wc contains the CVM identity key that does not match with
-     * existing cvm identity, a key rotation occurs.
-     * @dev in this scenario, you must also check that TPM extraData
-     * contains the new CVM identity hash.
-     * @dev the entire config will be re-mapped using the new CVM identity hash
-     */
+    /// @notice Call this method if:
+    ///         (1) TPM report is stale, but TEE is still fresh.
+    ///         (2) Users intend to rotate their identity keys
+    /// @dev Must check TEE validity
+    /// @dev Must verify signature against existing CVM identity
+    /// @dev If wc contains the CVM identity key that does not match with
+    ///      existing cvm identity, a key rotation occurs.
+    /// @dev In this scenario, you must also check that TPM extraData
+    ///      contains the new CVM identity hash.
+    /// @dev The entire config will be re-mapped using the new CVM identity hash
     function reattestCvmWithTpm(bytes32 cvmIdentityHash, bytes calldata signature, WorkloadCollaterals calldata wc)
         external
         returns (Measurement memory measurements);
 
-    /**
-     * @dev sig + TEE and TPM validity
-     */
+    /// @dev sig + TEE and TPM validity
     function setCollateralTTL(bytes32 cvmIdentityHash, uint64 teeTTL, uint64 tpmTTL, bytes calldata signature)
         external;
 
@@ -84,7 +76,7 @@ interface ICVMRegistry {
 
     function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (CertPubkey memory identity);
 
-    /// @notice use this method if you need to load everything
-    /// about the registered CVM
+    /// @notice Use this method if you need to load everything
+    ///         about the registered CVM
     function getCvmConfig(bytes32 cvmIdentityHash) external view returns (CVMConfig memory config);
 }

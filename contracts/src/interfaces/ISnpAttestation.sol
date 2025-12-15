@@ -2,10 +2,8 @@
 // Automata Contracts
 pragma solidity ^0.8.0;
 
-/**
- * @dev Enumeration of possible attestation verification results
- * Indicates the outcome of the verification process
- */
+/// @dev Enumeration of possible attestation verification results.
+///      Indicates the outcome of the verification process
 enum VerificationResult {
     /// @notice Attestation successfully verified
     Success,
@@ -35,14 +33,10 @@ struct VerifierJournal {
     uint8 trustedCertsPrefixLen;
 }
 
-/**
- * @title ISnpAttestation
- * @notice Interface for verifying AMD SEV-SNP attestation reports
- * @dev AMD SEV-SNP (Secure Encrypted Virtualization - Secure Nested Paging) provides
- *      hardware-based memory encryption and integrity protection for virtual machines.
- *      This interface defines the verification of SNP attestation reports using ZK proofs.
- * @custom:security-contact security@ata.network
- */
+/// @title ISnpAttestation
+/// @notice Interface for verifying AMD SEV-SNP attestation reports
+/// @dev This interface defines the verification of SNP attestation reports using ZK proofs.
+/// @custom:security-contact security@ata.network
 interface ISnpAttestation {
     /// @notice Type of ZK co-processor used for proof verification
     enum ZkCoProcessorType {
@@ -52,8 +46,8 @@ interface ISnpAttestation {
     }
 
     /// @notice Verifies an AMD SEV-SNP attestation report with a ZK proof
-    /// @dev The ZK proof verifies the SNP report was correctly parsed and validated
-    ///      off-chain, allowing for efficient on-chain verification.
+    /// @dev The ZK proof verifies the SNP report was correctly parsed and validated off-chain,
+    ///      allowing for efficient on-chain verification.
     /// @param output The journal/public output from the ZK proof containing parsed report data
     /// @param zkCoprocessor The type of ZK co-processor that generated the proof
     /// @param proofBytes The serialized ZK proof bytes

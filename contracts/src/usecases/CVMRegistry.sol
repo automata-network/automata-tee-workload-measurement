@@ -10,7 +10,7 @@ import {BytesUtils} from "@automata-network/automata-tpm-attestation/lib/BytesUt
 
 import {CertPubkey, SignatureAlgorithm, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {LibX509Verify} from "@automata-network/automata-tpm-attestation/lib/LibX509Verify.sol";
-import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
+import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/TPMConstants.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -48,10 +48,8 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         _;
     }
 
-    /**
-     * @notice Only the owner can authorize an upgrade.
-     * @param newImplementation The address of the new implementation.
-     */
+    /// @notice Only the owner can authorize an upgrade.
+    /// @param newImplementation The address of the new implementation.
     function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
         require(newImplementation != address(0), "Invalid implementation address");
     }

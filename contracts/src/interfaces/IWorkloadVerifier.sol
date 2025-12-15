@@ -9,9 +9,7 @@ import { IDcapAttestation } from "./IDcapAttestation.sol";
 import { ISnpAttestation } from "./ISnpAttestation.sol";
 import { TEEType, TeeReportType, CloudType, Measurement, TEEVerifiedData } from "../lib/LibTEE.sol";
 
-/**
- * @custom:security-contact security@ata.network
- */
+/// @custom:security-contact security@ata.network
 struct WorkloadCollaterals {
     // verified by tpmSignature
     bytes tpmQuote;
@@ -30,9 +28,12 @@ struct WorkloadCollaterals {
     CertPubkey cvmIdentity;
 }
 
-/**
- * @custom:security-contact security@ata.network
- */
+/// @title IWorkloadVerifier
+/// @notice Interface for verifying TEE attestations and TPM quotes for workload integrity
+/// @dev This interface defines the main entry point for TEE attestation verification, supporting
+///      both Intel TDX and AMD SEV-SNP attestation types. It combines TEE attestation verification
+///      with TPM quote validation to ensure workload integrity.
+/// @custom:security-contact security@ata.network
 interface IWorkloadVerifier {
     // 8d35c978
     error MOCK_ATTESTATION_NOT_ALLOWED();
@@ -53,18 +54,16 @@ interface IWorkloadVerifier {
     // c5ee0cd0
     error FAILED_TO_CHECK_PCR_MEASUREMENTS(string errorMessage);
 
-    /**
-     * @notice Call this method if you are interested in getting TEE-verified data
-     * such as: Report ID, TPM AK Pubkey and TEE Measurements
-     * @param teeType Intel TDX or AMD-SEV-SNP
-     * @param teeReportType Solidity vs ZK TEE report types
-     * @param cloudType indicates the cloud provider
-     * @param _teeAttestationReport The TEE attestation report.
-     * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
-     * @return teeOutput the output obtained from the TEE Verifier contract
-     * @return teeVerifiedData data that have been verified by the TEE, and can be trusted
-     * @return tpmExtraData additional data extracted from the TPM quote
-     */
+    /// @notice Call this method if you are interested in getting TEE-verified data
+    ///         such as: Report ID, TPM AK Pubkey and TEE Measurements
+    /// @param teeType Intel TDX or AMD-SEV-SNP
+    /// @param teeReportType Solidity vs ZK TEE report types
+    /// @param cloudType indicates the cloud provider
+    /// @param _teeAttestationReport The TEE attestation report.
+    /// @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
+    /// @return teeOutput the output obtained from the TEE Verifier contract
+    /// @return teeVerifiedData data that have been verified by the TEE, and can be trusted
+    /// @return tpmExtraData additional data extracted from the TPM quote
     function verifyAttestation(
         TEEType teeType,
         TeeReportType teeReportType,
@@ -76,17 +75,15 @@ interface IWorkloadVerifier {
         payable
         returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData);
 
-    /**
-     * @notice Call this method if you are only interested in getting the Workload Measurement
-     * @param teeType Intel TDX or AMD-SEV-SNP
-     * @param teeReportType Solidity vs ZK TEE report types
-     * @param cloudType indicates the cloud provider
-     * @param _teeAttestationReport The TEE attestation report.
-     * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
-     * @return teeOutput the output obtained from the TEE Verifier contract
-     * @return measurement the Final Measurement
-     * @return tpmExtraData additional data extracted from the TPM quote
-     */
+    /// @notice Call this method if you are only interested in getting the Workload Measurement
+    /// @param teeType Intel TDX or AMD-SEV-SNP
+    /// @param teeReportType Solidity vs ZK TEE report types
+    /// @param cloudType indicates the cloud provider
+    /// @param _teeAttestationReport The TEE attestation report.
+    /// @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
+    /// @return teeOutput the output obtained from the TEE Verifier contract
+    /// @return measurement the Final Measurement
+    /// @return tpmExtraData additional data extracted from the TPM quote
     function verifyAttestationAndGetMeasurement(
         TEEType teeType,
         TeeReportType teeReportType,
@@ -98,18 +95,17 @@ interface IWorkloadVerifier {
         payable
         returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
 
-    /**
-     * @notice Call this method if you are only interested in getting the hash of the Workload Measurement
-     * @param teeType Intel TDX or AMD-SEV-SNP
-     * @param teeReportType Solidity vs ZK TEE report types
-     * @param cloudType indicates the cloud provider
-     * @param _teeAttestationReport The TEE attestation report.
-     * @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
-     * @return teeOutput the output obtained from the TEE Verifier contract
-     * @return measurementHash the hash of the Final Measurement
-     * @return tpmExtraData additional data extracted from the TPM quote
-     * @dev can provide their own golden measurement hash to be referenced for checking the integrity of the workload.
-     */
+    /// @notice Call this method if you are only interested in getting the hash of the Workload Measurement
+    /// @param teeType Intel TDX or AMD-SEV-SNP
+    /// @param teeReportType Solidity vs ZK TEE report types
+    /// @param cloudType indicates the cloud provider
+    /// @param _teeAttestationReport The TEE attestation report.
+    /// @param _workloadReport Additional data required for verification, such as TPM quote and PCRs.
+    /// @return teeOutput the output obtained from the TEE Verifier contract
+    /// @return measurementHash the hash of the Final Measurement
+    /// @return tpmExtraData additional data extracted from the TPM quote
+    /// @dev Can provide their own golden measurement hash to be referenced for
+    ///      checking the integrity of the workload.
     function verifyAttestationAndGetMeasurementHash(
         TEEType teeType,
         TeeReportType teeReportType,
@@ -121,20 +117,16 @@ interface IWorkloadVerifier {
         payable
         returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
 
-    /**
-     * @notice Helper Method to parse raw TEE output
-     * @param teeType Intel TDX or AMD-SEV-SNP
-     * @param teeOutput The raw output from the TEE verifier
-     * @return The parsed TEE verified data
-     */
+    /// @notice Helper Method to parse raw TEE output
+    /// @param teeType Intel TDX or AMD-SEV-SNP
+    /// @param teeOutput The raw output from the TEE verifier
+    /// @return The parsed TEE verified data
     function parseTeeOutput(TEEType teeType, bytes memory teeOutput) external pure returns (TEEVerifiedData memory);
 
-    /**
-     * @notice Get the Final Measurement from the TEE Verified Data and measured PCRs
-     * @param teeVerifiedData The verified data from the TEE attestation
-     * @param pcrs The measurable PCR values to include in the measurement
-     * @return The final measurement combining TEE verified data and PCRs
-     */
+    /// @notice Get the Final Measurement from the TEE Verified Data and measured PCRs
+    /// @param teeVerifiedData The verified data from the TEE attestation
+    /// @param pcrs The measurable PCR values to include in the measurement
+    /// @return The final measurement combining TEE verified data and PCRs
     function getMeasurement(
         TEEVerifiedData memory teeVerifiedData,
         MeasureablePcr[] memory pcrs
@@ -143,23 +135,17 @@ interface IWorkloadVerifier {
         view
         returns (Measurement memory);
 
-    /**
-     * @notice Helper method to parse the varKey json string to extract the AK public key
-     * @param varKey The JSON string containing the AK public key information
-     * @return akPub The parsed AK public key
-     */
+    /// @notice Helper method to parse the varKey json string to extract the AK public key
+    /// @param varKey The JSON string containing the AK public key information
+    /// @return akPub The parsed AK public key
     function parseVarKeyJson(string calldata varKey) external pure returns (CertPubkey memory);
 
-    /**
-     * @return The DcapAttestation interface for verifying Intel DCAP Quotes
-     */
+    /// @return The DcapAttestation interface for verifying Intel DCAP Quotes
     function dcapAttestation() external view returns (IDcapAttestation);
-    /**
-     * @return The SnpAttestation interface for verifying AMD SEV-SNP Attestations
-     */
+
+    /// @return The SnpAttestation interface for verifying AMD SEV-SNP Attestations
     function snpAttestation() external view returns (ISnpAttestation);
-    /**
-     * @return The TpmAttestation interface for verifying TPM Quotes
-     */
+
+    /// @return The TpmAttestation interface for verifying TPM Quotes
     function tpmAttestation() external view returns (ITpmAttestation);
 }

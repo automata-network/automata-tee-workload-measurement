@@ -23,24 +23,21 @@ import { Base64 } from "@solady/utils/Base64.sol";
 import { LibString } from "@solady/utils/LibString.sol";
 import { ZeroAddress } from "@automata-network/automata-tpm-attestation/types/Errors.sol";
 
-/**
- * @title WorkloadVerifier
- * @notice Verifies TEE attestations and TPM quotes for workload integrity
- * @dev This contract acts as the main entry point for TEE attestation verification, supporting both
- *      Intel TDX and AMD SEV-SNP attestation types. It orchestrates the verification process by:
- *      1. Verifying TEE attestation reports (via DCAP for TDX or SNP attestation for SEV-SNP)
- *      2. Verifying TPM quotes and their certificate chains
- *      3. Checking PCR measurements against expected values
- *      4. Binding TEE report data to TPM attestation keys
- *
- *      The contract supports multiple cloud providers (Azure, GCP) with different attestation flows:
- *      - Azure: TPM AK public key is embedded in TEE report data as a hash
- *      - GCP: TPM AK public key is derived from certificate chain
- *
- * @custom:security-contact security@ata.network
- *
- * @custom:security This contract is upgradeable. Only the owner can authorize upgrades.
- */
+/// @title WorkloadVerifier
+/// @notice Verifies TEE attestations and TPM quotes for workload integrity
+/// @dev This contract acts as the main entry point for TEE attestation verification, supporting
+///      both Intel TDX and AMD SEV-SNP attestation types. It orchestrates the verification process by:
+///      1. Verifying TEE attestation reports (via DCAP for TDX or SNP attestation for SEV-SNP)
+///      2. Verifying TPM quotes and their certificate chains
+///      3. Checking PCR measurements against expected values
+///      4. Binding TEE report data to TPM attestation keys
+///      The contract supports multiple cloud providers (Azure, GCP) with different attestation flows:
+///      - Azure: TPM AK public key is embedded in TEE report data as a hash
+///      - GCP: TPM AK public key is derived from certificate chain
+///
+/// @custom:security-contact security@ata.network
+///
+/// @custom:security This contract is upgradeable. Only the owner can authorize upgrades.
 contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradeable {
 
     using LibString for string;
@@ -55,22 +52,18 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         _disableInitializers();
     }
 
-    /**
-     * @notice Only the owner can authorize an upgrade.
-     * @param newImplementation The address of the new implementation.
-     */
+    /// @notice Only the owner can authorize an upgrade.
+    /// @param newImplementation The address of the new implementation.
     function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
         require(newImplementation != address(0), "Invalid implementation address");
     }
 
-    /**
-     * @notice Initializes the WorkloadVerifier contract with required dependencies
-     * @dev Can only be called once due to initializer modifier. Sets up all attestation verifier addresses.
-     * @param initialOwner The address that will own this contract and can authorize upgrades
-     * @param dcapAttestationAddr Address of the DCAP attestation verifier for Intel TDX
-     * @param snpAttestationAddr Address of the SNP attestation verifier for AMD SEV-SNP
-     * @param tpmAttestationAddr Address of the TPM attestation verifier for quote verification
-     */
+    /// @notice Initializes the WorkloadVerifier contract with required dependencies
+    /// @dev Can only be called once due to initializer modifier. Sets up all attestation verifier addresses.
+    /// @param initialOwner The address that will own this contract and can authorize upgrades
+    /// @param dcapAttestationAddr Address of the DCAP attestation verifier for Intel TDX
+    /// @param snpAttestationAddr Address of the SNP attestation verifier for AMD SEV-SNP
+    /// @param tpmAttestationAddr Address of the TPM attestation verifier for quote verification
     function initialize(
         address initialOwner,
         address dcapAttestationAddr,
@@ -90,13 +83,11 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         _transferOwnership(initialOwner);
     }
 
-    /**
-     * @notice Updates the attestation verifier contract addresses
-     * @dev Can only be called by the owner. Allows updating verifier contracts without redeployment.
-     * @param dcapAttestationAddr New address of the DCAP attestation verifier for Intel TDX
-     * @param snpAttestationAddr New address of the SNP attestation verifier for AMD SEV-SNP
-     * @param tpmAttestationAddr New address of the TPM attestation verifier for quote verification
-     */
+    /// @notice Updates the attestation verifier contract addresses
+    /// @dev Can only be called by the owner. Allows updating verifier contracts without redeployment.
+    /// @param dcapAttestationAddr New address of the DCAP attestation verifier for Intel TDX
+    /// @param snpAttestationAddr New address of the SNP attestation verifier for AMD SEV-SNP
+    /// @param tpmAttestationAddr New address of the TPM attestation verifier for quote verification
     function updateDependencies(
         address dcapAttestationAddr,
         address snpAttestationAddr,
@@ -353,11 +344,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
     }
 
     /// @notice Extracts the attestation key (AK) public key from Azure TPM JSON data
-    /// @dev This parser implements a STRICT substring matching algorithm (lower gas cost) for Azure TPM attestation
-    /// keys.
-    ///      It is NOT compliant with RFC7517 (JSON Web Key).
+    /// @dev This parser implements a STRICT substring matching algorithm (lower gas cost) for Azure
+    ///      TPM attestation keys. It is NOT compliant with RFC7517 (JSON Web Key).
     ///      Example JSON structure:
-    ///          {"keys":[{"kid":"HCLAkPub","key_ops":["sign"],"kty":"RSA","e":"<base64url-encoded>","n":"<base64url-encoded-modulus>"},{"kid":"HCLEkPub",..]},..}
+    ///      {"keys":[{"kid":"HCLAkPub","key_ops":["sign"],"kty":"RSA","e":"...","n":"..."},...]}
     /// @param data The JSON string containing the TPM attestation key
     /// @return CertPubkey The extracted RSA public key
     function _varDataPubkey(string memory data) private pure returns (CertPubkey memory) {
