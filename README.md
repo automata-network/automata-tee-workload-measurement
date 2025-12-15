@@ -17,16 +17,11 @@ This repository contains smart contracts for onchain verification and management
 1. **TEE Workload Measurement** - Verifies the integrity and measurement of CVM workloads
 2. **CVM Registry** - Manages CVM identities and their attestation lifecycle
 
-Code and data in CVMs are protected from tampering by the host OS (and other CVMs) with TEE hardware, such as Intel TDX and AMD SEV-SNP. Cloud service providers generally equip CVMs with virtual TPM to cryptographically store measurements of the boot process, ensuring integrity of the CVM image.
-
-Currently supports CVMs equipped with Intel TDX or AMD SEV-SNP, running on Azure or Google Cloud Platform (GCP). The full workflow has been implemented in Solidity for EVM networks.
-
-Ideally, the goal of this project is to be platform agnostic, covering as wide range of users as possible. We strive to continue to work diligently to support more TEEs, cloud providers and Web3 ecosystems.
-
 ## Table of Contents
 
-- [Part 1: TEE Workload Measurement](#part-1-tee-workload-measurement)
-- [Part 2: CVM Registry](#part-2-cvm-registry)
+- [Overview](#overview)
+  - [Part 1: TEE Workload Measurement](#part-1-tee-workload-measurement)
+  - [Part 2: CVM Registry](#part-2-cvm-registry)
 - [Deployment Info](#deployment-info)
   - [Workload Verifier](#workload-verifier)
   - [CVM Registry](#cvm-registry-1)
@@ -35,7 +30,15 @@ Ideally, the goal of this project is to be platform agnostic, covering as wide r
 - [Contributing](#contributing)
 - [Support](#support)
 
-## Part 1: TEE Workload Measurement
+## Overview
+
+Confidential VMs (CVMs) leverage Trusted Execution Environment (TEE) hardware—such as Intel TDX and AMD SEV-SNP—to protect code and data from tampering by the host OS and other VMs. Cloud service providers equip CVMs with virtual Trusted Platform Modules (TPMs) that cryptographically measure and attest to the integrity of the boot process and running workload.
+
+This project currently supports CVMs with Intel TDX or AMD SEV-SNP on Azure and Google Cloud Platform (GCP), with full onchain verification implemented in Solidity for EVM networks.
+
+Our goal is platform-agnostic coverage, and we are actively working to support additional TEE technologies, cloud providers, and Web3 ecosystems.
+
+### Part 1: TEE Workload Measurement
 
 The **Workload Verifier** contract provides cryptographic verification of CVM workload integrity by combining TEE attestation with TPM-based boot measurements. It ensures that code running in a CVM has not been tampered with and is executing on genuine TEE hardware.
 
@@ -51,9 +54,9 @@ The **Workload Verifier** contract provides cryptographic verification of CVM wo
 
 For detailed integration guide and API reference, see the [Developer Guide](./contracts/docs/DEVELOPER_GUIDE.md#workload-measurement-contract) and [contracts documentation](./contracts/README.md).
 
-## Part 2: CVM Registry
+### Part 2: CVM Registry
 
-The **CVM Registry** provides identity and lifecycle management for CVM workloads. It maps a CVM's workload identity (TPM/workload-generated public key) to its attestation configuration, measurement hash, and freshness metadata.
+The **CVM Registry** provides identity and lifecycle management for CVM workloads. It maps a CVM's identity to its attestation configuration, system and workload measurement hash, and freshness metadata.
 
 **Key Features:**
 - CVM Identity management for using CVM public key
