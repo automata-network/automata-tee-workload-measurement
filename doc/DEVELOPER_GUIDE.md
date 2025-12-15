@@ -229,6 +229,66 @@ Both the **CVM Workload** and **CVM Agent** run inside the Confidential VM. The 
 
 Once the TTL has expired, the CVM must reattest its TEE collaterals with the Registry contract again. To reattest, simply perform the registration steps again.
 
+## CVM Verification
+
+Once a CVM has been registered in the Registry, it can use its identity to sign messages for onchain verification. This enables trusted communication and authentication of CVM workloads.
+
+**Workflow Assumptions**:
+
+For the following example workflow, we make these assumptions:
+- The **Verifier** and **Attester** are both workloads running inside CVMs (performing mutual verification). Note that this architecture is flexible and depends on your specific use case.
+- The workload uses the [sample application contract](https://github.com/automata-network/cvm-onchain-verifier/blob/main/contracts/src/mock/MockCVMExample.sol) without modifications to the `checkCVMSignature` function.
+
+### Verification Flow
+
+```mermaid
+sequenceDiagram
+    participant V as Verifier
+    participant AT as Attester
+    participant AA as Attestation Agent
+    participant AC as Application Contract
+    participant P1 as CVM Registry
+
+    V->>AT: message
+    AT->>AA: POST /sign-message <br/> (message)
+    AA-->>AT: {base64(cvmIdentityHash), base64(signature)}
+    AT-->>V: {base64(cvmIdentityHash), base64(signature)}
+    V->>V: base64-decode <br/> calldata = abiEncode("checkCVMSignature", cvmIdentityHash, message, signature)
+    V->>AC: submitTX(calldata)
+    AC->>P1: getCvmIdentity(cvmIdentityHash)
+    P1-->>AC: cvmIdentityKey
+    AC->>AC: verifySignature
+```
+
+**Workflow Explanation**:
+
+1. **Send Message to Attester**: The Verifier workload sends a message to the Attester workload that needs to be signed and verified onchain.
+
+2. **Request Signature**: The Attester workload forwards the message to its local Attestation Agent via a POST request to the `/sign-message` endpoint, requesting the agent to sign it.
+
+3. **Generate Signature**: The Attestation Agent (running in the Attester's CVM) uses the CVM's private identity key stored securely within the CVM to sign the message. It returns:
+   - `cvmIdentityHash`: The hash of the CVM's public identity (base64 encoded)
+   - `signature`: The cryptographic signature of the message (base64 encoded)
+
+4. **Return Signed Data**: The Attester workload receives the signed data from its Attestation Agent and forwards it back to the Verifier workload.
+
+5. **Prepare Transaction**: The Verifier decodes the base64-encoded data and constructs the transaction calldata by encoding the `checkCVMSignature` function call with:
+   - `cvmIdentityHash`: The Attester's CVM identity hash
+   - `message`: The original message
+   - `signature`: The cryptographic signature
+
+6. **Submit Verification Transaction**: The Verifier submits a blockchain transaction to the Application Contract to verify the signature onchain.
+
+7. **Retrieve CVM Identity**: The Application Contract queries the CVM Registry to retrieve the public key associated with the provided `cvmIdentityHash`.
+
+8. **Return Identity Key**: The CVM Registry returns the CVM's public identity key (`Pubkey` structure) to the Application Contract.
+
+9. **Verify Signature**: The Application Contract verifies the signature against the retrieved public key and the original message. If verification succeeds, the Application Contract can trust that:
+   - The message was signed by a registered CVM
+   - The CVM's identity is still valid (within TTL window)
+   - The CVM's measurement matches the golden measurement (if configured)
+
+This verification mechanism enables trustless authentication of messages from CVM workloads, allowing applications to gate sensitive operations based on verified CVM identities.
 
 ### Lifecycle Operations
 
