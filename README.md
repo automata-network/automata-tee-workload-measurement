@@ -14,8 +14,8 @@
 
 This repository contains smart contracts for onchain verification and management of Confidential VM (CVM) workloads hosted on cloud service providers. It consists of two main components:
 
-1. **TEE Workload Measurement** - Verifies the integrity and measurement of CVM workloads
-2. **CVM Registry** - Manages CVM identities and their attestation lifecycle
+1. **[TEE Workload Measurement](./src/WorkloadVerifier.sol)** - Verifies the integrity and measurement of CVM workloads
+2. **[CVM Registry](./src/usecases/CVMRegistry.sol)** - Manages CVM identities and their attestation lifecycle
 
 ## Table of Contents
 
