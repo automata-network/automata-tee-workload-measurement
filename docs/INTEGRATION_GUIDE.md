@@ -41,7 +41,7 @@ Add to your `foundry.toml`:
 ```toml
 [profile.default]
 remappings = [
-    "@automata-network/tee-workload-measurement/=lib/automata-tee-workload-measurement/contracts/src/"
+    "@automata-network/tee-workload-measurement/=lib/automata-tee-workload-measurement/src/"
 ]
 ```
 

@@ -26,7 +26,7 @@ This guide provides detailed technical information for integrating and working w
 
 The Workload Verifier contract (`WorkloadVerifier.sol`) provides cryptographic verification of CVM workload integrity by combining TEE attestation with TPM-based boot measurements. It ensures that code running in a CVM has not been tampered with and is executing on genuine TEE hardware.
 
-**Contract Location**: [`contracts/src/WorkloadVerifier.sol`](../src/WorkloadVerifier.sol)
+**Contract Location**: [`src/WorkloadVerifier.sol`](../src/WorkloadVerifier.sol)
 
 **Dependencies**:
 1. [Automata DCAP Attestation](https://github.com/automata-network/automata-dcap-attestation/tree/main/evm) - Verifies Intel TDX quotes
@@ -119,7 +119,7 @@ The CVM Registry provides identity and lifecycle management for CVM. It plays a 
     
 Once registered, the CVM’s identity key can sign authorized messages (with domain separation) enabling downstream onchain actions gated by workload integrity + liveness (via TTL).
 
-**Contract Location**: [`contracts/src/usecases/CVMRegistry.sol`](../contracts/src/usecases/CVMRegistry.sol)
+**Contract Location**: [`src/usecases/CVMRegistry.sol`](../src/usecases/CVMRegistry.sol)
 
 **Dependencies**:
 - `WorkloadVerifier` - Verifies TEE report, TPM quote, and PCR measurements

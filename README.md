@@ -52,7 +52,7 @@ The **Workload Verifier** contract provides cryptographic verification of CVM wo
 **Use Cases:**
 - Prove workload integrity before granting access to sensitive data
 
-For detailed integration guide and API reference, see the [Developer Guide](./contracts/docs/DEVELOPER_GUIDE.md#workload-measurement-contract) and [contracts documentation](./contracts/README.md).
+For detailed integration guide and API reference, see the [Developer Guide](./docs/DEVELOPER_GUIDE.md#workload-measurement-contract) and [contracts documentation](./README_CONTRACTS.md).
 
 ### Part 2: CVM Registry
 
@@ -78,7 +78,7 @@ The **CVM Registry** provides identity and lifecycle management for CVM workload
 - Enable CVMs to sign authorized messages for downstream applications
 - Implement access control based on CVM identity freshness
 
-For detailed technical documentation, see the [Developer Guide](./contracts/docs/DEVELOPER_GUIDE.md#cvm-registry-contract) and [CVM Registry Primer](./contracts/docs/primer/cvm-registry-primer.md).
+For detailed technical documentation, see the [Developer Guide](./docs/DEVELOPER_GUIDE.md#cvm-registry-contract) and [CVM Registry Primer](./docs/primer/cvm-registry-primer.md).
 
 ## Deployment Info
 
