@@ -108,7 +108,7 @@ The table below shows gas costs to measure CVMs with various TEEs hosted on Azur
 
 ### Overview
 
-The CVM Workload Onchain Registry provides identity and lifecycle management for CVM workloads. It plays a critical role in:
+The CVM Registry provides identity and lifecycle management for CVM. It plays a critical role in:
 
 1. **Maintaining CVM Credentials**: Registers and tracks user-provided CVM credentials to identify the VM.
     - Verifies TEE reports (Intel TDX Quotes or AMD SEV-SNP Reports) along with TPM quotes to confirm that the user credential is provisioned by a TPM with genuine TEE hardware.
@@ -116,6 +116,8 @@ The CVM Workload Onchain Registry provides identity and lifecycle management for
 2. **Onchain Identity Authentication**: Once registered, credentials serve as an identity to authenticate CVM onchain activities.
     - Consumer contracts can query the Registry to determine the validity of registered credentials.
     - Validity is determined by factors such as the age of TEE and TPM reports (time elapsed since recent submissions), and the contents of the TEE Report Body (such as Intel TDX TCB Status).
+    
+Once registered, the CVM’s identity key can sign authorized messages (with domain separation) enabling downstream onchain actions gated by workload integrity + liveness (via TTL).
 
 **Contract Location**: [`contracts/src/usecases/CVMRegistry.sol`](../contracts/src/usecases/CVMRegistry.sol)
 
