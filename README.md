@@ -22,6 +22,7 @@ This repository contains smart contracts for onchain verification and management
 - [Overview](#overview)
   - [Part 1: TEE Workload Measurement](#part-1-tee-workload-measurement)
   - [Part 2: CVM Registry](#part-2-cvm-registry)
+- [Future Roadmap](#future-roadmap)
 - [Documentation](#documentation)
 - [Deployment Info](#deployment-info)
   - [Workload Verifier](#workload-verifier)
@@ -75,6 +76,27 @@ The **[CVM Registry](./src/usecases/CVMRegistry.sol)** provides identity and lif
 - Track CVM workload states across their lifecycle
 - Enable CVMs to sign authorized messages for downstream applications
 - Implement access control based on CVM identity freshness
+
+## Future Roadmap
+
+We are continuously improving the CVM Registry to enhance security, usability, and functionality. The following features are under consideration:
+
+**Security Enhancements:**
+- **Revocation Mechanism** - Add explicit onchain CVM identity revocation before TTL expiry
+- **TTL Bounds** - Enforce minimum and maximum TTL ranges to prevent configuration errors
+- **Registration Validation** - Prevent silent parameter mismatches during re-registration attempts
+
+**Protocol Extensions:**
+- **Multi-TEE Aggregation** - Support workloads spanning multiple enclaves for distributed systems
+- **Attestation Versioning** - Track historical measurement hashes for comprehensive audit trails
+- **Slashing / Economic Bonding** - Enable penalties for stale or revoked identities in economic protocols
+- **Cached Proof Compression** - Gas-optimized re-use of previously verified certificate chains
+
+**Developer Experience:**
+- **Enhanced Events** - Add dedicated `CVMIdentityRotated` event to distinguish rotation from re-attestation
+- **Flexible Verifier Updates** - Design migration path for upgrading immutable verifier contracts
+
+For detailed technical analysis and resolved issues, see our [audit reports](./docs/).
 
 ## Documentation
 
