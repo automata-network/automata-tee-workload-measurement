@@ -96,7 +96,7 @@ We are continuously improving the CVM Registry to enhance security, usability, a
 - **Enhanced Events** - Add dedicated `CVMIdentityRotated` event to distinguish rotation from re-attestation
 - **Flexible Verifier Updates** - Design migration path for upgrading immutable verifier contracts
 
-For detailed technical analysis and resolved issues, see our [audit reports](./docs/).
+For detailed technical analysis and resolved issues, see [here](./docs/primer/cvm-registry-primer.md#8-security--trust-assumptions).
 
 ## Documentation
 
