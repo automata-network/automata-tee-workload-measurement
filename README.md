@@ -22,10 +22,10 @@ This repository contains smart contracts for onchain verification and management
 - [Overview](#overview)
   - [Part 1: TEE Workload Measurement](#part-1-tee-workload-measurement)
   - [Part 2: CVM Registry](#part-2-cvm-registry)
+- [Documentation](#documentation)
 - [Deployment Info](#deployment-info)
   - [Workload Verifier](#workload-verifier)
   - [CVM Registry](#cvm-registry-1)
-- [Developer Documentation](#developer-documentation)
 - [Related Projects](#related-projects)
 - [Contributing](#contributing)
 - [Support](#support)
@@ -40,7 +40,7 @@ Our goal is platform-agnostic coverage, and we are actively working to support a
 
 ### Part 1: TEE Workload Measurement
 
-The **Workload Verifier** contract provides cryptographic verification of CVM workload integrity by combining TEE attestation with TPM-based boot measurements. It ensures that code running in a CVM has not been tampered with and is executing on genuine TEE hardware.
+The **[Workload Verifier](./src/WorkloadVerifier.sol)** contract provides cryptographic verification of CVM workload integrity by combining TEE attestation with TPM-based boot measurements. It ensures that code running in a CVM has not been tampered with and is executing on genuine TEE hardware.
 
 **Key Features:**
 - Verifies TEE attestation reports from Intel TDX and AMD SEV-SNP
@@ -52,11 +52,9 @@ The **Workload Verifier** contract provides cryptographic verification of CVM wo
 **Use Cases:**
 - Prove workload integrity before granting access to sensitive data
 
-For detailed integration guide and API reference, see the [Developer Guide](./docs/DEVELOPER_GUIDE.md#workload-measurement-contract) and [contracts documentation](./README_CONTRACTS.md).
-
 ### Part 2: CVM Registry
 
-The **CVM Registry** provides identity and lifecycle management for CVM workloads. It maps a CVM's identity to its attestation configuration, system and workload measurement hash, and freshness metadata.
+The **[CVM Registry](./src/usecases/CVMRegistry.sol)** provides identity and lifecycle management for CVM workloads. It maps a CVM's identity to its attestation configuration, system and workload measurement hash, and freshness metadata.
 
 **Key Features:**
 - CVM Identity management for using CVM public key
@@ -78,7 +76,12 @@ The **CVM Registry** provides identity and lifecycle management for CVM workload
 - Enable CVMs to sign authorized messages for downstream applications
 - Implement access control based on CVM identity freshness
 
-For detailed technical documentation, see the [Developer Guide](./docs/DEVELOPER_GUIDE.md#cvm-registry-contract) and [CVM Registry Primer](./docs/primer/cvm-registry-primer.md).
+## Documentation
+
+To get started with integrating these contracts into your project:
+
+- **[Developer Guide](./docs/DEVELOPER_GUIDE.md)** - Comprehensive technical documentation covering architecture, workflows, and API references
+- **[Integration Guide](./docs/INTEGRATION_GUIDE.md)** - Step-by-step instructions for integrating the Workload Verifier and CVM Registry contracts into your Solidity project
 
 ## Deployment Info
 
