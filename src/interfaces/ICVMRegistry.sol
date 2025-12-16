@@ -68,7 +68,9 @@ interface ICVMRegistry {
         WorkloadCollaterals calldata wc
     ) external returns (Measurement memory measurements);
 
-    /// @dev sig + TEE and TPM validity
+    /**
+     * @dev sig + TEE and TPM validity
+     */
     function setCollateralTTL(bytes32 cvmIdentityHash, uint64 teeTTL, uint64 tpmTTL, bytes calldata signature) external;
 
     /// ===== HELPER METHODS =====
