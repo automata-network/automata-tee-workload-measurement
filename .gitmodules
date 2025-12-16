@@ -9,10 +9,10 @@
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
 [submodule "lib/openzeppelin-contracts-upgradeable"]
 	path = lib/openzeppelin-contracts-upgradeable
-	url = git@github.com:OpenZeppelin/openzeppelin-contracts-upgradeable.git
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable.git
 [submodule "lib/automata-dcap-attestation"]
 	path = lib/automata-dcap-attestation
 	url = https://github.com/automata-network/automata-dcap-attestation
 [submodule "lib/automata-tpm-attestation"]
 	path = lib/automata-tpm-attestation
-	url = https://github.com/automata-network/automata-tpm-attestation
+	url = https://github.com/automata-network/automata-tpm-attestation.git
