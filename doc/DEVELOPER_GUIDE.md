@@ -225,9 +225,12 @@ Both the **CVM Workload** and **CVM Agent** run inside the Confidential VM. The 
 
 6. **Register CVM Identity**: The Registry Contract stores the CVM configuration (identity, measurement hash, timestamps, TTLs) and completes registration. The registered identity is a public key that uniquely represents this CVM onchain. The corresponding private key is stored securely within the CVM and used by the CVM Agent to sign any message provided by the workload. Following successful registration, any message signed by this CVM Identity is considered trusted within the configured TTL window.
 
-Once the TTL has expired, the CVM must reattest its TEE collaterals with the Registry contract again. To reattest, simply perform the registration steps again.
+Once the TTL has expired, the CVM must reattest its collaterals with the Registry contract. Two options are available:
 
-## CVM Verification
+1. **Full Re-attestation**: Perform complete registration again using `attestCvm` (see [Registration](#1-registration-attestcvm) in Lifecycle Operations below)
+2. **TPM-only Re-attestation**: Use `reattestCvmWithTpm` to save gas by reusing the stored TEE attestation (see [Re-attestation](#2-re-attestation-reattestcvmwithtpm) in Lifecycle Operations below)
+
+## CVM Verification Workflow
 
 Once a CVM has been registered in the Registry, it can use its identity to sign messages for onchain verification. This enables trusted communication and authentication of CVM workloads.
 
@@ -367,4 +370,58 @@ function setCollateralTTL(
     uint64 tpmTTL
 ) external;
 ```
+
+#### 4. Verification
+
+Verify a message signed by a registered CVM identity. This operation is typically performed by consumer contracts to authenticate messages from CVM workloads.
+
+**Use When**:
+- Authenticating CVM-signed messages for privileged operations
+- Gating access to sensitive functionality based on CVM identity
+- Implementing trust relationships between CVMs and smart contracts
+
+**Process**:
+1. Consumer contract receives:
+   - `cvmIdentityHash`: The hash identifying the CVM
+   - `message`: The original message that was signed
+   - `signature`: The cryptographic signature from the CVM
+2. Consumer contract queries CVM Registry:
+   - Check if CVM is registered: `hasRegistered(cvmIdentityHash)`
+   - Verify TEE collateral freshness: `checkTEEValidity(cvmIdentityHash)`
+   - Verify TPM collateral freshness: `checkTPMValidity(cvmIdentityHash)`
+   - Retrieve CVM identity public key: `getCvmIdentity(cvmIdentityHash)`
+3. Consumer contract validates measurement (optional):
+   - Retrieve measurement hash: `getMeasurementHash(cvmIdentityHash)`
+   - Compare against golden measurement for the application
+4. Consumer contract verifies signature:
+   - Construct domain-separated message (with application-specific prefix)
+   - Verify signature against retrieved public key
+   - Use appropriate verifier (e.g., P256 verifier for ECDSA signatures)
+5. If all checks pass, trust the message and execute the requested operation
+
+**Important Notes**:
+- Consumer contracts are responsible for implementing their own replay protection mechanism
+- The CVM Registry provides freshness guarantees via TTLs, but applications should validate against their own golden measurements
+- Signature verification should use domain-separated messages to prevent cross-contract replay attacks
+
+**Related View Functions**:
+```solidity
+function hasRegistered(bytes32 cvmIdentityHash) external view returns (bool);
+function checkTEEValidity(bytes32 cvmIdentityHash) external view returns (bool);
+function checkTPMValidity(bytes32 cvmIdentityHash) external view returns (bool);
+function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (Pubkey memory);
+function getMeasurementHash(bytes32 cvmIdentityHash) external view returns (bytes32);
+```
+
+**Signed Message Format** (for application-specific messages):
+```solidity
+bytes32 messageHash = keccak256(abi.encodePacked(
+    "CVM_WORKLOAD_USER_MESSAGE",
+    uint256(block.chainid),
+    address(consumerContract),
+    bytes(userProvidedData)
+));
+```
+
+See the [CVM Verification Workflow](#cvm-verification-workflow) section above for a detailed sequence diagram of the verification process.
 
