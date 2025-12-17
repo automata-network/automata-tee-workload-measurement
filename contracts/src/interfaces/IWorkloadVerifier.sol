@@ -24,8 +24,6 @@ struct WorkloadCollaterals {
     // gcp: certs
     // azure: empty
     bytes[] certs;
-    // The CVM Identity
-    CertPubkey cvmIdentity;
 }
 
 /// @title IWorkloadVerifier

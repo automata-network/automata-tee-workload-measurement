@@ -4,7 +4,12 @@ pragma solidity ^0.8.0;
 
 import {TEEType, CloudType, TeeReportType, Measurement} from "../lib/LibTEE.sol";
 import {WorkloadCollaterals} from "./IWorkloadVerifier.sol";
-import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {CertPubkey, SignatureAlgorithm} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+
+struct CVMIdentity {
+    CertPubkey pubkey;
+    SignatureAlgorithm sigAlgo;
+}
 
 struct CVMConfig {
     TEEType teeType;
@@ -15,12 +20,13 @@ struct CVMConfig {
     uint64 tpmRecentTimestamp;
     bytes32 measurementHash;
     bytes teeAttestationOutput;
-    CertPubkey cvmIdentity;
+    CVMIdentity cvmIdentity;
     CertPubkey tpmAk;
 }
 
 interface ICVMRegistry {
     error CVM_NOT_REGISTERED();
+    error CVM_IDENTITY_INVALID();
     error CVM_IDENTITY_MISMATCH(bytes32 expected, bytes32 actual);
     error INVALID_SIGNATURE();
     error UNSUPPORTED_HASH_ALGORITHM(uint16 hashAlgo);
@@ -41,6 +47,7 @@ interface ICVMRegistry {
         TEEType teeType,
         TeeReportType teeReportType,
         bytes calldata teeAttestationReport,
+        CVMIdentity calldata cvmIdentity,
         WorkloadCollaterals calldata wc
     ) external returns (Measurement memory measurements);
 
@@ -54,7 +61,7 @@ interface ICVMRegistry {
     /// @dev In this scenario, you must also check that TPM extraData
     ///      contains the new CVM identity hash.
     /// @dev The entire config will be re-mapped using the new CVM identity hash
-    function reattestCvmWithTpm(bytes32 cvmIdentityHash, bytes calldata signature, WorkloadCollaterals calldata wc)
+    function reattestCvmWithTpm(bytes32 cvmIdentityHash, bytes calldata signature, CVMIdentity calldata updateCvmIdentity, WorkloadCollaterals calldata wc)
         external
         returns (Measurement memory measurements);
 
@@ -74,7 +81,7 @@ interface ICVMRegistry {
 
     function getMeasurementHash(bytes32 cvmIdentityHash) external view returns (bytes32 hash);
 
-    function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (CertPubkey memory identity);
+    function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (CVMIdentity memory identity);
 
     /// @notice Use this method if you need to load everything
     ///         about the registered CVM

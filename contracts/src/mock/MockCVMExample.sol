@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {CVMRegistry} from "../usecases/CVMRegistry.sol";
+import {ICVMRegistry, CVMIdentity} from "../interfaces/ICVMRegistry.sol";
 import {CVMSignature} from "../usecases/bases/CVMSignature.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey, SignatureAlgorithm, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
@@ -10,13 +10,15 @@ import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/TPM
 
 contract MockCVMExample is CVMSignature {
     using LibX509Verify for CertPubkey;
-    CVMRegistry public immutable cvmRegistry;
+    ICVMRegistry public immutable cvmRegistry;
     address public owner;
+    address public p256Verifier;
     mapping(bytes32 goldenMeasurementHash => bool) public goldenMeasurements;
 
-    constructor(address _cvnRegistry) {
+    constructor(address _cvnRegistry, address _p256Verifier) {
         owner = msg.sender;
-        cvmRegistry = CVMRegistry(_cvnRegistry);
+        p256Verifier = _p256Verifier;
+        cvmRegistry = ICVMRegistry(_cvnRegistry);
     }
 
     event GoldenMeasurementRegistered(bytes32 indexed measurementHash);
@@ -57,12 +59,8 @@ contract MockCVMExample is CVMSignature {
         }
 
         // Step 2: Verify CVM Signature
-        CertPubkey memory cvmIdentityKey = cvmRegistry.getCvmIdentity(cvmIdentityHash);
-        address verifier = cvmIdentityKey.algo == TPMConstants.TPM_ALG_ECC ? cvmRegistry.tpmAttestation().p256() : address(0);
-        SignatureAlgorithm memory sigAlgo = SignatureAlgorithm({
-            scheme: TPMConstants.TPM_ALG_ECDSA,
-            hashAlgo: TPMConstants.TPM_ALG_SHA256
-        });
-        verified = cvmIdentityKey.verifySignature(sigAlgo, _generateMessage(message), signature, verifier);
+        CVMIdentity memory cvmIdentity = cvmRegistry.getCvmIdentity(cvmIdentityHash);
+        address verifier = cvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? p256Verifier : address(0);
+        verified = _verifySignature(cvmIdentity, signature, message, verifier);
     }
 }
