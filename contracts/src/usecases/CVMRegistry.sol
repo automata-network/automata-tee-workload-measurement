@@ -21,7 +21,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
     IWorkloadVerifier public immutable workloadVerifier;
     ITpmAttestation public immutable tpmAttestation;
-    
+
     // consists of (uint8 magic_prefix || bytes32 cvmIdentityHash)
     uint8 constant TPM_DATA_MIN_LENGTH = 33;
     // min CSP limitations (Azure: 50 bytes; GCP: 64 bytes; AWS: 66 bytes)
@@ -105,19 +105,22 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         emit CVMUpdated(identity);
     }
 
-    function reattestCvmWithTpm(bytes32 cvmIdentityHash, bytes calldata signature, CVMIdentity calldata updateCvmIdentity, WorkloadCollaterals calldata wc)
-        external
-        override
-        onlyRegistered(cvmIdentityHash)
-        returns (Measurement memory measurements)
-    {
+    function reattestCvmWithTpm(
+        bytes32 cvmIdentityHash,
+        bytes calldata signature,
+        CVMIdentity calldata updateCvmIdentity,
+        WorkloadCollaterals calldata wc
+    ) external override onlyRegistered(cvmIdentityHash) returns (Measurement memory measurements) {
         CVMConfig storage config = _configs[cvmIdentityHash];
 
         // Step 1: Verify the signature against the CVM identity
         CVMIdentity memory currentCvmIdentity = config.cvmIdentity;
         {
-            address verifier = currentCvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
-            bytes memory message = _generateMessageWithCustomPrefix("CVM_WORKLOAD_REATTEST_TPM", abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote)));
+            address verifier =
+                currentCvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
+            bytes memory message = _generateMessageWithCustomPrefix(
+                "CVM_WORKLOAD_REATTEST_TPM", abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote))
+            );
             bool verified = _verifySignature(currentCvmIdentity, signature, message, verifier);
 
             if (!verified) {
@@ -175,7 +178,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         // This prevents extending TTL after collaterals have already expired
         bool teeValid = (block.timestamp - config.teeRecentTimestamp) < config.teeTTL;
         bool tpmValid = (block.timestamp - config.tpmRecentTimestamp) < config.tpmTTL;
-        
+
         if (!teeValid) {
             revert TEE_COLLATERAL_EXPIRED();
         }
@@ -188,7 +191,8 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         {
             bytes memory messageData = abi.encodePacked(_nonces[cvmIdentityHash]++, teeTTL, tpmTTL);
             bytes memory message = _generateMessageWithCustomPrefix("CVM_WORKLOAD_TTL_CONFIG", messageData);
-            address verifier = cvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
+            address verifier =
+                cvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
             bool verified = _verifySignature(cvmIdentity, signature, message, verifier);
             if (!verified) {
                 revert INVALID_SIGNATURE();
@@ -264,23 +268,19 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
     function _sanityCheckCvmIdentity(CVMIdentity memory cvmIdentity) private pure {
         CertPubkey memory pubkey = cvmIdentity.pubkey;
-        bool pubkeyIsValid = pubkey.algo != TPMConstants.TPM_ALG_ERROR && pubkey.algo != TPMConstants.TPM_ALG_NULL && pubkey.data.length > 0;
+        bool pubkeyIsValid = pubkey.algo != TPMConstants.TPM_ALG_ERROR && pubkey.algo != TPMConstants.TPM_ALG_NULL
+            && pubkey.data.length > 0;
         SignatureAlgorithm memory sigAlgo = cvmIdentity.sigAlgo;
-        bool sigAlgoIsValid = sigAlgo.scheme != TPMConstants.TPM_ALG_ERROR && sigAlgo.hashAlgo != TPMConstants.TPM_ALG_ERROR && sigAlgo.scheme != TPMConstants.TPM_ALG_NULL && sigAlgo.hashAlgo != TPMConstants.TPM_ALG_NULL;
-        require (pubkeyIsValid && sigAlgoIsValid, CVM_IDENTITY_INVALID());
+        bool sigAlgoIsValid = sigAlgo.scheme != TPMConstants.TPM_ALG_ERROR
+            && sigAlgo.hashAlgo != TPMConstants.TPM_ALG_ERROR && sigAlgo.scheme != TPMConstants.TPM_ALG_NULL
+            && sigAlgo.hashAlgo != TPMConstants.TPM_ALG_NULL;
+        require(pubkeyIsValid && sigAlgoIsValid, CVM_IDENTITY_INVALID());
     }
 
     function _computeCvmIdentityHash(CVMIdentity memory cvmIdentity) private pure returns (bytes32) {
         CertPubkey memory pubkey = cvmIdentity.pubkey;
         SignatureAlgorithm memory sigAlgo = cvmIdentity.sigAlgo;
-        return keccak256(
-            abi.encodePacked(
-                sigAlgo.scheme,
-                pubkey.params,
-                sigAlgo.hashAlgo,
-                pubkey.data
-            )
-        );
+        return keccak256(abi.encodePacked(sigAlgo.scheme, pubkey.params, sigAlgo.hashAlgo, pubkey.data));
     }
 
     /// @dev the TPM data consists of

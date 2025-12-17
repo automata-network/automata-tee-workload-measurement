@@ -2,12 +2,15 @@
 // Automata Contracts
 pragma solidity ^0.8.0;
 
-import { ITpmAttestation, MeasureablePcr } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import { CertPubkey } from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {
+    ITpmAttestation,
+    MeasureablePcr
+} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 
-import { IDcapAttestation } from "./IDcapAttestation.sol";
-import { ISnpAttestation } from "./ISnpAttestation.sol";
-import { TEEType, TeeReportType, CloudType, Measurement, TEEVerifiedData } from "../lib/LibTEE.sol";
+import {IDcapAttestation} from "./IDcapAttestation.sol";
+import {ISnpAttestation} from "./ISnpAttestation.sol";
+import {TEEType, TeeReportType, CloudType, Measurement, TEEVerifiedData} from "../lib/LibTEE.sol";
 
 /// @custom:security-contact security@ata.network
 struct WorkloadCollaterals {
@@ -88,10 +91,7 @@ interface IWorkloadVerifier {
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    )
-        external
-        payable
-        returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
+    ) external payable returns (bytes memory teeOutput, Measurement memory measurement, bytes memory tpmExtraData);
 
     /// @notice Call this method if you are only interested in getting the hash of the Workload Measurement
     /// @param teeType Intel TDX or AMD-SEV-SNP
@@ -110,10 +110,7 @@ interface IWorkloadVerifier {
         CloudType cloudType,
         bytes calldata _teeAttestationReport,
         WorkloadCollaterals calldata _workloadReport
-    )
-        external
-        payable
-        returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
+    ) external payable returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData);
 
     /// @notice Helper Method to parse raw TEE output
     /// @param teeType Intel TDX or AMD-SEV-SNP
@@ -125,10 +122,7 @@ interface IWorkloadVerifier {
     /// @param teeVerifiedData The verified data from the TEE attestation
     /// @param pcrs The measurable PCR values to include in the measurement
     /// @return The final measurement combining TEE verified data and PCRs
-    function getMeasurement(
-        TEEVerifiedData memory teeVerifiedData,
-        MeasureablePcr[] memory pcrs
-    )
+    function getMeasurement(TEEVerifiedData memory teeVerifiedData, MeasureablePcr[] memory pcrs)
         external
         view
         returns (Measurement memory);

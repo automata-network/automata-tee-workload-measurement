@@ -2,11 +2,11 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import { Pcr } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import { WorkloadCollaterals } from "../interfaces/IWorkloadVerifier.sol";
-import { Bytes48, Bytes64, LibBytes } from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
-import { Sha2Ext } from "./Sha2Ext.sol";
+import {WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
+import {Bytes48, Bytes64, LibBytes} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
+import {Sha2Ext} from "./Sha2Ext.sol";
 
 using LibBytes for bytes;
 using LibBytes for bytes32;
@@ -120,10 +120,7 @@ library LibTEE {
         WorkloadCollaterals calldata wc,
         uint256 pcrIndex,
         TEEVerifiedData memory teeData
-    )
-        internal
-        pure
-    {
+    ) internal pure {
         uint256 len = wc.pcrs.length;
         bool verified;
 

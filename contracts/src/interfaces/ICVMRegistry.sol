@@ -61,13 +61,15 @@ interface ICVMRegistry {
     /// @dev In this scenario, you must also check that TPM extraData
     ///      contains the new CVM identity hash.
     /// @dev The entire config will be re-mapped using the new CVM identity hash
-    function reattestCvmWithTpm(bytes32 cvmIdentityHash, bytes calldata signature, CVMIdentity calldata updateCvmIdentity, WorkloadCollaterals calldata wc)
-        external
-        returns (Measurement memory measurements);
+    function reattestCvmWithTpm(
+        bytes32 cvmIdentityHash,
+        bytes calldata signature,
+        CVMIdentity calldata updateCvmIdentity,
+        WorkloadCollaterals calldata wc
+    ) external returns (Measurement memory measurements);
 
     /// @dev sig + TEE and TPM validity
-    function setCollateralTTL(bytes32 cvmIdentityHash, uint64 teeTTL, uint64 tpmTTL, bytes calldata signature)
-        external;
+    function setCollateralTTL(bytes32 cvmIdentityHash, uint64 teeTTL, uint64 tpmTTL, bytes calldata signature) external;
 
     /// ===== HELPER METHODS =====
 

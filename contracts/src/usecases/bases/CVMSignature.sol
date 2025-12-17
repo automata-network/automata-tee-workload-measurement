@@ -28,12 +28,6 @@ abstract contract CVMSignature {
         bytes memory message,
         address verifier
     ) internal view virtual returns (bool) {
-        return LibX509Verify.verifySignature(
-            cvmIdentity.pubkey,
-            cvmIdentity.sigAlgo,
-            message,
-            signature,
-            verifier
-        );
+        return LibX509Verify.verifySignature(cvmIdentity.pubkey, cvmIdentity.sigAlgo, message, signature, verifier);
     }
 }

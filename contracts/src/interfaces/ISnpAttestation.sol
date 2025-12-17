@@ -40,9 +40,9 @@ struct VerifierJournal {
 interface ISnpAttestation {
     /// @notice Type of ZK co-processor used for proof verification
     enum ZkCoProcessorType {
-        None,       // No ZK proof (not supported for SNP)
-        RiscZero,   // RISC Zero zkVM proof
-        Succinct    // Succinct SP1 proof
+        None, // No ZK proof (not supported for SNP)
+        RiscZero, // RISC Zero zkVM proof
+        Succinct // Succinct SP1 proof
     }
 
     /// @notice Verifies an AMD SEV-SNP attestation report with a ZK proof
@@ -56,7 +56,5 @@ interface ISnpAttestation {
         bytes calldata output,
         ZkCoProcessorType zkCoprocessor,
         bytes calldata proofBytes
-    )
-        external
-        returns (VerifierJournal memory verifiedOutput);
+    ) external returns (VerifierJournal memory verifiedOutput);
 }

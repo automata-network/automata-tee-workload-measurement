@@ -22,10 +22,7 @@ interface IDcapAttestation {
     /// @return success True if the quote passes all verification checks, false otherwise
     /// @return output On success: serialized verification output containing extracted claims
     ///         (e.g., MRENCLAVE, MRSIGNER, report data, TCB status).
-    function verifyAndAttestOnChain(bytes calldata input)
-        external
-        payable
-        returns (bool success, bytes memory output);
+    function verifyAndAttestOnChain(bytes calldata input) external payable returns (bool success, bytes memory output);
 
     /// @notice Enumeration of supported Zero-Knowledge coprocessor types
     /// @dev ZK coprocessors offload expensive verification computations off-chain

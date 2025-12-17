@@ -44,8 +44,9 @@ contract CvmGcpTest is TestSetup {
 
         bytes32 actualMeasurement = keccak256(result);
 
-        string memory gmJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-test-golden_measurements.json"));
+        string memory gmJson = vm.readFile(
+            string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-test-golden_measurements.json")
+        );
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
         bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
 
@@ -78,8 +79,9 @@ contract CvmGcpTest is TestSetup {
 
         bytes32 actualMeasurement = keccak256(result);
 
-        string memory gmJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-test-golden_measurements.json"));
+        string memory gmJson = vm.readFile(
+            string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-test-golden_measurements.json")
+        );
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
         bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
 
