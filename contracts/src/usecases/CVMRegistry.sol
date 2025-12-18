@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache2
 // Automata Contracts
-pragma solidity ^0.8.15;
+pragma solidity ^0.8.20;
 
 import {IWorkloadVerifier, WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
 import {ICVMRegistry, CVMConfig, CVMIdentity} from "../interfaces/ICVMRegistry.sol";
@@ -54,8 +54,9 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         require(newImplementation != address(0), "Invalid implementation address");
     }
 
-    function initialize(address _intialOwner) external initializer {
+    function initialize(address _intialOwner, address _p256Verifier) external initializer {
         __Ownable_init(_intialOwner);
+        P256_VERIFIER = _p256Verifier;
     }
 
     function attestCvm(
@@ -116,12 +117,10 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         // Step 1: Verify the signature against the CVM identity
         CVMIdentity memory currentCvmIdentity = config.cvmIdentity;
         {
-            address verifier =
-                currentCvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
             bytes memory message = _generateMessageWithCustomPrefix(
                 "CVM_WORKLOAD_REATTEST_TPM", abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote))
             );
-            bool verified = _verifySignature(currentCvmIdentity, signature, message, verifier);
+            bool verified = _verifySignature(currentCvmIdentity, signature, message);
 
             if (!verified) {
                 revert INVALID_SIGNATURE();
@@ -191,9 +190,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         {
             bytes memory messageData = abi.encodePacked(_nonces[cvmIdentityHash]++, teeTTL, tpmTTL);
             bytes memory message = _generateMessageWithCustomPrefix("CVM_WORKLOAD_TTL_CONFIG", messageData);
-            address verifier =
-                cvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? tpmAttestation.p256() : address(0);
-            bool verified = _verifySignature(cvmIdentity, signature, message, verifier);
+            bool verified = _verifySignature(cvmIdentity, signature, message);
             if (!verified) {
                 revert INVALID_SIGNATURE();
             }

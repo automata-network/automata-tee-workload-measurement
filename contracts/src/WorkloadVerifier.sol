@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache2
 // Automata Contracts
-pragma solidity ^0.8.27;
+pragma solidity ^0.8.20;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -309,7 +309,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             extraData = data;
         }
 
-        LibTEE.verifyReportID(cloudType, wc, 16, teeVerifiedData);
+        LibTEE.verifyReportID(cloudType, wc, 15, teeVerifiedData);
     }
 
     /// @notice Extracts the attestation key (AK) public key from Azure TPM JSON data

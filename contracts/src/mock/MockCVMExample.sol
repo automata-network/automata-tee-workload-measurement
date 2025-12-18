@@ -12,12 +12,11 @@ contract MockCVMExample is CVMSignature {
     using LibX509Verify for CertPubkey;
     ICVMRegistry public immutable cvmRegistry;
     address public owner;
-    address public p256Verifier;
     mapping(bytes32 goldenMeasurementHash => bool) public goldenMeasurements;
 
     constructor(address _cvnRegistry, address _p256Verifier) {
         owner = msg.sender;
-        p256Verifier = _p256Verifier;
+        P256_VERIFIER = _p256Verifier;
         cvmRegistry = ICVMRegistry(_cvnRegistry);
     }
 
@@ -60,7 +59,6 @@ contract MockCVMExample is CVMSignature {
 
         // Step 2: Verify CVM Signature
         CVMIdentity memory cvmIdentity = cvmRegistry.getCvmIdentity(cvmIdentityHash);
-        address verifier = cvmIdentity.sigAlgo.scheme == TPMConstants.TPM_ALG_ECDSA ? p256Verifier : address(0);
-        verified = _verifySignature(cvmIdentity, signature, message, verifier);
+        verified = _verifySignature(cvmIdentity, signature, message);
     }
 }

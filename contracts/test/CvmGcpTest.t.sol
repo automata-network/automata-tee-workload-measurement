@@ -21,14 +21,14 @@ contract CvmGcpTest is TestSetup {
         vm.startBroadcast(owner);
         CVMRegistry registryImpl = new CVMRegistry(address(workloadVerifier));
 
-        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner);
+        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner, P256_VERIFIER);
         registry = CVMRegistry(address(new ERC1967Proxy(address(registryImpl), ownerInitData)));
         vm.stopBroadcast();
     }
 
     function testGcpTdxCvm() public {
-        // pinned September 4th, 2025, 1015h UTC
-        vm.warp(1756980900);
+        // pinned December 18th, 2025, 0700h UTC
+        vm.warp(1766041200);
         bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);
