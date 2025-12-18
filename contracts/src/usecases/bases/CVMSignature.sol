@@ -42,11 +42,12 @@ abstract contract CVMSignature {
         StorageSlot.getAddressSlot(P256_VERIFIER_SLOT).value = p256VerifierAddress;
     }
 
-    function _verifySignature(
-        CVMIdentity memory cvmIdentity,
-        bytes memory signature,
-        bytes memory message
-    ) internal view virtual returns (bool verified) {
+    function _verifySignature(CVMIdentity memory cvmIdentity, bytes memory signature, bytes memory message)
+        internal
+        view
+        virtual
+        returns (bool verified)
+    {
         CertPubkey memory pubkey = cvmIdentity.pubkey;
         SignatureAlgorithm memory sigAlgo = cvmIdentity.sigAlgo;
 
@@ -66,11 +67,11 @@ abstract contract CVMSignature {
         }
     }
 
-    function _verifyRsaSignature(
-        CertPubkey memory pubkey,
-        bytes memory signature,
-        bytes32 digest
-    ) private view returns (bool verified) {
+    function _verifyRsaSignature(CertPubkey memory pubkey, bytes memory signature, bytes32 digest)
+        private
+        view
+        returns (bool verified)
+    {
         // Extract RSA public key parameters
         (bytes memory n, bytes memory e) = pubkey.rsa();
 
@@ -81,11 +82,11 @@ abstract contract CVMSignature {
         return RSA.pkcs1Sha256(digest, signature, e, n);
     }
 
-    function _verifyEcdsaSignature(
-        CertPubkey memory pubkey,
-        bytes memory signature,
-        bytes32 digest
-    ) private view returns (bool verified) {
+    function _verifyEcdsaSignature(CertPubkey memory pubkey, bytes memory signature, bytes32 digest)
+        private
+        view
+        returns (bool verified)
+    {
         // Extract ECDSA public key parameters
         (bytes32 x, bytes32 y) = pubkey.ecP256();
 

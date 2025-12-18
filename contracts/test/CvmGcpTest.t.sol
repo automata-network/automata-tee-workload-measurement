@@ -66,12 +66,12 @@ contract CvmGcpTest is TestSetup {
         uint64 teeTTLBefore = config.teeTTL;
         uint64 tpmTTLBefore = config.tpmTTL;
 
-        string memory ttlUpdateJson = 
+        string memory ttlUpdateJson =
             vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-update-ttl.json"));
         string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
         bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
 
-        (bool ttlUpdateSuccess, ) = address(registry).call(decodedTtlUpdateCalldata);
+        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
         assertTrue(ttlUpdateSuccess, "TTL update failed");
 
         CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
@@ -119,12 +119,12 @@ contract CvmGcpTest is TestSetup {
         uint64 teeTTLBefore = config.teeTTL;
         uint64 tpmTTLBefore = config.tpmTTL;
 
-        string memory ttlUpdateJson = 
+        string memory ttlUpdateJson =
             vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-update-ttl.json"));
         string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
         bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
 
-        (bool ttlUpdateSuccess, ) = address(registry).call(decodedTtlUpdateCalldata);
+        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
         assertTrue(ttlUpdateSuccess, "TTL update failed");
 
         CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
