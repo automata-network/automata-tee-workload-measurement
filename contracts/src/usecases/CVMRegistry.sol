@@ -56,7 +56,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
     function initialize(address _intialOwner, address _p256Verifier) external initializer {
         __Ownable_init(_intialOwner);
-        P256_VERIFIER = _p256Verifier;
+        _writeP256VerifyAddress(_p256Verifier);
     }
 
     function attestCvm(

@@ -16,7 +16,7 @@ contract MockCVMExample is CVMSignature {
 
     constructor(address _cvnRegistry, address _p256Verifier) {
         owner = msg.sender;
-        P256_VERIFIER = _p256Verifier;
+        _writeP256VerifyAddress(_p256Verifier);
         cvmRegistry = ICVMRegistry(_cvnRegistry);
     }
 

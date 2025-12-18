@@ -6,18 +6,23 @@ import {CVMIdentity} from "../../interfaces/ICVMRegistry.sol";
 import {CertPubkey, SignatureAlgorithm} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/TPMConstants.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
+import {StorageSlot} from "@openzeppelin/contracts/utils/StorageSlot.sol";
 
 /// @title CVM Signature Base Contract
 /// @notice This contract provides a template,
 /// generating messages to be signed by a CVM Identity Key.
 abstract contract CVMSignature {
-    address public P256_VERIFIER;
+    bytes32 constant P256_VERIFIER_SLOT = keccak256("automata.contracts.usecases.CVMSignature.p256Verifier");
 
     error UnsupportedHashAlgorithm(uint16 hashAlgorithm);
     error UnsupportedSignatureAlgorithm(uint16 signatureAlgorithm);
     error IncorrectPubkeyLength();
     error IncorrectSignatureLength();
     error InvalidSignature();
+
+    function P256_VERIFIER() public view returns (address) {
+        return StorageSlot.getAddressSlot(P256_VERIFIER_SLOT).value;
+    }
 
     function _generateMessage(bytes memory userData) internal view virtual returns (bytes memory) {
         return _generateMessageWithCustomPrefix("CVM_WORKLOAD_USER_MESSAGE", userData);
@@ -30,6 +35,11 @@ abstract contract CVMSignature {
         returns (bytes memory)
     {
         return abi.encodePacked(bytes(prefix), block.chainid, address(this), userData);
+    }
+
+    /// @dev use this method to update the P256 verifier contract address
+    function _writeP256VerifyAddress(address p256VerifierAddress) internal {
+        StorageSlot.getAddressSlot(P256_VERIFIER_SLOT).value = p256VerifierAddress;
     }
 
     function _verifySignature(
@@ -94,7 +104,7 @@ abstract contract CVMSignature {
 
         // Call the P256 verifier contract with signature and public key data
         bytes memory args = abi.encode(digest, r, s, x, y);
-        (bool success, bytes memory ret) = P256_VERIFIER.staticcall(args);
+        (bool success, bytes memory ret) = P256_VERIFIER().staticcall(args);
 
         if (!success || ret.length != 32) {
             return false;
