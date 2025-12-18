@@ -54,7 +54,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         require(newImplementation != address(0), "Invalid implementation address");
     }
 
-    function initialize(address _intialOwner, address _p256Verifier) external initializer {
+    function initialize(address _intialOwner, address _p256Verifier) external reinitializer(2) {
         __Ownable_init(_intialOwner);
         _writeP256VerifyAddress(_p256Verifier);
     }
