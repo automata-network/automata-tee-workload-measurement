@@ -11,3 +11,5 @@ out/
 
 # Deployment Keys
 keystore/
+
+**/.DS_Store
