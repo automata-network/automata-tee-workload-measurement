@@ -174,7 +174,12 @@ The `CVMRegistry.sol` contract provides a production-ready implementation for ma
 
 #### Identity Hash Computation
 ```solidity
-keccak256(abi.encodePacked(sigScheme, curve, hashAlgo, data))
+keccak256(abi.encodePacked(
+    cvmIdentity.sigAlgo.scheme,
+    cvmIdentity.pubkey.params,
+    cvmIdentity.sigAlgo.hashAlgo,
+    cvmIdentity.pubkey.data
+))
 ```
 
 #### TPM Extra Data Format
@@ -185,7 +190,7 @@ Maximum 50 bytes to support all cloud providers (Azure/GCP/AWS)
 
 #### Message Domain Separation
 ```
-abi.encodePacked(prefix, uint16(chainid), address(this), userData)
+abi.encodePacked(bytes(prefix), block.chainid, address(this), userData)
 ```
 Prefixes:
 - `CVM_WORKLOAD_REATTEST_TPM`

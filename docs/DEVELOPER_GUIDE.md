@@ -71,7 +71,7 @@ sequenceDiagram
 
 4. **PCR Measurement Verification**: The list of PCR indices provided in the collateral must match with the PCR selection bitmap in the TPM quote; the hash chain of PCR measurement values yields a value that must match the PCR digest value in the TPM quote.
 
-5. **TEE-TPM Binding Verification**: The provided Report ID must be found in both TEE Attestation Report and PCR 16 of the TPM. This step indicates the binding between TEE and TPM.
+5. **TEE-TPM Binding Verification**: The provided Report ID must be found in both TEE Attestation Report and PCR 15 of the TPM. This step indicates the binding between TEE and TPM.
 
     > **Exception**: The only exception to this rule applies to Azure TDX CVM. As stated in *2(a)*, the report data provides us with information about the AK that signs the TPM quote, which is already verified in *step 3*.
 
@@ -97,10 +97,10 @@ The table below shows gas costs to measure CVMs with various TEEs hosted on Azur
 
 |  | TEE Report Verification Gas Cost | AK Pubkey Verification Gas Cost | TPM Signature Verification Gas Cost | PCR Measurement Check Gas Cost | Report ID Binding Check Gas Cost | Measurement Computation Gas Cost |
 | --- | --- | --- | --- | --- | --- | --- |
-| Azure TDX | ~5M[^1] gas (Onchain DCAP) | 50k[^2] gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
-| Azure AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 50k[^2] gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
-| GCP TDX | ~5M[^1] gas (Onchain DCAP) | 397k[^1][^4] gas | 339k[^1] gas (secp256r1) | 16k gas | 385k[^5] gas | 82k gas |
-| GCP AMD-SEV-SNP | 240k[^3] gas (RiscZero Groth16) | 397k[^1][^4] gas | 339k[^1] gas (secp256r1) | 16k gas | 5k gas | 82k gas |
+| Azure TDX | ~5M gas (Onchain DCAP) | 50k gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
+| Azure AMD-SEV-SNP | 240k gas (RiscZero Groth16) | 50k gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
+| GCP TDX | ~5M gas (Onchain DCAP) | 397k gas | 339k gas (secp256r1) | 16k gas | 385k gas | 82k gas |
+| GCP AMD-SEV-SNP | 240k gas (RiscZero Groth16) | 397k gas | 339k gas (secp256r1) | 16k gas | 5k gas | 82k gas |
 
 
 
@@ -129,33 +129,50 @@ Once registered, the CVM’s identity key can sign authorized messages (with dom
 
 #### CVM Identity
 
-A CVM's identity is represented by an asymmetric key generated using the [Owner hierarchy](https://github.com/nokia/TPMCourse/blob/master/docs/keys.md#creating-keys) by the TPM, which is enabled with persistence (re-usable even after CVM reboots). The identity contains:
-- The public portion of the key
-- Metadata describing the signature and hashing algorithms (using TPM constants as defined in the [TPM2 specification](https://trustedcomputinggroup.org/wp-content/uploads/TPM-Rev-2.0-Part-2-Structures-01.38.pdf))
+A CVM's identity is represented by an asymmetric key generated using the [Owner hierarchy](https://github.com/nokia/TPMCourse/blob/master/docs/keys.md#creating-keys) by the TPM, which is enabled with persistence (re-usable even after CVM reboots). The identity is defined as a `CVMIdentity` struct containing:
+- `CertPubkey pubkey`: The public portion of the key with algorithm metadata
+- `SignatureAlgorithm sigAlgo`: Signature scheme and hash algorithm
 
-**Identity Encoding Format**:
+**CVMIdentity Struct**:
+```solidity
+struct CVMIdentity {
+    CertPubkey pubkey;
+    SignatureAlgorithm sigAlgo;
+}
+
+struct CertPubkey {
+    uint16 algo;    // Algorithm identifier (TPM_ALG_RSA or TPM_ALG_ECC)
+    bytes params;   // Algorithm parameters (curve ID for ECC)
+    bytes data;     // Raw public key data
+}
+
+struct SignatureAlgorithm {
+    uint16 scheme;    // Signature scheme (TPM_ALG_RSASSA or TPM_ALG_ECDSA)
+    uint16 hashAlgo;  // Hash algorithm (TPM_ALG_SHA256)
+}
 ```
-encoded_cvm_identity = bytes2 sig_scheme || bytes2 curve || bytes2 hash_algo || <pubkey_value>
-```
 
-**Currently Supported**: NIST P256 **uncompressed (omitting 0x04 prefix)** keys using SHA256 hash:
+**Currently Supported**: NIST P256 **uncompressed** keys using SHA256 hash:
 
 ```
-SIG_SCHEME  = 0x0018 (TPM_ALG_ECDSA)
-CURVE       = 0x0003 (TPM_ECC_NIST_P256)
-HASH_ALGO   = 0x000B (TPM_ALG_SHA256)
-PUBKEY_VALUE = x || y (64 bytes)
-
-encoded_cvm_identity = 0x0018 || 0x0003 || 0x000B || x || y
+sigAlgo.scheme   = 0x0018 (TPM_ALG_ECDSA)
+pubkey.params    = 0x0003 (TPM_ECC_NIST_P256)
+sigAlgo.hashAlgo = 0x000B (TPM_ALG_SHA256)
+pubkey.data      = 0x04 || x || y (65 bytes)
 ```
 
 **Identity Hash**: The identity hash serves as the primary key for all registry operations:
 
 ```solidity
-cvm_identity_hash = keccak256(encoded_cvm_identity)
+cvm_identity_hash = keccak256(abi.encodePacked(
+    sigAlgo.scheme,
+    pubkey.params,
+    sigAlgo.hashAlgo,
+    pubkey.data
+))
 ```
 
-The CVM Identity hash must be embedded in the TPM `extraData` field for validation. The full CVM Identity must be provided to the contract as part of the Workload Collateral for both key registration and key rotation steps.
+The CVM Identity hash must be embedded in the TPM `extraData` field for validation. The full `CVMIdentity` must be provided to the contract as a separate parameter for both key registration and key rotation steps.
 
 #### Freshness Windows (TTL)
 
@@ -171,7 +188,7 @@ These TTLs can be customized per CVM identity through signed requests.
 All signed operations use domain-separated messages to prevent cross-contract and cross-chain replay attacks. The format is:
 
 ```solidity
-abi.encodePacked(prefix, uint16(chainid), address(this), userData)
+abi.encodePacked(bytes(prefix), block.chainid, address(this), userData)
 ```
 
 **Message Prefixes**:
@@ -240,7 +257,7 @@ Once a CVM has been registered in the Registry, it can use its identity to sign 
 
 For the following example workflow, we make these assumptions:
 - The **Verifier** and **Attester** are both workloads running inside CVMs (performing mutual verification). Note that this architecture is flexible and depends on your specific use case.
-- The workload uses the [sample application contract](https://github.com/automata-network/cvm-onchain-verifier/blob/main/contracts/src/mock/MockCVMExample.sol) without modifications to the `checkCVMSignature` function.
+- The workload uses the [sample application contract](../src/mock/MockCVMExample.sol) without modifications to the `checkCVMSignature` function.
 
 ### Verification Flow
 
@@ -313,12 +330,13 @@ Initial registration of a CVM identity using full attestation (TEE + TPM).
 **Function Signature**:
 ```solidity
 function attestCvm(
+    CloudType cloudType,
     TEEType teeType,
     TeeReportType teeReportType,
-    CloudType cloudType,
     bytes calldata teeAttestationReport,
+    CVMIdentity calldata cvmIdentity,
     WorkloadCollaterals calldata wc
-) external payable;
+) external returns (Measurement memory measurements);
 ```
 
 #### 2. Re-attestation (`reattestCvmWithTpm`)
@@ -347,9 +365,11 @@ Refresh TPM collateral while reusing existing TEE attestation. Optionally suppor
 **Function Signature**:
 ```solidity
 function reattestCvmWithTpm(
+    bytes32 cvmIdentityHash,
     bytes calldata signature,
+    CVMIdentity calldata updateCvmIdentity,
     WorkloadCollaterals calldata wc
-) external;
+) external returns (Measurement memory measurements);
 ```
 
 #### 3. TTL Management (`setCollateralTTL`)
@@ -409,19 +429,21 @@ Verify a message signed by a registered CVM identity. This operation is typicall
 **Related View Functions**:
 ```solidity
 function hasRegistered(bytes32 cvmIdentityHash) external view returns (bool);
-function checkTEEValidity(bytes32 cvmIdentityHash) external view returns (bool);
-function checkTPMValidity(bytes32 cvmIdentityHash) external view returns (bool);
-function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (Pubkey memory);
-function getMeasurementHash(bytes32 cvmIdentityHash) external view returns (bytes32);
+function checkTEEValidity(bytes32 cvmIdentityHash) external view returns (bool valid);
+function checkTPMValidity(bytes32 cvmIdentityHash) external view returns (bool valid);
+function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (CVMIdentity memory identity);
+function getMeasurementHash(bytes32 cvmIdentityHash) external view returns (bytes32 hash);
+function getCvmConfig(bytes32 cvmIdentityHash) external view returns (CVMConfig memory config);
+function nonces(bytes32 cvmIdentityHash) external view returns (uint256);
 ```
 
 **Signed Message Format** (for application-specific messages):
 ```solidity
 bytes32 messageHash = keccak256(abi.encodePacked(
-    "CVM_WORKLOAD_USER_MESSAGE",
-    uint256(block.chainid),
+    bytes("CVM_WORKLOAD_USER_MESSAGE"),
+    block.chainid,
     address(consumerContract),
-    bytes(userProvidedData)
+    userProvidedData
 ));
 ```
 

@@ -9,7 +9,6 @@
 
 # Automata TEE Workload Measurement
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Automata TPM Attestation](https://img.shields.io/badge/Power%20By-Automata-orange.svg)](https://github.com/automata-network)
 
 
 This repository contains smart contracts for onchain verification and management of Confidential VM (CVM) workloads hosted on cloud service providers. It consists of two main components:

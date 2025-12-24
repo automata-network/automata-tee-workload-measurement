@@ -129,17 +129,22 @@ Use the CVMRegistry for identity management and message verification.
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ICVMRegistry} from "@automata-network/tee-workload-measurement/interfaces/ICVMRegistry.sol";
-import {Pubkey} from "@automata-network/tee-workload-measurement/types/Pubkey.sol";
+import {ICVMRegistry, CVMIdentity} from "@automata-network/tee-workload-measurement/interfaces/ICVMRegistry.sol";
+import {CVMRegistry} from "@automata-network/tee-workload-measurement/usecases/CVMRegistry.sol";
+import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {LibX509Verify} from "@automata-network/automata-tpm-attestation/lib/LibX509Verify.sol";
 
 contract MyCVMApp {
-    ICVMRegistry public immutable cvmRegistry;
+    using LibX509Verify for CertPubkey;
+
+    CVMRegistry public immutable cvmRegistry;
     mapping(bytes32 => bool) public allowedMeasurements;
 
     event ActionExecuted(bytes32 indexed cvmIdentityHash);
 
     constructor(address _cvmRegistry) {
-        cvmRegistry = ICVMRegistry(_cvmRegistry);
+        cvmRegistry = CVMRegistry(_cvmRegistry);
     }
 
     function addAllowedMeasurement(bytes32 measurementHash) external {
@@ -175,8 +180,8 @@ contract MyCVMApp {
 
     function _constructMessageHash(bytes calldata message) internal view returns (bytes32) {
         return keccak256(abi.encodePacked(
-            "CVM_WORKLOAD_USER_MESSAGE",
-            uint256(block.chainid),
+            bytes("CVM_WORKLOAD_USER_MESSAGE"),
+            block.chainid,
             address(this),
             message
         ));
@@ -187,15 +192,22 @@ contract MyCVMApp {
         bytes32 messageHash,
         bytes calldata signature
     ) internal view {
-        Pubkey memory identity = cvmRegistry.getCvmIdentity(cvmIdentityHash);
+        CVMIdentity memory identity = cvmRegistry.getCvmIdentity(cvmIdentityHash);
 
-        // Get P256 verifier for ECDSA signatures
-        address p256Verifier = identity.sigScheme == 0x0018
-            ? cvmRegistry.tpmAttestation().p256()
-            : address(0);
-
+        // Verify ECDSA signature using P256 verifier
+        // Note: This example assumes ECDSA P-256 signatures (sigAlgo.scheme == 0x0018)
         require(
-            identity.verifySignature(
+            identity.sigAlgo.scheme == 0x0018,
+            "Only ECDSA supported in this example"
+        );
+
+        // Get P256 verifier from TPM attestation contract
+        ITpmAttestation tpmAttestation = cvmRegistry.tpmAttestation();
+        address p256Verifier = tpmAttestation.p256();
+
+        // Verify signature using the CertPubkey from identity
+        require(
+            identity.pubkey.verifySignature(
                 abi.encodePacked(messageHash),
                 signature,
                 p256Verifier
