@@ -8,7 +8,7 @@ import {Base64} from "solady/utils/Base64.sol";
 import {Measurement} from "../src/lib/LibTEE.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {CVMRegistry} from "../src/usecases/CVMRegistry.sol";
+import {CVMRegistry, CVMConfig} from "../src/usecases/CVMRegistry.sol";
 
 contract CvmGcpTest is TestSetup {
     CVMRegistry registry;
@@ -21,14 +21,14 @@ contract CvmGcpTest is TestSetup {
         vm.startBroadcast(owner);
         CVMRegistry registryImpl = new CVMRegistry(address(workloadVerifier));
 
-        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner);
+        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner, P256_VERIFIER);
         registry = CVMRegistry(address(new ERC1967Proxy(address(registryImpl), ownerInitData)));
         vm.stopBroadcast();
     }
 
     function testGcpTdxCvm() public {
-        // pinned September 4th, 2025, 1015h UTC
-        vm.warp(1756980900);
+        // pinned December 18th, 2025, 0915h UTC
+        vm.warp(1766049300);
         bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);
@@ -44,8 +44,9 @@ contract CvmGcpTest is TestSetup {
 
         bytes32 actualMeasurement = keccak256(result);
 
-        string memory gmJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-test-golden_measurements.json"));
+        string memory gmJson = vm.readFile(
+            string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-test-golden_measurements.json")
+        );
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
         bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
 
@@ -58,11 +59,29 @@ contract CvmGcpTest is TestSetup {
 
         (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
         assertTrue(reattestSuccess, string(reattestResult));
+
+        bytes32 cvnIdentityHash = 0x17c7bb7b794e50177bc50f46a53f6ee57e4ca4377b7276b208b39c915988d80b;
+        CVMConfig memory config = registry.getCvmConfig(cvnIdentityHash);
+
+        uint64 teeTTLBefore = config.teeTTL;
+        uint64 tpmTTLBefore = config.tpmTTL;
+
+        string memory ttlUpdateJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-update-ttl.json"));
+        string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
+        bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
+
+        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
+        assertTrue(ttlUpdateSuccess, "TTL update failed");
+
+        CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
+        assertNotEq(updatedConfig.teeTTL, teeTTLBefore, "TEE TTL not updated");
+        assertNotEq(updatedConfig.tpmTTL, tpmTTLBefore, "TPM TTL not updated");
     }
 
     function testGcpSevSnp() public {
-        // pinned September 5th, 2025, 0200h UTC
-        vm.warp(1757037600);
+        // pinned December 18th, 2025, 0900h UTC
+        vm.warp(1766048400);
         bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
         vm.prank(owner);
         tpmAttestation.addCA(googleCa);
@@ -78,8 +97,9 @@ contract CvmGcpTest is TestSetup {
 
         bytes32 actualMeasurement = keccak256(result);
 
-        string memory gmJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-test-golden_measurements.json"));
+        string memory gmJson = vm.readFile(
+            string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-test-golden_measurements.json")
+        );
         string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
         bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
 
@@ -92,5 +112,23 @@ contract CvmGcpTest is TestSetup {
 
         (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
         assertTrue(reattestSuccess, string(reattestResult));
+
+        bytes32 cvnIdentityHash = 0x1fe9147ef3a853e1412adcd1d01ed876f5aac76ffae7417a87c28da4870202f0;
+        CVMConfig memory config = registry.getCvmConfig(cvnIdentityHash);
+
+        uint64 teeTTLBefore = config.teeTTL;
+        uint64 tpmTTLBefore = config.tpmTTL;
+
+        string memory ttlUpdateJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-update-ttl.json"));
+        string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
+        bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
+
+        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
+        assertTrue(ttlUpdateSuccess, "TTL update failed");
+
+        CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
+        assertNotEq(updatedConfig.teeTTL, teeTTLBefore, "TEE TTL not updated");
+        assertNotEq(updatedConfig.tpmTTL, tpmTTLBefore, "TPM TTL not updated");
     }
 }

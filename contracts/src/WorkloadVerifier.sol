@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache2
 // Automata Contracts
-pragma solidity ^0.8.15;
+pragma solidity ^0.8.20;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -9,7 +9,7 @@ import {
     Pcr,
     ITpmAttestation
 } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {Pubkey, RSALib} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
+import {CertPubkey, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/ISnpAttestation.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
@@ -21,20 +21,33 @@ import {
     TeeReportType,
     CloudType,
     LibTEE,
-    Measurement,
-    TdxMeasurement,
-    SnpMeasurement
+    Measurement
 } from "./lib/LibTEE.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 import {LibString} from "@solady/utils/LibString.sol";
+import {ZeroAddress} from "@automata-network/automata-tpm-attestation/types/Errors.sol";
 
+/// @title WorkloadVerifier
+/// @notice Verifies TEE attestations and TPM quotes for workload integrity
+/// @dev This contract acts as the main entry point for TEE attestation verification, supporting
+///      both Intel TDX and AMD SEV-SNP attestation types. It orchestrates the verification process by:
+///      1. Verifying TEE attestation reports (via DCAP for TDX or SNP attestation for SEV-SNP)
+///      2. Verifying TPM quotes and their certificate chains
+///      3. Checking PCR measurements against expected values
+///      4. Binding TEE report data to TPM attestation keys
+///      The contract supports multiple cloud providers (Azure, GCP) with different attestation flows:
+///      - Azure: TPM AK public key is embedded in TEE report data as a hash
+///      - GCP: TPM AK public key is derived from certificate chain
+///
+/// @custom:security-contact security@ata.network
+///
+/// @custom:security This contract is upgradeable. Only the owner can authorize upgrades.
 contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradeable {
     using LibString for string;
 
     IDcapAttestation public override dcapAttestation;
     ISnpAttestation public override snpAttestation;
     ITpmAttestation public override tpmAttestation;
-    bool public override allowMockAttestation;
 
     uint256[47] private __gap;
 
@@ -42,32 +55,47 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         _disableInitializers();
     }
 
-    /**
-     * @notice Only the owner can authorize an upgrade.
-     * @param newImplementation The address of the new implementation.
-     */
+    /// @notice Only the owner can authorize an upgrade.
+    /// @param newImplementation The address of the new implementation.
     function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
         require(newImplementation != address(0), "Invalid implementation address");
     }
 
+    /// @notice Initializes the WorkloadVerifier contract with required dependencies
+    /// @dev Can only be called once due to initializer modifier. Sets up all attestation verifier addresses.
+    /// @param initialOwner The address that will own this contract and can authorize upgrades
+    /// @param dcapAttestationAddr Address of the DCAP attestation verifier for Intel TDX
+    /// @param snpAttestationAddr Address of the SNP attestation verifier for AMD SEV-SNP
+    /// @param tpmAttestationAddr Address of the TPM attestation verifier for quote verification
     function initialize(
         address initialOwner,
         address dcapAttestationAddr,
         address snpAttestationAddr,
-        address tpmAttestationAddr,
-        bool mockAllowed
+        address tpmAttestationAddr
     ) external initializer {
+        if (dcapAttestationAddr == address(0)) revert ZeroAddress("dcapAttestation");
+        if (snpAttestationAddr == address(0)) revert ZeroAddress("snpAttestation");
+        if (tpmAttestationAddr == address(0)) revert ZeroAddress("tpmAttestation");
+
         dcapAttestation = IDcapAttestation(dcapAttestationAddr);
         snpAttestation = ISnpAttestation(snpAttestationAddr);
         tpmAttestation = ITpmAttestation(tpmAttestationAddr);
-        allowMockAttestation = mockAllowed;
-        __Ownable_init(initialOwner);
+        _transferOwnership(initialOwner);
     }
 
+    /// @notice Updates the attestation verifier contract addresses
+    /// @dev Can only be called by the owner. Allows updating verifier contracts without redeployment.
+    /// @param dcapAttestationAddr New address of the DCAP attestation verifier for Intel TDX
+    /// @param snpAttestationAddr New address of the SNP attestation verifier for AMD SEV-SNP
+    /// @param tpmAttestationAddr New address of the TPM attestation verifier for quote verification
     function updateDependencies(address dcapAttestationAddr, address snpAttestationAddr, address tpmAttestationAddr)
         external
         onlyOwner
     {
+        if (dcapAttestationAddr == address(0)) revert ZeroAddress("dcapAttestation");
+        if (snpAttestationAddr == address(0)) revert ZeroAddress("snpAttestation");
+        if (tpmAttestationAddr == address(0)) revert ZeroAddress("tpmAttestation");
+
         dcapAttestation = IDcapAttestation(dcapAttestationAddr);
         snpAttestation = ISnpAttestation(snpAttestationAddr);
         tpmAttestation = ITpmAttestation(tpmAttestationAddr);
@@ -85,10 +113,6 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         override
         returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData)
     {
-        if (teeType == TEEType.Mock) {
-            if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
-            return (teeOutput, teeVerifiedData, tpmExtraData);
-        }
         (teeOutput, teeVerifiedData, tpmExtraData) =
             _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
     }
@@ -100,11 +124,6 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata wc
     ) external payable override returns (bytes memory teeOutput, Measurement memory m, bytes memory tpmExtraData) {
-        if (teeType == TEEType.Mock) {
-            if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
-            return (teeOutput, m, tpmExtraData);
-        }
-
         TEEVerifiedData memory teeVerifiedData;
         (teeOutput, teeVerifiedData, tpmExtraData) =
             _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
@@ -118,26 +137,11 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata wc
     ) external payable override returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData) {
-        if (teeType == TEEType.Mock) {
-            if (!allowMockAttestation) revert MOCK_ATTESTATION_NOT_ALLOWED();
-            // in mock mode
-            // TODO: use preset golden measurement hash
-            return (teeOutput, measurementHash, tpmExtraData);
-        } else {
-            TEEVerifiedData memory teeVerifiedData;
-            (teeOutput, teeVerifiedData, tpmExtraData) =
-                _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
-            Measurement memory m = getMeasurement(teeVerifiedData, wc.pcrs);
-            measurementHash = m.digest();
-        }
-    }
-
-    function estimateBaseFeeVerifyOnChain(bytes calldata rawQuote) external payable returns (uint256) {
-        uint16 bp = dcapAttestation.getBp();
-        uint256 gasBefore = gasleft();
-        dcapAttestation.verifyAndAttestOnChain{value: msg.value}(rawQuote);
-        uint256 gasAfter = gasleft();
-        return (gasBefore - gasAfter) * bp / 10000;
+        TEEVerifiedData memory teeVerifiedData;
+        (teeOutput, teeVerifiedData, tpmExtraData) =
+            _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
+        Measurement memory m = getMeasurement(teeVerifiedData, wc.pcrs);
+        measurementHash = m.digest();
     }
 
     function getMeasurement(TEEVerifiedData memory teeVerifiedData, MeasureablePcr[] memory measuredPcrs)
@@ -167,10 +171,12 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             teeVerifiedData = LibTEE.tdxOutput(teeOutput);
         } else if (teeType == TEEType.AmdSevSnp) {
             teeVerifiedData = LibTEE.snpOutput(teeOutput);
+        } else {
+            revert INVALID_TEE_TYPE(teeType);
         }
     }
 
-    function parseVarKeyJson(string calldata varKey) external pure override returns (Pubkey memory akPub) {
+    function parseVarKeyJson(string calldata varKey) external pure override returns (CertPubkey memory) {
         return _varDataPubkey(varKey);
     }
 
@@ -189,9 +195,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             teeVerifiedData = parseTeeOutput(teeType, teeOutput);
             if (cloudType == CloudType.Azure) {
                 bytes32 localReportData = sha256(wc.akPub);
-                if (teeVerifiedData.userReportData.first != localReportData) {
-                    revert TEE_REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
-                }
+                require(
+                    teeVerifiedData.userReportData.first == localReportData,
+                    TEE_REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData)
+                );
                 teeVerifiedData.akPub = _varDataPubkey(string(wc.akPub));
             }
         }
@@ -230,9 +237,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         VerifierJournal memory output =
             snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
 
-        if (uint8(output.result) != uint8(VerificationResult.Success)) {
-            revert FAILED_TO_VERIFY_TEE();
-        }
+        require(uint8(output.result) == uint8(VerificationResult.Success), FAILED_TO_VERIFY_TEE());
 
         teeOutput = output.rawReport;
     }
@@ -241,15 +246,13 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         private
         returns (bytes memory teeOutput)
     {
+        IDcapAttestation cachedDcapAttestation = dcapAttestation;
+
         if (reportType == TeeReportType.Solidity) {
             bool succ;
-            (succ, teeOutput) = dcapAttestation.verifyAndAttestOnChain{value: msg.value}(report);
-            if (!succ) {
-                revert FAILED_TO_VERIFY_TEE();
-            }
-            if (teeOutput.length < 395) {
-                revert INVALID_TEE_REPORT();
-            }
+            (succ, teeOutput) = cachedDcapAttestation.verifyAndAttestOnChain{value: msg.value}(report);
+            require(succ, FAILED_TO_VERIFY_TEE());
+            require(teeOutput.length >= 395, INVALID_TEE_REPORT());
         } else {
             ZkProof memory zkProof = abi.decode(report, (ZkProof));
             IDcapAttestation.ZkCoProcessorType zkType;
@@ -261,13 +264,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
                 revert INVALID_TEE_REPORT_TYPE(reportType);
             }
             bool succ;
-            (succ, teeOutput) = dcapAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
-            if (!succ) {
-                revert FAILED_TO_VERIFY_TEE();
-            }
-            if (teeOutput.length < 395) {
-                revert INVALID_TEE_REPORT();
-            }
+            (succ, teeOutput) =
+                cachedDcapAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
+            require(succ, FAILED_TO_VERIFY_TEE());
+            require(teeOutput.length >= 395, INVALID_TEE_REPORT());
         }
     }
 
@@ -276,47 +276,50 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         WorkloadCollaterals calldata wc,
         TEEVerifiedData memory teeVerifiedData
     ) private returns (bytes memory extraData) {
+        // Cache tpmAttestation to memory to save on multiple SLOADs
+        ITpmAttestation cachedTpmAttestation = tpmAttestation;
+
         // Step 1: Verify TPM quote
         {
-            if (cloudType == CloudType.Azure) {
-                bytes32 localReportData = sha256(wc.akPub);
-                if (teeVerifiedData.userReportData.first != localReportData) {
-                    revert TEE_REPORT_DATA_MISMATCH(teeVerifiedData.userReportData.first, localReportData);
-                }
-                teeVerifiedData.akPub = _varDataPubkey(string(wc.akPub));
-            }
             bool success;
             string memory errorMessage;
 
             if (teeVerifiedData.akPub.empty()) {
+                // Defensive check: prevent excessive memory allocation before verifyCertChain
+                // CertChainRegistry already enforces max length of 4, but reject early for robustness
+                require(wc.certs.length > 0 && wc.certs.length <= 4, "Invalid certificate chain length");
                 bytes memory ret;
-                (success, ret) = tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, wc.certs);
+                (success, ret) = cachedTpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, wc.certs);
                 if (success) {
-                    teeVerifiedData.akPub = abi.decode(ret, (Pubkey));
+                    teeVerifiedData.akPub = abi.decode(ret, (CertPubkey));
                 }
             } else {
-                (success, errorMessage) =
-                    tpmAttestation.verifyTpmQuote(wc.tpmQuote, wc.tpmSignature, teeVerifiedData.akPub);
+                (success, errorMessage) = cachedTpmAttestation.verifyTpmQuoteWithTrustedAkPub(
+                    wc.tpmQuote, wc.tpmSignature, teeVerifiedData.akPub
+                );
             }
 
-            if (!success) {
-                revert FAILED_TO_VERIFY_TPM_QUOTE(errorMessage);
-            }
+            require(success, FAILED_TO_VERIFY_TPM_QUOTE(errorMessage));
         }
 
         // Step 2: Check PCR measurements and extract extraData from the quote
         {
-            (bool success, bytes memory data) = tpmAttestation.checkPcrMeasurements(wc.tpmQuote, wc.pcrs);
-            if (!success) {
-                revert FAILED_TO_CHECK_PCR_MEASUREMENTS(string(data));
-            }
+            (bool success, bytes memory data) = cachedTpmAttestation.checkPcrMeasurements(wc.tpmQuote, wc.pcrs);
+            require(success, FAILED_TO_CHECK_PCR_MEASUREMENTS(string(data)));
             extraData = data;
         }
 
-        LibTEE.verifyReportID(wc, teeVerifiedData);
+        LibTEE.verifyReportID(cloudType, wc, 15, teeVerifiedData);
     }
 
-    function _varDataPubkey(string memory data) private pure returns (Pubkey memory) {
+    /// @notice Extracts the attestation key (AK) public key from Azure TPM JSON data
+    /// @dev This parser implements a STRICT substring matching algorithm (lower gas cost) for Azure
+    ///      TPM attestation keys. It is NOT compliant with RFC7517 (JSON Web Key).
+    ///      Example JSON structure:
+    ///      {"keys":[{"kid":"HCLAkPub","key_ops":["sign"],"kty":"RSA","e":"...","n":"..."},...]}
+    /// @param data The JSON string containing the TPM attestation key
+    /// @return CertPubkey The extracted RSA public key
+    function _varDataPubkey(string memory data) private pure returns (CertPubkey memory) {
         uint256 off = 0;
         uint256 pos;
         pos = data.indexOf("\"kid\":\"HCLAkPub\"", off);
@@ -338,7 +341,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             revert("data mixed up");
         }
 
-        return RSALib.newRsaPubkey(Base64.decode(eBase64), Base64.decode(nBase64));
+        return LibX509.newRsaPubkey(Base64.decode(nBase64), Base64.decode(eBase64));
     }
 
     function _verifyAndGetOffsetForKty(string memory data, uint256 off) private pure returns (uint256) {

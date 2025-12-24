@@ -1,6 +1,6 @@
 {
-  "CVMRegistryImpl": "0x9200dA2dcfd9c7cf4085B8FFbC3Ed96F2D570b2d",
+  "CVMRegistryImpl": "0x3d911c1aa2A9A8E79Ce53A8ECF69D7158C6c810E",
   "CVMRegistryProxy": "0x262eAcF7DC665a6dc416AdDB45a4dB5F1e79aF38",
-  "WorkloadVerifierImpl": "0x6c9eE4aD515A1c1685D32B5Ab93D07Aca927d907",
+  "WorkloadVerifierImpl": "0x5bc9A58c7544b8dDa6A93C505635F8C1d0B2466B",
   "WorkloadVerifierProxy": "0xDb99cc64cb856EB388DAca7B89aee9e844f63aFd"
 }

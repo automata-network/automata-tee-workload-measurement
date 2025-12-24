@@ -8,7 +8,7 @@ import {Base64} from "solady/utils/Base64.sol";
 import {Measurement} from "../src/lib/LibTEE.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {CVMRegistry} from "../src/usecases/CVMRegistry.sol";
+import {CVMRegistry, CVMConfig} from "../src/usecases/CVMRegistry.sol";
 
 contract CvmAzureTest is TestSetup {
     CVMRegistry registry;
@@ -21,7 +21,7 @@ contract CvmAzureTest is TestSetup {
         vm.startBroadcast(owner);
         CVMRegistry registryImpl = new CVMRegistry(address(workloadVerifier));
 
-        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner);
+        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner, P256_VERIFIER);
         registry = CVMRegistry(address(new ERC1967Proxy(address(registryImpl), ownerInitData)));
         vm.stopBroadcast();
     }
@@ -53,6 +53,24 @@ contract CvmAzureTest is TestSetup {
 
         (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
         assertTrue(reattestSuccess, string(reattestResult));
+
+        bytes32 cvnIdentityHash = 0x49d4d52dca8f14b058e0521248f65c8b77557ae4bbb2fb2057d68eecc9ab3dc3;
+        CVMConfig memory config = registry.getCvmConfig(cvnIdentityHash);
+
+        uint64 teeTTLBefore = config.teeTTL;
+        uint64 tpmTTLBefore = config.tpmTTL;
+
+        string memory ttlUpdateJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/azure/tdx/azure-tdx-update-ttl.json"));
+        string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
+        bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
+
+        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
+        assertTrue(ttlUpdateSuccess, "TTL update failed");
+
+        CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
+        assertNotEq(updatedConfig.teeTTL, teeTTLBefore, "TEE TTL not updated");
+        assertNotEq(updatedConfig.tpmTTL, tpmTTLBefore, "TPM TTL not updated");
     }
 
     function testAzureSevSnp() public {
@@ -82,5 +100,23 @@ contract CvmAzureTest is TestSetup {
 
         (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
         assertTrue(reattestSuccess, string(reattestResult));
+
+        bytes32 cvnIdentityHash = 0xaa20254939b9e46d9120f828c6d45978255f6600a9c0a62b438643cb3ca2d5cd;
+        CVMConfig memory config = registry.getCvmConfig(cvnIdentityHash);
+
+        uint64 teeTTLBefore = config.teeTTL;
+        uint64 tpmTTLBefore = config.tpmTTL;
+
+        string memory ttlUpdateJson =
+            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/azure/snp/azure-snp-update-ttl.json"));
+        string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
+        bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
+
+        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
+        assertTrue(ttlUpdateSuccess, "TTL update failed");
+
+        CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
+        assertNotEq(updatedConfig.teeTTL, teeTTLBefore, "TEE TTL not updated");
+        assertNotEq(updatedConfig.tpmTTL, tpmTTLBefore, "TPM TTL not updated");
     }
 }

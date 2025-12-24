@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {CVMRegistry} from "../usecases/CVMRegistry.sol";
+import {ICVMRegistry, CVMIdentity} from "../interfaces/ICVMRegistry.sol";
 import {CVMSignature} from "../usecases/bases/CVMSignature.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {Pubkey, Crypto} from "@automata-network/automata-tpm-attestation/types/Crypto.sol";
-import {TPM_ALG_ECDSA} from "@automata-network/automata-tpm-attestation/types/Constants.sol";
+import {CertPubkey, SignatureAlgorithm, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
+import {LibX509Verify} from "@automata-network/automata-tpm-attestation/lib/LibX509Verify.sol";
+import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/TPMConstants.sol";
 
 contract MockCVMExample is CVMSignature {
-    CVMRegistry public immutable cvmRegistry;
+    using LibX509Verify for CertPubkey;
+    ICVMRegistry public immutable cvmRegistry;
     address public owner;
     mapping(bytes32 goldenMeasurementHash => bool) public goldenMeasurements;
 
-    constructor(address _cvnRegistry) {
+    constructor(address _cvnRegistry, address _p256Verifier) {
         owner = msg.sender;
-        cvmRegistry = CVMRegistry(_cvnRegistry);
+        _writeP256VerifyAddress(_p256Verifier);
+        cvmRegistry = ICVMRegistry(_cvnRegistry);
     }
 
     event GoldenMeasurementRegistered(bytes32 indexed measurementHash);
@@ -37,9 +40,7 @@ contract MockCVMExample is CVMSignature {
         emit GoldenMeasurementRemoved(measurementHash);
     }
 
-    /**
-     * @notice Checks if a provided a CVM is registered with valid measurements
-     */
+    /// @notice Checks if a provided a CVM is registered with valid measurements
     function checkCvmIsValid(bytes32 cvmIdentityHash) public view returns (bool) {
         bytes32 measurementHash = cvmRegistry.getMeasurementHash(cvmIdentityHash);
         return goldenMeasurements[measurementHash];
@@ -57,8 +58,7 @@ contract MockCVMExample is CVMSignature {
         }
 
         // Step 2: Verify CVM Signature
-        Pubkey memory cvmIdentityKey = cvmRegistry.getCvmIdentity(cvmIdentityHash);
-        address verifier = cvmIdentityKey.sigScheme == TPM_ALG_ECDSA ? cvmRegistry.tpmAttestation().p256() : address(0);
-        verified = cvmIdentityKey.verifySignature(_generateMessage(message), signature, verifier);
+        CVMIdentity memory cvmIdentity = cvmRegistry.getCvmIdentity(cvmIdentityHash);
+        verified = _verifySignature(cvmIdentity, signature, message);
     }
 }
