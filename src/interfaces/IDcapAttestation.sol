@@ -16,12 +16,16 @@ interface IDcapAttestation {
     /// @return The base price in basis points
     function getBp() external view returns (uint16);
 
-    /// @notice Performs full on-chain verification of a DCAP attestation quote
-    /// @param input Serialized attestation input containing the raw quote and any additional
-    ///        parameters required by the specific implementation
-    /// @return success True if the quote passes all verification checks, false otherwise
-    /// @return output On success: serialized verification output containing extracted claims
-    ///         (e.g., MRENCLAVE, MRSIGNER, report data, TCB status).
+    /**
+     * @notice full on-chain verification for an attestation
+     * @dev must further specify the structure of inputs/outputs, to be serialized and passed to this method
+     * @param input - serialized raw input as defined by the project
+     * @return success - whether the quote has been successfully verified or not
+     * @return output - the output upon completion of verification. The output data may require post-processing by the
+     * consumer.
+     * For verification failures, the output is simply a UTF-8 encoded string, describing the reason for failure.
+     * @dev can directly type cast the failed output as a string
+     */
     function verifyAndAttestOnChain(bytes calldata input) external payable returns (bool success, bytes memory output);
 
     /// @notice Enumeration of supported Zero-Knowledge coprocessor types

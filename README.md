@@ -1,58 +1,108 @@
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/automata-network/automata-brand-kit/main/PNG/ATA_White%20Text%20with%20Color%20Logo.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/automata-network/automata-brand-kit/main/PNG/ATA_Black%20Text%20with%20Color%20Logo.png">
+    <img src="https://raw.githubusercontent.com/automata-network/automata-brand-kit/main/PNG/ATA_White%20Text%20with%20Color%20Logo.png" width="50%">
+  </picture>
+</div>
+
+
 # Automata TEE Workload Measurement
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-This repo contains the onchain program (smart contracts) for verifying the integrity and measurement of a Confidential VM (CVM) workload hosted on cloud service providers.
 
-Code and data in CVMs are protected from tampering by the host OS (and other CVMs) with TEE hardware, such as Intel TDX and AMD SEV-SNP. Cloud service providers generally also equip CVMs with virtual TPM, to cryptographically store measurements of the boot process, ensuring integrity of the CVM image.
+This repository contains smart contracts for onchain verification and management of Confidential VM (CVM) workloads hosted on cloud service providers. It consists of two main components:
 
-Currently, the Workload verifier contract supports users who provisioned their CVMs equiped with Intel TDX or AMD-SEV-SNP, running on either Azure or Google Cloud Platform (GCP). The full workflow has been implemented in Solidity for EVM network. Click [here](./contracts/README.md) to learn more.
+1. **[TEE Workload Measurement](./src/WorkloadVerifier.sol)** - Verifies the integrity and measurement of CVM workloads
+2. **[CVM Registry](./src/usecases/CVMRegistry.sol)** - Manages CVM identities and their attestation lifecycle
 
-Ideally, the goal of this project is to be platform agnostic, covering as wide range of users as possible. We strive to continue to work diligently to support more TEEs, cloud providers and Web3 ecosystems.
+## Table of Contents
+
+- [Overview](#overview)
+  - [Part 1: TEE Workload Measurement](#part-1-tee-workload-measurement)
+  - [Part 2: CVM Registry](#part-2-cvm-registry)
+- [Future Roadmap](#future-roadmap)
+- [Documentation](#documentation)
+- [Deployment Info](#deployment-info)
+  - [Workload Verifier](#workload-verifier)
+  - [CVM Registry](#cvm-registry-1)
+- [Related Projects](#related-projects)
+- [Contributing](#contributing)
+- [Support](#support)
 
 ## Overview
 
-```mermaid
-sequenceDiagram
-    participant A as Application Contracts
-    participant W as Workload Verifier
-    participant TEE as TEE Onchain Attestation
-    participant TPM as TPM Attestation
+Confidential VMs (CVMs) leverage Trusted Execution Environment (TEE) hardware—such as Intel TDX and AMD SEV-SNP—to protect code and data from tampering by the host OS and other VMs. Cloud service providers equip CVMs with virtual Trusted Platform Modules (TPMs) that cryptographically measure and attest to the integrity of the boot process and running workload.
 
-    A->>W: 1. TEE Attestation Report, Workload Collateral
-    W->>TEE: 2. TEE Attestation Report
-    TEE-->>W: TEE Verification Status and Output
-    W->>TPM: 3. Workload Collateral
-    opt GCP
-        TPM-->>TPM: Extracts and verifies the AK Pubkey from a list of trusted CAs
-    end
-    TPM->>TPM: 4. Checks PCR Digest
-    TPM-->>W: TPM quote has been successfully verified and returns `extraData` value to the caller.
-    W->>W: 5. Verifies the report ID to check binding between TEE and TPM
-    W->>W: 6. Generates the measurement structure, encapsulating the TEE Report content and measured PCR values.
-    W->>A: 7. Returns the hash of the measurement and TPM `extraData` value.
+This project currently supports CVMs with Intel TDX or AMD SEV-SNP on Azure and Google Cloud Platform (GCP), with full onchain verification implemented in Solidity for EVM networks.
 
-```
+Our goal is platform-agnostic coverage, and we are actively working to support additional TEE technologies, cloud providers, and Web3 ecosystems.
 
-1. The application submits the TEE Attestation Report, and the workload collateral to the `WorkloadVerifier.sol` contract. Workload collateral is a collection of data, consisting the TPM quote, TPM Signature, TPM Attestation Key (or AK certificate chain) and an array of PCR measurement.
+### Part 1: TEE Workload Measurement
 
-2. TEE Attestation Report verification shows that the CVM is running in a TEE provided by genuine hardware.
-    
-    > a. If the CVM were hosted on Azure, this step also ensures that the report data must contain the hash of the TPM Attestation Key.
+The **[Workload Verifier](./src/WorkloadVerifier.sol)** contract provides cryptographic verification of CVM workload integrity by combining TEE attestation with TPM-based boot measurements. It ensures that code running in a CVM has not been tampered with and is executing on genuine TEE hardware.
 
-3. The TPM quote and signature are verified against the provided TPM Attestation Key.
-    
-    > a. If TPM Attestation Key were not checked in *step 2(a)*, the key is extracted from the leaf of the AK Certificate Chain, which must be checked for valid root of trust.
+**Key Features:**
+- Verifies TEE attestation reports from Intel TDX and AMD SEV-SNP
+- Validates TPM quotes and PCR measurements
+- Ensures binding between TEE and TPM components
+- Generates canonical measurement hashes (Golden Measurements)
+- Multiple verification methods: onchain Solidity, ZK proofs (RiscZero, SP1)
 
-4. The list of PCR indices provided in the collateral must match with the PCR selection bitmap in the TPM quote; the hash chain of PCR measurement values yields a value that must match the PCR digest value in the TPM quote.
+**Use Cases:**
+- Prove workload integrity before granting access to sensitive data
 
-5. The provided Report ID must be found in both TEE Attestation Report and PCR 16 of the TPM. This step indicates the binding between TEE and TPM.
-    
-    > a. The only exception to this rule applies to Azure TDX CVM. As stated in *2(a)*, the report data provides us with information about the AK that signs the TPM quote, which is already verified in *step 3*.
+### Part 2: CVM Registry
 
-6. Generates the `Measurement` object. A data structure containing the content of the TEE Report and an array of measured PCRs. Each PCR may contain a deterministic PCR value and/or a list of event logs that the workload produces.
+The **[CVM Registry](./src/usecases/CVMRegistry.sol)** provides identity and lifecycle management for CVM workloads. It maps a CVM's identity to its attestation configuration, system and workload measurement hash, and freshness metadata.
 
-    > a. External contracts may retrieve the Golden Measurement instead of the hash, if developers intend to perform additional checks on the measurement values.
+**Key Features:**
+- CVM Identity management for using CVM public key
+- Attested CVM identity lifecycle tracking (registration, re-attestation, TTL management)
+- Freshness enforcement via configurable TTL windows
+- Identity rotation with attestation-based proof
+- Replay protection using per-identity nonces
+- Domain separation for secure message signing
 
-7. Optionally, computes the measurement hash, which is a holistic representation of the state of the CVM. Application developers can provide a reference measurement as a policy that CVM workloads must comply, also known as the **Golden Measurement** value. Developers should also check for the correctness of TPM `extraData` value.
+**Key Capabilities:**
+- **Registration**: Bootstrap CVM identity using attestation
+- **Re-attestation**: Refresh TPM collateral while reusing TEE attestation, optionally update CVM identity
+- **TTL Management**: Configure custom freshness windows for TEE and TPM
+- **Key Rotation**: Securely rotate identity keys with attestation proof
+
+**Use Cases:**
+- Gate onchain actions based on verified CVM identity and liveness
+- Track CVM workload states across their lifecycle
+- Enable CVMs to sign authorized messages for downstream applications
+- Implement access control based on CVM identity freshness
+
+## Future Roadmap
+
+We are continuously improving the CVM Registry to enhance security, usability, and functionality. The following features are under consideration:
+
+**Security Enhancements:**
+- **Revocation Mechanism** - Add explicit onchain CVM identity revocation before TTL expiry
+- **TTL Bounds** - Enforce minimum and maximum TTL ranges to prevent configuration errors
+- **Registration Validation** - Prevent silent parameter mismatches during re-registration attempts
+
+**Protocol Extensions:**
+- **Multi-TEE Aggregation** - Support workloads spanning multiple enclaves for distributed systems
+- **Attestation Versioning** - Track historical measurement hashes for comprehensive audit trails
+- **Slashing / Economic Bonding** - Enable penalties for stale or revoked identities in economic protocols
+- **Cached Proof Compression** - Gas-optimized re-use of previously verified certificate chains
+
+**Developer Experience:**
+- **Enhanced Events** - Add dedicated `CVMIdentityRotated` event to distinguish rotation from re-attestation
+- **Flexible Verifier Updates** - Design migration path for upgrading immutable verifier contracts
+
+For detailed technical analysis and resolved issues, see [here](./docs/primer/cvm-registry-primer.md#8-security--trust-assumptions).
+
+## Documentation
+
+To get started with integrating these contracts into your project:
+
+- **[Developer Guide](./docs/DEVELOPER_GUIDE.md)** - Comprehensive technical documentation covering architecture, workflows, and API references
+- **[Integration Guide](./docs/INTEGRATION_GUIDE.md)** - Step-by-step instructions for integrating the Workload Verifier and CVM Registry contracts into your Solidity project
 
 ## Deployment Info
 
@@ -70,9 +120,16 @@ sequenceDiagram
 | Automata Testnet | [0x262eAcF7DC665a6dc416AdDB45a4dB5F1e79aF38](https://explorer-testnet.ata.network/address/0x262eAcF7DC665a6dc416AdDB45a4dB5F1e79aF38) |
 | Sepolia Testnet | [0xE626f5503B455F775AA9845843B46033a26A635d](https://sepolia.etherscan.io/address/0xE626f5503B455F775AA9845843B46033a26A635d) |
 
-## Licensing
 
-This project is currently licensed under [Apache](./LICENSE).
+## Related Projects
+
+- [DCAP Attestation](https://github.com/automata-network/automata-dcap-attestation) - On-chain verification of Intel SGX/TDX DCAP attestations
+- [TDX Attestation SDK](https://github.com/automata-network/tdx-attestation-sdk) - TDX Development SDK to generate Intel TDX quotes from cloud providers.
+- [AMD SEV-SNP Attestation SDK](https://github.com/automata-network/amd-sev-snp-attestation-sdk) - On-chain verification of AMD SEV-SNP attestations
+- [AWS Nitro Enclave Attestation](https://github.com/automata-network/aws-nitro-enclave-attestation) - On-chain verification of AWS Nitro Enclave attestations
+- [TPM Attestation](https://github.com/automata-network/automata-tpm-attestation) - On-chain verification of TPM Quote and TPM certificates management
+- [CVM Base Image](https://github.com/automata-network/cvm-base-image) - Tools for deploying Confidential VMs with workloads on GCP, AWS, and Azure
+
 
 ## Contributing
 

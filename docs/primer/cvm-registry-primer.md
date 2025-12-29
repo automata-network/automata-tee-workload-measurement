@@ -31,7 +31,7 @@ Once registered, the CVM’s identity key can sign authorized messages (with dom
 ## 3. Core Data Structures
 
 ### `CVMConfig`
-```
+```solidity
 struct CVMConfig {
     TEEType teeType;
     CloudType cloudType;
@@ -41,8 +41,13 @@ struct CVMConfig {
     uint64 tpmRecentTimestamp;
     bytes32 measurementHash;
     bytes teeAttestationOutput;
-    Pubkey cvmIdentity; // workload identity key
-    Pubkey tpmAk;       // TPM Attestation Key
+    CVMIdentity cvmIdentity; // workload identity key (contains pubkey + sigAlgo)
+    CertPubkey tpmAk;        // TPM Attestation Key
+}
+
+struct CVMIdentity {
+    CertPubkey pubkey;
+    SignatureAlgorithm sigAlgo;
 }
 ```
 
@@ -51,8 +56,13 @@ struct CVMConfig {
 - `_nonces[bytes32 cvmIdentityHash] => uint256` (monotonic for replay protection of signed ops)
 
 ### Identity Hash
-```
-keccak256(abi.encodePacked(pub.sigScheme, pub.curve, pub.hashAlgo, pub.data))
+```solidity
+keccak256(abi.encodePacked(
+    cvmIdentity.sigAlgo.scheme,
+    cvmIdentity.pubkey.params,
+    cvmIdentity.sigAlgo.hashAlgo,
+    cvmIdentity.pubkey.data
+))
 ```
 
 ---
@@ -117,7 +127,7 @@ Re-attestation (TPM path) only touches TPM timestamp (and measurement hash). Ful
 
 `CVMSignature` constructs messages:
 ```
-abi.encodePacked(prefix, uint16(chainid), address(this), userData)
+abi.encodePacked(bytes(prefix), block.chainid, address(this), userData)
 ```
 Distinct prefixes:
 - `"CVM_WORKLOAD_REATTEST_TPM"`
@@ -228,7 +238,7 @@ Severity legend: High / Medium / Low / Informational
   - Domain prefix
   - Current nonce (query via `nonces`)
   - Context payload
-- Always re-derive `cvmIdentityHash` client-side from `Pubkey` to avoid mismatches.
+- Always re-derive `cvmIdentityHash` client-side from `CVMIdentity` to avoid mismatches.
 
 ---
 
