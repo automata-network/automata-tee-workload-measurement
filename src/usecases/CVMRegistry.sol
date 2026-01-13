@@ -121,9 +121,15 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         WorkloadCollaterals calldata wc
     ) external override onlyRegistered(cvmIdentityHash) returns (Measurement memory measurements) {
         CVMConfig storage config = _configs[cvmIdentityHash];
+        CVMIdentity memory currentCvmIdentity = config.cvmIdentity;
+
+        // Step 0: Verify TEE validity
+        bool teeValid = (block.timestamp - config.teeRecentTimestamp) < config.teeTTL;
+        if (!teeValid) {
+            revert TEE_COLLATERAL_EXPIRED();
+        }
 
         // Step 1: Verify the signature against the CVM identity
-        CVMIdentity memory currentCvmIdentity = config.cvmIdentity;
         {
             bytes memory message = _generateMessageWithCustomPrefix(
                 "CVM_WORKLOAD_REATTEST_TPM", abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote))
