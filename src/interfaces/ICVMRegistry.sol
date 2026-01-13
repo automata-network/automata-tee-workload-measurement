@@ -37,18 +37,21 @@ interface ICVMRegistry {
     error TEE_COLLATERAL_EXPIRED();
     error TPM_COLLATERAL_EXPIRED();
     error TEE_REPORT_ALREADY_USED();
+    error CVM_IDENTITY_ALREADY_REGISTERED();
 
     event CVMUpdated(bytes32 indexed cvmIdentityHash);
     event CVMTTLUpdated(bytes32 indexed cvmIdentityHash);
 
     /// @notice Invoke this method to attest their CVM and
     ///         register the workload generated key as their onchain identity
+    /// @dev Requires signature proving ownership of cvmIdentity private key
     function attestCvm(
         CloudType cloudType,
         TEEType teeType,
         TeeReportType teeReportType,
         bytes calldata teeAttestationReport,
         CVMIdentity calldata cvmIdentity,
+        bytes calldata signature,
         WorkloadCollaterals calldata wc
     ) external returns (Measurement memory measurements);
 
@@ -62,9 +65,10 @@ interface ICVMRegistry {
     /// @dev In this scenario, you must also check that TPM extraData
     ///      contains the new CVM identity hash.
     /// @dev The entire config will be re-mapped using the new CVM identity hash
+    /// @param signatures [0] = current identity signature, [1] = new identity signature (empty if no rotation)
     function reattestCvmWithTpm(
         bytes32 cvmIdentityHash,
-        bytes calldata signature,
+        bytes[2] calldata signatures,
         CVMIdentity calldata updateCvmIdentity,
         WorkloadCollaterals calldata wc
     ) external returns (Measurement memory measurements);

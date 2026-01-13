@@ -67,11 +67,12 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         TeeReportType teeReportType,
         bytes calldata teeAttestationReport,
         CVMIdentity calldata cvmIdentity,
+        bytes calldata signature,
         WorkloadCollaterals calldata wc
     ) external override returns (Measurement memory measurements) {
-        // Step 0: Preliminary Checks
-        _sanityCheckCvmIdentity(cvmIdentity);
+        // Step 0: Verify identity ownership (sanity check + signature)
         bytes32 identity = _computeCvmIdentityHash(cvmIdentity);
+        _verifyIdentityOwnership(cvmIdentity, identity, signature);
         CVMConfig storage config = _configs[identity];
 
         if (!hasRegistered(identity)) {
@@ -116,7 +117,7 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
 
     function reattestCvmWithTpm(
         bytes32 cvmIdentityHash,
-        bytes calldata signature,
+        bytes[2] calldata signatures,
         CVMIdentity calldata updateCvmIdentity,
         WorkloadCollaterals calldata wc
     ) external override onlyRegistered(cvmIdentityHash) returns (Measurement memory measurements) {
@@ -129,12 +130,12 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
             revert TEE_COLLATERAL_EXPIRED();
         }
 
-        // Step 1: Verify the signature against the CVM identity
+        // Step 1: Verify the signature against the CURRENT CVM identity
         {
             bytes memory message = _generateMessageWithCustomPrefix(
                 "CVM_WORKLOAD_REATTEST_TPM", abi.encodePacked(_nonces[cvmIdentityHash]++, sha256(wc.tpmQuote))
             );
-            bool verified = _verifySignature(currentCvmIdentity, signature, message);
+            bool verified = _verifySignature(currentCvmIdentity, signatures[0], message);
 
             if (!verified) {
                 revert INVALID_SIGNATURE();
@@ -164,16 +165,26 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         bytes32 updateIdentityHash = _computeCvmIdentityHash(updateCvmIdentity);
         uint64 currentTimestamp = uint64(block.timestamp);
         if (updateIdentityHash != cvmIdentityHash) {
-            _sanityCheckCvmIdentity(updateCvmIdentity);
+            // Key rotation
             // First, check TPM data matches with the new identity hash
             bytes32 tpmIdentityHash = _parseIdentityFromTpmData(extraData);
             if (tpmIdentityHash != updateIdentityHash) {
                 revert CVM_IDENTITY_MISMATCH(tpmIdentityHash, updateIdentityHash);
             }
+
+            // Prevent overwriting existing registrations
+            if (hasRegistered(updateIdentityHash)) {
+                revert CVM_IDENTITY_ALREADY_REGISTERED();
+            }
+
+            // Verify ownership of new identity (sanity check + signature)
+            _verifyIdentityOwnership(updateCvmIdentity, updateIdentityHash, signatures[1]);
+
             bytes32 digest = measurements.digest();
             _rotateCvmIdentity(cvmIdentityHash, updateIdentityHash, updateCvmIdentity, currentTimestamp, digest);
             emit CVMUpdated(updateIdentityHash);
         } else {
+            // No rotation - signatures[1] can be empty
             config.measurementHash = measurements.digest();
             config.tpmRecentTimestamp = currentTimestamp;
             emit CVMUpdated(cvmIdentityHash);
@@ -275,6 +286,25 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         returns (CVMConfig memory config)
     {
         config = _configs[cvmIdentityHash];
+    }
+
+    /// @dev Verifies identity structure and proof of ownership via signature
+    /// @param cvmIdentity The identity to verify
+    /// @param identityHash The precomputed hash of the identity (for nonce lookup)
+    /// @param signature Signature proving ownership of the identity's private key
+    function _verifyIdentityOwnership(CVMIdentity memory cvmIdentity, bytes32 identityHash, bytes calldata signature)
+        private
+    {
+        // Sanity check the identity structure
+        _sanityCheckCvmIdentity(cvmIdentity);
+
+        // Verify proof of ownership
+        bytes memory message =
+            _generateMessageWithCustomPrefix("CVM_WORKLOAD_IDENTITY_CHECK", abi.encodePacked(_nonces[identityHash]++));
+        bool verified = _verifySignature(cvmIdentity, signature, message);
+        if (!verified) {
+            revert INVALID_SIGNATURE();
+        }
     }
 
     function _sanityCheckCvmIdentity(CVMIdentity memory cvmIdentity) private pure {
