@@ -33,7 +33,9 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
     /// Mapping between a given CVM and its config
     mapping(bytes32 cvmIdentityHash => CVMConfig) _configs;
     mapping(bytes32 cvmIdentityHash => uint256) _nonces;
-    uint256[47] private __gap;
+    /// Track used TEE attestation reports
+    mapping(bytes32 teeReportHash => bool) _usedTeeReports;
+    uint256[46] private __gap;
 
     constructor(address _workloadVerifier) {
         workloadVerifier = IWorkloadVerifier(_workloadVerifier);
@@ -85,6 +87,12 @@ contract CVMRegistry is CVMSignature, ICVMRegistry, OwnableUpgradeable, UUPSUpgr
         (config.teeAttestationOutput, teeVerifiedData, tpmExtraData) = workloadVerifier.verifyAttestation(
             config.teeType, teeReportType, config.cloudType, teeAttestationReport, wc
         );
+        bytes32 teeReportHash = keccak256(teeAttestationReport);
+        // prevents replay attacks with the same TEE report
+        if (_usedTeeReports[teeReportHash]) {
+            revert TEE_REPORT_ALREADY_USED();
+        }
+        _usedTeeReports[teeReportHash] = true;
 
         // Step 2: Check whether the TPM contains the matching CVM identity
         bytes32 tpmIdentity = _parseIdentityFromTpmData(tpmExtraData);

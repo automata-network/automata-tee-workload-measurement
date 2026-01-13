@@ -36,6 +36,7 @@ interface ICVMRegistry {
     error TPM_AK_MISMATCH(bytes32 expected, bytes32 actual);
     error TEE_COLLATERAL_EXPIRED();
     error TPM_COLLATERAL_EXPIRED();
+    error TEE_REPORT_ALREADY_USED();
 
     event CVMUpdated(bytes32 indexed cvmIdentityHash);
     event CVMTTLUpdated(bytes32 indexed cvmIdentityHash);
