@@ -13,3 +13,4 @@
 [submodule "lib/automata-tpm-attestation"]
 	path = lib/automata-tpm-attestation
 	url = https://github.com/automata-network/automata-tpm-attestation
+	branch = DEV-4523/tpm2_certify

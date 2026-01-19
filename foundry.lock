@@ -12,7 +12,10 @@
     "rev": "a5bb996e91aae5b0c068087af7594d92068b12f1"
   },
   "lib/automata-tpm-attestation": {
-    "rev": "1a3ab2bc4886ac5313365f94e3d60dcf01fd9c41"
+    "branch": {
+      "name": "DEV-4523/tpm2_certify",
+      "rev": "8685d95851c471a587d8fa2476c4bd002a6fb1c3"
+    }
   },
   "lib/forge-std": {
     "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
