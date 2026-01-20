@@ -195,8 +195,13 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         }
 
         // Step 1: Verify workload and get final measurement
-        // question for @yaoxin-jing: do we still need TPM quote for Nitro Attestations? since there are PCR measurements contained in the report?
-        Measurement memory measurement = _verifyWorkload(cloudType, wc, teeVerifiedData);
+        Measurement memory measurement;
+        if (teeType == TEEType.Nitro) {
+            // Nitro attestations contain PCR measurements directly - skip TPM verification
+            measurement.pcrs = LibTEE._getFinalMeasurementFromNitro(teeVerifiedData.nitro.pcrs);
+        } else {
+            measurement = _verifyWorkload(cloudType, wc, teeVerifiedData);
+        }
 
         return (teeOutput, teeVerifiedData, measurement);
     }
@@ -287,7 +292,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
 
         require(uint8(output.result) == uint8(NitroVerificationResult.Success), FAILED_TO_VERIFY_TEE());
 
-        // TODO: discuss what we need to include as TEE output with @yaoxin-jing
+        // TODO: discuss what do we need to actually include as TEE output with @yaoxin-jing
         teeOutput = abi.encode(
             bytes(output.moduleId),
             output.timestamp,

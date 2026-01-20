@@ -266,6 +266,50 @@ library LibTEE {
         return nitro.pcrs.length == 0;
     }
 
+    // TEMP: Subject to change, pending discussion with @yaoxin-jing
+    /// @notice Converts Nitro PCR measurements to the final Pcr format for golden measurement.
+    /// @dev Nitro attestation reports contain PCR values directly (no TPM quote needed).
+    ///      This function filters out zero-valued PCRs and converts the 48-byte SHA-384
+    ///      values to 32-byte hashes using keccak256.
+    /// @param nitroPcrs The array of Nitro PCR measurements from the attestation report.
+    /// @return An array of Pcr structs compatible with the Measurement struct.
+    function _getFinalMeasurementFromNitro(NitroPcr[] memory nitroPcrs)
+        internal
+        pure
+        returns (Pcr[] memory)
+    {
+        uint256 len = nitroPcrs.length;
+
+        // First pass: count non-zero PCRs to allocate exact array size
+        uint256 nonZeroCount = 0;
+        for (uint256 i = 0; i < len; i++) {
+            if (nitroPcrs[i].value.first != bytes32(0) || nitroPcrs[i].value.second != bytes16(0)) {
+                nonZeroCount++;
+            }
+        }
+
+        // Allocate result array with exact size
+        Pcr[] memory result = new Pcr[](nonZeroCount);
+
+        // Second pass: populate the result array
+        uint256 resultIdx = 0;
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 first = nitroPcrs[i].value.first;
+            bytes16 second = nitroPcrs[i].value.second;
+            if (first != bytes32(0) || second != bytes16(0)) {
+                result[resultIdx] = Pcr({
+                    index: uint256(nitroPcrs[i].index),
+                    pcr: keccak256(abi.encodePacked(first, second)),
+                    measureEvents: new bytes32[](0),
+                    measureEventsIdx: new uint256[](0)
+                });
+                resultIdx++;
+            }
+        }
+
+        return result;
+    }
+
     /// @notice Computes the digest (hash) of a measurement structure.
     /// @dev This function calculates the Keccak256 hash of the ABI-encoded measurement,
     ///      which includes PCRs, TDX measurements, and SNP measurements. The digest is
