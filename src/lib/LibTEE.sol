@@ -4,7 +4,7 @@ pragma solidity ^0.8.15;
 
 import {Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
+// WorkloadCollaterals import removed - verifyReportID now takes Pcr[] directly
 import {Bytes48, Bytes64, LibBytes} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";
 
@@ -84,18 +84,18 @@ library LibTEE {
     ///      (Examples below use typical PCR indices: 15 or 16)
     ///      GCP + Intel TDX:
     ///      - teeData.reportID = 0 (not populated in TDX report)
-    ///      - wc.reportId = UUID from workload
+    ///      - reportId = UUID from workload
     ///      - PCR[pcrIndex] = SHA256_extend(0, SHA256(uuid))
     ///      - RTMR3 = SHA384_extend(0, SHA384(uuid))
     ///      - Verification: Check both PCR[pcrIndex] and RTMR3 match expected values
     ///      GCP + AMD SEV-SNP:
     ///      - teeData.reportID = SNP report's report_id field
-    ///      - wc.reportId = SNP report_id (should match teeData.reportID)
+    ///      - reportId = SNP report_id (should match teeData.reportID)
     ///      - PCR[pcrIndex] = SHA256_extend(0, reportID)
-    ///      - Verification: Check PCR[pcrIndex] matches and wc.reportId equals teeData.reportID
+    ///      - Verification: Check PCR[pcrIndex] matches and reportId equals teeData.reportID
     ///      Azure + Intel TDX:
     ///      - teeData.reportID = 0
-    ///      - wc.reportId = bytes16(0) (empty)
+    ///      - reportId = bytes16(0) (empty)
     ///      - PCR[pcrIndex] = SHA256_extend(0, 0)
     ///      - RTMR3 = 0
     ///      - Verification: If PCR[pcrIndex] is zero, verification passes (no UUID tracking)
@@ -105,46 +105,48 @@ library LibTEE {
     ///      - Verification: If cloudType is Azure and PCR[pcrIndex] is zero, skip check;
     ///        otherwise verify it matches
     /// @param cloudType The cloud provider type (GCP or Azure)
-    /// @param wc The workload collaterals containing PCR measurements and report ID
+    /// @param reportId The report ID bytes from the workload (UUID for TDX, report_id for SNP)
+    /// @param pcrs The final PCR measurements (converted from MeasureablePcr to Pcr format)
     /// @param pcrIndex The TPM PCR index to verify against (typically 15 or 16). Different cloud
     ///        providers and TEE types may use different indices:
     ///        - Common practice: PCR 15 for general attestation, PCR 16 for report ID
     /// @param teeData The verified TEE data extracted from the attestation report
-    /// @dev Reverts with "Invalid reportID" if:
-    ///      - Specified PCR index is not found in the workload collaterals
+    /// @dev Reverts with InvalidReportID if:
+    ///      - Specified PCR index is not found in the PCR array
     ///      - PCR value doesn't match the expected hash extension
-    ///      - For SNP: wc.reportId doesn't match teeData.reportID
+    ///      - For SNP: reportId doesn't match teeData.reportID
     ///      - For TDX: RTMR3 doesn't match the expected SHA384 extension of the UUID
     function verifyReportID(
         CloudType cloudType,
-        WorkloadCollaterals calldata wc,
+        bytes calldata reportId,
+        Pcr[] memory pcrs,
         uint256 pcrIndex,
         TEEVerifiedData memory teeData
     ) internal pure {
-        uint256 len = wc.pcrs.length;
+        uint256 len = pcrs.length;
         bool verified;
 
         for (uint256 i = 0; i < len; i++) {
-            if (wc.pcrs[i].index == pcrIndex) {
+            if (pcrs[i].index == pcrIndex) {
                 // Intel TDX (reportID == 0)
                 // TDX attestation reports don't populate reportID field in TEEVerifiedData
                 if (teeData.reportID == bytes32(0)) {
                     // Azure TDX: If PCR and rtmr3 are zero, no UUID tracking is performed
-                    if (wc.pcrs[i].pcr == bytes32(0) && teeData.tdx.rtmr3.isZero()) {
+                    if (pcrs[i].pcr == bytes32(0) && teeData.tdx.rtmr3.isZero()) {
                         verified = true;
                         break;
                     }
 
                     // GCP TDX: Verify both PCR and RTMR3 measurements
-                    Bytes48 memory reportIdSha384 = Sha2Ext.sha384(wc.reportId);
+                    Bytes48 memory reportIdSha384 = Sha2Ext.sha384(reportId);
                     Bytes48 memory expectedTdxRtmr3 =
                         Sha2Ext.sha384(abi.encodePacked(new bytes(48), reportIdSha384.first, reportIdSha384.second));
 
                     // Compute PCR = SHA256_extend(0, SHA256(reportId))
-                    bytes32 reportIdHash = sha256(abi.encodePacked(new bytes(32), sha256(wc.reportId)));
+                    bytes32 reportIdHash = sha256(abi.encodePacked(new bytes(32), sha256(reportId)));
 
                     // Verify both PCR and RTMR3 match expected values
-                    if (wc.pcrs[i].pcr == reportIdHash && expectedTdxRtmr3.equal(teeData.tdx.rtmr3)) {
+                    if (pcrs[i].pcr == reportIdHash && expectedTdxRtmr3.equal(teeData.tdx.rtmr3)) {
                         verified = true;
                         break;
                     }
@@ -155,13 +157,13 @@ library LibTEE {
                     // Azure SNP: PCR[pcrIndex] binding is disabled for Azure deployments.
                     // The TPM-TEE binding is enforced through akPub verification instead.
                     // Therefore, PCR[pcrIndex] may be zero and should be skipped.
-                    if (wc.pcrs[i].pcr == bytes32(0) && cloudType == CloudType.Azure) {
+                    if (pcrs[i].pcr == bytes32(0) && cloudType == CloudType.Azure) {
                         verified = true;
                         break;
                     }
 
-                    // GCP SNP: Verify that wc.reportId matches teeData.reportID
-                    if (wc.reportId.length > 0 && wc.reportId.readBytes32(0) != teeData.reportID) {
+                    // GCP SNP: Verify that reportId matches teeData.reportID
+                    if (reportId.length > 0 && reportId.readBytes32(0) != teeData.reportID) {
                         break;
                     }
 
@@ -169,7 +171,7 @@ library LibTEE {
                     bytes32 expectedPcr = sha256(abi.encodePacked(new bytes(32), teeData.reportID));
 
                     // Verify PCR matches expected value
-                    if (wc.pcrs[i].pcr != expectedPcr) {
+                    if (pcrs[i].pcr != expectedPcr) {
                         break;
                     }
 

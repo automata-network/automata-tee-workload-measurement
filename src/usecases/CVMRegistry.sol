@@ -89,7 +89,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
 
         bytes memory teeOutput;
         TEEVerifiedData memory teeVerifiedData;
-        (teeOutput, teeVerifiedData,) =
+        (teeOutput, teeVerifiedData, measurements) =
             workloadVerifier.verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
 
         /// @dev for the sole purpose of AK tracking, we do not care about the actual signature algorithm used
@@ -109,8 +109,6 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
             teeVerifiedData.akPub,
             ""
         );
-
-        measurements = workloadVerifier.getMeasurement(teeVerifiedData, wc.pcrs);
 
         _usedTeeReports[teeReportHash] = true;
         _usedTpmQuotes[tpmQuoteHash] = true;
@@ -150,7 +148,7 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
 
         bytes memory teeOutput;
         TEEVerifiedData memory teeVerifiedData;
-        (teeOutput, teeVerifiedData,) = workloadVerifier.verifyAttestation(
+        (teeOutput, teeVerifiedData, measurements) = workloadVerifier.verifyAttestation(
             config.teeType, teeReportType, config.cloudType, teeAttestationReport, wc
         );
 
@@ -163,8 +161,6 @@ contract CVMRegistry is ICVMRegistry, OwnableUpgradeable, UUPSUpgradeable {
         if (boundIdentity != cvmIdentityHash) {
             revert AK_BINDING_MISMATCH(akHash, cvmIdentityHash, boundIdentity);
         }
-
-        measurements = workloadVerifier.getMeasurement(teeVerifiedData, wc.pcrs);
 
         _usedTeeReports[teeReportHash] = true;
         _usedTpmQuotes[tpmQuoteHash] = true;
