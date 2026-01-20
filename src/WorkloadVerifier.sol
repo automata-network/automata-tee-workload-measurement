@@ -11,7 +11,16 @@ import {
 } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
-import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/ISnpAttestation.sol";
+import {
+    ISnpAttestation,
+    VerifierJournal as SnpVerifierJournal,
+    VerificationResult as SnpVerificationResult
+} from "./interfaces/ISnpAttestation.sol";
+import {
+    INitroEnclaveVerifier,
+    VerifierJournal as NitroVerifierJournal,
+    VerificationResult as NitroVerificationResult
+} from "./interfaces/INitroEnclaveVerifier.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
 import {
     TEEVerifiedData,
@@ -48,8 +57,9 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
     IDcapAttestation public override dcapAttestation;
     ISnpAttestation public override snpAttestation;
     ITpmAttestation public override tpmAttestation;
+    INitroEnclaveVerifier public override nitroAttestation;
 
-    uint256[47] private __gap;
+    uint256[46] private __gap;
 
     constructor() {
         _disableInitializers();
@@ -150,6 +160,8 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             teeVerifiedData = LibTEE.tdxOutput(teeOutput);
         } else if (teeType == TEEType.AmdSevSnp) {
             teeVerifiedData = LibTEE.snpOutput(teeOutput);
+        } else if (teeType == TEEType.Nitro) {
+            teeVerifiedData = LibTEE.nitroOutput(teeOutput);
         } else {
             revert INVALID_TEE_TYPE(teeType);
         }
@@ -183,6 +195,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         }
 
         // Step 1: Verify workload and get final measurement
+        // question for @yaoxin-jing: do we still need TPM quote for Nitro Attestations? since there are PCR measurements contained in the report?
         Measurement memory measurement = _verifyWorkload(cloudType, wc, teeVerifiedData);
 
         return (teeOutput, teeVerifiedData, measurement);
@@ -196,6 +209,8 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             teeOutput = _verifyTdxAttestation(teeReportType, report);
         } else if (teeType == TEEType.AmdSevSnp) {
             teeOutput = _verifySnpAttestation(teeReportType, report);
+        } else if (teeType == TEEType.Nitro) {
+            teeOutput = _verifyNitroAttestation(teeReportType, report);
         } else {
             revert INVALID_TEE_TYPE(teeType);
         }
@@ -215,10 +230,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         }
 
         ZkProof memory zkProof = abi.decode(report, (ZkProof));
-        VerifierJournal memory output =
+        SnpVerifierJournal memory output =
             snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
 
-        require(uint8(output.result) == uint8(VerificationResult.Success), FAILED_TO_VERIFY_TEE());
+        require(uint8(output.result) == uint8(SnpVerificationResult.Success), FAILED_TO_VERIFY_TEE());
 
         teeOutput = output.rawReport;
     }
@@ -252,6 +267,35 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             require(succ, FAILED_TO_VERIFY_TEE());
             require(teeOutput.length >= 395, INVALID_TEE_REPORT());
         }
+    }
+
+    function _verifyNitroAttestation(TeeReportType reportType, bytes calldata report)
+        private
+        returns (bytes memory teeOutput)
+    {
+        INitroEnclaveVerifier.ZkCoProcessorType zkType;
+        if (reportType == TeeReportType.ZkSuccinct) {
+            zkType = INitroEnclaveVerifier.ZkCoProcessorType.Succinct;
+        } else if (reportType == TeeReportType.ZkRiscZero) {
+            zkType = INitroEnclaveVerifier.ZkCoProcessorType.RiscZero;
+        } else {
+            revert INVALID_TEE_REPORT_TYPE(reportType);
+        }
+
+        ZkProof memory zkProof = abi.decode(report, (ZkProof));
+        NitroVerifierJournal memory output = nitroAttestation.verify(zkProof.output, zkType, zkProof.proofBytes);
+
+        require(uint8(output.result) == uint8(NitroVerificationResult.Success), FAILED_TO_VERIFY_TEE());
+
+        // TODO: discuss what we need to include as TEE output with @yaoxin-jing
+        teeOutput = abi.encode(
+            bytes(output.moduleId),
+            output.timestamp,
+            abi.encode(output.pcrs),
+            output.userData,
+            output.publicKey,
+            output.nonce
+        );
     }
 
     function _verifyWorkload(

@@ -10,6 +10,7 @@ import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509
 
 import {IDcapAttestation} from "./IDcapAttestation.sol";
 import {ISnpAttestation} from "./ISnpAttestation.sol";
+import {INitroEnclaveVerifier} from "./INitroEnclaveVerifier.sol";
 import {TEEType, TeeReportType, CloudType, Measurement, TEEVerifiedData} from "../lib/LibTEE.sol";
 
 /// @custom:security-contact security@ata.network
@@ -96,6 +97,9 @@ interface IWorkloadVerifier {
 
     /// @return The SnpAttestation interface for verifying AMD SEV-SNP Attestations
     function snpAttestation() external view returns (ISnpAttestation);
+
+    /// @return The INitroEnclaveVerifier interface for verifying Nitro Enclave Attestations
+    function nitroAttestation() external view returns (INitroEnclaveVerifier);
 
     /// @return The TpmAttestation interface for verifying TPM Quotes
     function tpmAttestation() external view returns (ITpmAttestation);

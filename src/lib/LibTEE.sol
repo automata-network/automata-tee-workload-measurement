@@ -4,8 +4,8 @@ pragma solidity ^0.8.15;
 
 import {Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-// WorkloadCollaterals import removed - verifyReportID now takes Pcr[] directly
 import {Bytes48, Bytes64, LibBytes} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
+import {Pcr as NitroPcr} from "../interfaces/INitroEnclaveVerifier.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";
 
 using LibBytes for bytes;
@@ -19,7 +19,8 @@ using LibTEE for SnpMeasurement global;
 enum TEEType {
     Unknown,
     IntelTDX,
-    AmdSevSnp
+    AmdSevSnp,
+    Nitro
 }
 
 enum TeeReportType {
@@ -32,7 +33,8 @@ enum TeeReportType {
 enum CloudType {
     Unset,
     GCP,
-    Azure
+    Azure,
+    AWS
 }
 
 struct ZkProof {
@@ -56,6 +58,7 @@ struct TEEVerifiedData {
     CertPubkey akPub; // verified akPub
     TdxMeasurement tdx;
     SnpMeasurement snp;
+    NitroMeasurement nitro;
 }
 
 struct SnpMeasurement {
@@ -69,6 +72,11 @@ struct TdxMeasurement {
     Bytes48 rtmr1;
     Bytes48 rtmr2;
     Bytes48 rtmr3;
+}
+
+struct NitroMeasurement {
+    // @yaoxin-jing is this good enough?
+    NitroPcr[] pcrs;
 }
 
 error InvalidReportID();
@@ -195,17 +203,6 @@ library LibTEE {
         data.userReportData = snpReport.readBytes64(80);
         data.reportID = snpReport.readBytes32(320);
         data.snp.measurement = snpReport.readBytes48(144);
-        return data;
-    }
-
-    /// @notice Checks if a TDX measurement is empty (all fields are zero).
-    /// @dev This function verifies that all TDX measurement fields (mrtd, mrseam, rtmr0-rtmr3)
-    ///      are zero, indicating an uninitialized or empty measurement.
-    /// @param tdx The TDX measurement to check.
-    /// @return True if all TDX measurement fields are zero, false otherwise.
-    function isEmpty(TdxMeasurement memory tdx) internal pure returns (bool) {
-        return tdx.mrtd.isZero() && tdx.mrseam.isZero() && tdx.rtmr0.isZero() && tdx.rtmr1.isZero()
-            && tdx.rtmr2.isZero() && tdx.rtmr3.isZero();
     }
 
     /// @notice Checks if an SNP measurement is empty (measurement field is zero).
@@ -239,7 +236,34 @@ library LibTEE {
             data.tdx.rtmr3 = output.readBytes48(483);
             data.userReportData = output.readBytes64(531);
         }
-        return data;
+    }
+
+    /// @notice Checks if a TDX measurement is empty (all fields are zero).
+    /// @dev This function verifies that all TDX measurement fields (mrtd, mrseam, rtmr0-rtmr3)
+    ///      are zero, indicating an uninitialized or empty measurement.
+    /// @param tdx The TDX measurement to check.
+    /// @return True if all TDX measurement fields are zero, false otherwise.
+    function isEmpty(TdxMeasurement memory tdx) internal pure returns (bool) {
+        return tdx.mrtd.isZero() && tdx.mrseam.isZero() && tdx.rtmr0.isZero() && tdx.rtmr1.isZero()
+            && tdx.rtmr2.isZero() && tdx.rtmr3.isZero();
+    }
+
+    function nitroOutput(bytes memory nitroEncodedOutput) internal pure returns (TEEVerifiedData memory data) {
+        (
+            , // moduleId
+            , // timestamp
+            NitroPcr[] memory pcrs,
+            bytes memory userData,, // publicKey
+            // nonce
+        ) = abi.decode(nitroEncodedOutput, (string, uint64, NitroPcr[], bytes, bytes, bytes));
+
+        // reads only the first 64 bytes of userData
+        data.userReportData = userData.readBytes64(0);
+        data.nitro.pcrs = pcrs;
+    }
+
+    function isEmpty(NitroMeasurement memory nitro) internal pure returns (bool) {
+        return nitro.pcrs.length == 0;
     }
 
     /// @notice Computes the digest (hash) of a measurement structure.
