@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache2
-// Automata Contracts
 pragma solidity ^0.8.20;
 
 import {CVMIdentity} from "../../interfaces/ICVMRegistry.sol";
@@ -8,9 +7,8 @@ import {TPMConstants} from "@automata-network/automata-tpm-attestation/types/TPM
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 import {StorageSlot} from "@openzeppelin/contracts/utils/StorageSlot.sol";
 
-/// @title CVM Signature Base Contract
-/// @notice This contract provides a template,
-/// generating messages to be signed by a CVM Identity Key.
+import {CVMShared} from "./CVMShared.sol";
+
 abstract contract CVMSignature {
     bytes32 constant P256_VERIFIER_SLOT = keccak256("automata.contracts.usecases.CVMSignature.p256Verifier");
 
@@ -37,7 +35,6 @@ abstract contract CVMSignature {
         return abi.encodePacked(bytes(prefix), block.chainid, address(this), userData);
     }
 
-    /// @dev use this method to update the P256 verifier contract address
     function _writeP256VerifyAddress(address p256VerifierAddress) internal {
         StorageSlot.getAddressSlot(P256_VERIFIER_SLOT).value = p256VerifierAddress;
     }
@@ -48,7 +45,7 @@ abstract contract CVMSignature {
         virtual
         returns (bool verified)
     {
-        CertPubkey memory pubkey = cvmIdentity.pubkey;
+        CertPubkey memory pubkey = CVMShared.extractPubkeyFromTpmtPublic(cvmIdentity.tpmtPublic);
         SignatureAlgorithm memory sigAlgo = cvmIdentity.sigAlgo;
 
         bytes32 digest;
@@ -72,13 +69,8 @@ abstract contract CVMSignature {
         view
         returns (bool verified)
     {
-        // Extract RSA public key parameters
         (bytes memory n, bytes memory e) = pubkey.rsa();
-
-        // Validate signature length matches modulus size
         require(signature.length == n.length, IncorrectSignatureLength());
-
-        // RSASSA (PKCS#1 v1.5) verification
         return RSA.pkcs1Sha256(digest, signature, e, n);
     }
 
@@ -87,23 +79,20 @@ abstract contract CVMSignature {
         view
         returns (bool verified)
     {
-        // Extract ECDSA public key parameters
         (bytes32 x, bytes32 y) = pubkey.ecP256();
 
-        // Extract R,S from signature
         bytes32 r;
         bytes32 s;
         if (signature.length != 64) {
             revert IncorrectSignatureLength();
         }
         assembly {
-            let offset := add(signature, 0x20) // length
+            let offset := add(signature, 0x20)
             r := mload(offset)
             offset := add(offset, 0x20)
             s := mload(offset)
         }
 
-        // Call the P256 verifier contract with signature and public key data
         bytes memory args = abi.encode(digest, r, s, x, y);
         (bool success, bytes memory ret) = P256_VERIFIER().staticcall(args);
 
@@ -111,7 +100,6 @@ abstract contract CVMSignature {
             return false;
         }
 
-        // Decode return value: 1 = valid signature, 0 = invalid signature
         verified = abi.decode(ret, (uint256)) == 1;
     }
 }
