@@ -339,14 +339,12 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             (bool success, bytes memory data) = cachedTpmAttestation.checkPcrMeasurements(wc.tpmQuote, wc.pcrs);
             require(success, FAILED_TO_CHECK_PCR_MEASUREMENTS(string(data)));
         }
+        
+        // Step 3: Verify report ID with MeasureablePcr
+        LibTEE.verifyReportID(cloudType, wc.reportId, wc.pcrs, 15, teeVerifiedData);
 
-        // Step 3: Convert to final measurement
-        // This must happen after PCR check but before report ID verification
+        // Step 4: Convert to final measurement
         measurement = _getMeasurement(teeVerifiedData, wc.pcrs);
-
-        // Step 4: Verify report ID using final PCR values (after conversion from MeasureablePcr)
-        // This ensures report ID verification uses the same PCR values as the golden measurement
-        LibTEE.verifyReportID(cloudType, wc.reportId, measurement.pcrs, 15, teeVerifiedData);
     }
 
     /// @notice Extracts the attestation key (AK) public key from Azure TPM JSON data

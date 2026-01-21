@@ -2,7 +2,7 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import {Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {MeasureablePcr, Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {Bytes48, Bytes64, LibBytes} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
 import {Pcr as NitroPcr} from "../interfaces/INitroEnclaveVerifier.sol";
@@ -114,7 +114,7 @@ library LibTEE {
     ///        otherwise verify it matches
     /// @param cloudType The cloud provider type (GCP or Azure)
     /// @param reportId The report ID bytes from the workload (UUID for TDX, report_id for SNP)
-    /// @param pcrs The final PCR measurements (converted from MeasureablePcr to Pcr format)
+    /// @param pcrs PCR Measurements
     /// @param pcrIndex The TPM PCR index to verify against (typically 15 or 16). Different cloud
     ///        providers and TEE types may use different indices:
     ///        - Common practice: PCR 15 for general attestation, PCR 16 for report ID
@@ -127,7 +127,7 @@ library LibTEE {
     function verifyReportID(
         CloudType cloudType,
         bytes calldata reportId,
-        Pcr[] memory pcrs,
+        MeasureablePcr[] memory pcrs,
         uint256 pcrIndex,
         TEEVerifiedData memory teeData
     ) internal pure {
