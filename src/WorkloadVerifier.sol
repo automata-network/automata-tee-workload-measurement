@@ -292,15 +292,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
 
         require(uint8(output.result) == uint8(NitroVerificationResult.Success), FAILED_TO_VERIFY_TEE());
 
-        // TODO: discuss what do we need to actually include as TEE output with @yaoxin-jing
-        teeOutput = abi.encode(
-            bytes(output.moduleId),
-            output.timestamp,
-            abi.encode(output.pcrs),
-            output.userData,
-            output.publicKey,
-            output.nonce
-        );
+        teeOutput = abi.encode(bytes(output.moduleId), abi.encode(output.pcrs), output.userData);
     }
 
     function _verifyWorkload(
@@ -339,7 +331,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             (bool success, bytes memory data) = cachedTpmAttestation.checkPcrMeasurements(wc.tpmQuote, wc.pcrs);
             require(success, FAILED_TO_CHECK_PCR_MEASUREMENTS(string(data)));
         }
-        
+
         // Step 3: Verify report ID with MeasureablePcr
         LibTEE.verifyReportID(cloudType, wc.reportId, wc.pcrs, 15, teeVerifiedData);
 

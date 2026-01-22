@@ -75,7 +75,8 @@ struct TdxMeasurement {
 }
 
 struct NitroMeasurement {
-    // @yaoxin-jing is this good enough?
+    string moduleId;
+    string digest;
     NitroPcr[] pcrs;
 }
 
@@ -248,63 +249,63 @@ library LibTEE {
             && tdx.rtmr2.isZero() && tdx.rtmr3.isZero();
     }
 
+    /// @notice Parses an AWS Nitro Enclave attestation report output into TEE verified data.
+    /// @dev This function extracts Nitro-specific fields (module ID, PCR measurements, user data)
+    ///      from a raw Nitro attestation report output. Unlike TDX/SNP which require TPM quotes,
+    ///      Nitro attestations contain PCR values directly in the report.
+    /// @param nitroEncodedOutput The ABI-encoded bytes of the Nitro attestation report output.
+    /// @return data The parsed TEE verified data containing Nitro measurements and user report data.
     function nitroOutput(bytes memory nitroEncodedOutput) internal pure returns (TEEVerifiedData memory data) {
-        (
-            , // moduleId
-            , // timestamp
-            NitroPcr[] memory pcrs,
-            bytes memory userData,, // publicKey
-            // nonce
-        ) = abi.decode(nitroEncodedOutput, (string, uint64, NitroPcr[], bytes, bytes, bytes));
+        (string memory moduleId, NitroPcr[] memory pcrs, bytes memory userData) =
+            abi.decode(nitroEncodedOutput, (string, NitroPcr[], bytes));
 
         // reads only the first 64 bytes of userData
         data.userReportData = userData.readBytes64(0);
+        data.nitro.moduleId = moduleId;
+        data.nitro.digest = "sha384";
         data.nitro.pcrs = pcrs;
     }
 
+    /// @notice Checks if a Nitro measurement is empty (no PCR values present).
+    /// @dev This function verifies that the Nitro PCR array is empty, indicating
+    ///      an uninitialized or empty measurement.
+    /// @param nitro The Nitro measurement to check.
+    /// @return True if the Nitro measurement has no PCR values, false otherwise.
     function isEmpty(NitroMeasurement memory nitro) internal pure returns (bool) {
         return nitro.pcrs.length == 0;
     }
 
-    // TEMP: Subject to change, pending discussion with @yaoxin-jing
     /// @notice Converts Nitro PCR measurements to the final Pcr format for golden measurement.
     /// @dev Nitro attestation reports contain PCR values directly (no TPM quote needed).
     ///      This function filters out zero-valued PCRs and converts the 48-byte SHA-384
     ///      values to 32-byte hashes using keccak256.
     /// @param nitroPcrs The array of Nitro PCR measurements from the attestation report.
     /// @return An array of Pcr structs compatible with the Measurement struct.
-    function _getFinalMeasurementFromNitro(NitroPcr[] memory nitroPcrs)
-        internal
-        pure
-        returns (Pcr[] memory)
-    {
+    function _getFinalMeasurementFromNitro(NitroPcr[] memory nitroPcrs) internal pure returns (Pcr[] memory) {
         uint256 len = nitroPcrs.length;
 
-        // First pass: count non-zero PCRs to allocate exact array size
-        uint256 nonZeroCount = 0;
-        for (uint256 i = 0; i < len; i++) {
-            if (nitroPcrs[i].value.first != bytes32(0) || nitroPcrs[i].value.second != bytes16(0)) {
-                nonZeroCount++;
-            }
-        }
+        // Allocate full-size array upfront
+        Pcr[] memory result = new Pcr[](len);
+        uint256 count = 0;
 
-        // Allocate result array with exact size
-        Pcr[] memory result = new Pcr[](nonZeroCount);
-
-        // Second pass: populate the result array
-        uint256 resultIdx = 0;
+        // Single pass: copy non-zero PCRs and count simultaneously
         for (uint256 i = 0; i < len; i++) {
             bytes32 first = nitroPcrs[i].value.first;
             bytes16 second = nitroPcrs[i].value.second;
             if (first != bytes32(0) || second != bytes16(0)) {
-                result[resultIdx] = Pcr({
+                result[count] = Pcr({
                     index: uint256(nitroPcrs[i].index),
                     pcr: keccak256(abi.encodePacked(first, second)),
                     measureEvents: new bytes32[](0),
                     measureEventsIdx: new uint256[](0)
                 });
-                resultIdx++;
+                count++;
             }
+        }
+
+        // Shrink array to actual size by updating length in memory
+        assembly ("memory-safe") {
+            mstore(result, count)
         }
 
         return result;
