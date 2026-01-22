@@ -2,21 +2,51 @@
 pragma solidity >=0.8.15;
 
 import {Test} from "forge-std/Test.sol";
+import {stdJson} from "forge-std/StdJson.sol";
+import {Base64} from "solady/utils/Base64.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
 import {MockAutomataDcapAttestation} from "../../src/mock/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../../src/mock/MockAutomataSnpAttestation.sol";
 import {WorkloadVerifier} from "../../src/WorkloadVerifier.sol";
+import {CVMRegistry, CVMConfig, ICVMRegistry} from "../../src/usecases/CVMRegistry.sol";
 
 abstract contract TestSetup is Test {
+    using stdJson for string;
+
+    struct CvmTestConfig {
+        // Test data file paths
+        string registerCalldataPath;
+        string refreshCalldataPath;
+        string rotateCalldataPath;
+        string goldenMeasurementPath;
+        // Expected identity hashes
+        bytes32 initialCvmIdentityHash;
+        bytes32 rotatedCvmIdentityHash;
+        // TPM AK Root CA (for GCP)
+        bytes tpmAkRootCa; // empty bytes to skip CA addition
+        // Encoding type
+        bool isBase64Encoded; // true for Base64, false for hex bytes
+        // Time management
+        uint256 pinnedTimestamp; // 0 = use current time
+        uint256 refreshTimeAdvance; // seconds to advance before refresh (e.g., 10 days)
+        uint256 expiryTimeAdvance; // seconds to advance after refresh to check expiry (e.g., 60 days)
+    }
+
     MockAutomataDcapAttestation internal dcapAttestation;
     MockAutomataSnpAttestation internal snpAttestation;
     TpmAttestation internal tpmAttestation;
     WorkloadVerifier internal workloadVerifier;
+    CVMRegistry internal registry;
 
     address internal constant owner = address(0x1234);
     address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
+    uint256 internal constant ONE_DAY_SECONDS = 86400;
+
+    event CVMRegistered(bytes32 indexed cvmIdentityHash);
+    event CVMRefreshed(bytes32 indexed cvmIdentityHash);
+    event CVMIdentityRotated(bytes32 indexed oldHash, bytes32 indexed newHash);
 
     function setUp() public virtual {
         _deployP256();
@@ -38,6 +68,11 @@ abstract contract TestSetup is Test {
         ERC1967Proxy workloadVerifierProxy = new ERC1967Proxy(address(new WorkloadVerifier()), initializeCalldata);
         workloadVerifier = WorkloadVerifier(address(workloadVerifierProxy));
 
+        // Deploy CVMRegistry
+        CVMRegistry registryImpl = new CVMRegistry(address(workloadVerifier));
+        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner);
+        registry = CVMRegistry(address(new ERC1967Proxy(address(registryImpl), ownerInitData)));
+
         vm.stopBroadcast();
     }
 
@@ -50,5 +85,79 @@ abstract contract TestSetup is Test {
         // check code
         uint256 codesize = P256_VERIFIER.code.length;
         require(codesize > 0, "P256 deployed to the wrong address");
+    }
+
+    function _runCvmWorkflowTest(CvmTestConfig memory config) internal {
+        uint256 time = config.pinnedTimestamp > 0 ? config.pinnedTimestamp : block.timestamp;
+        if (config.pinnedTimestamp > 0) {
+            vm.warp(time);
+        }
+
+        // Step 0: Add TPM AK Root CA (GCP only)
+        if (config.tpmAkRootCa.length > 0) {
+            vm.prank(owner);
+            tpmAttestation.addCA(config.tpmAkRootCa);
+        }
+
+        // Step 1: Register CVM
+        bytes memory registerCalldata = _loadCalldata(config.registerCalldataPath, config.isBase64Encoded);
+        vm.expectEmit(true, false, false, false);
+        emit CVMRegistered(config.initialCvmIdentityHash);
+        (bool success, bytes memory result) = address(registry).call(registerCalldata);
+        assertTrue(success, string(result));
+
+        // Verify golden measurement
+        _verifyGoldenMeasurement(result, config.goldenMeasurementPath);
+
+        // Step 2: Refresh CVM (advance time by configured amount)
+        time += config.refreshTimeAdvance;
+        vm.warp(time);
+
+        bytes memory refreshCalldata = _loadCalldata(config.refreshCalldataPath, config.isBase64Encoded);
+        vm.expectEmit(true, false, false, false);
+        emit CVMRefreshed(config.initialCvmIdentityHash);
+        (bool refreshSuccess,) = address(registry).call(refreshCalldata);
+        assertTrue(refreshSuccess, "Refresh failed");
+        assertTrue(registry.checkCvmValidity(config.initialCvmIdentityHash), "CVM should be valid after refresh");
+
+        // Step 3: Rotate CVM identity key (optional)
+        bytes32 finalIdentityHash = config.initialCvmIdentityHash;
+        if (bytes(config.rotateCalldataPath).length > 0) {
+            bytes memory rotateCalldata = _loadCalldata(config.rotateCalldataPath, config.isBase64Encoded);
+            vm.expectEmit(true, true, false, false);
+            emit CVMIdentityRotated(config.initialCvmIdentityHash, config.rotatedCvmIdentityHash);
+            (bool rotateSuccess, bytes memory rotateResult) = address(registry).call(rotateCalldata);
+            assertTrue(rotateSuccess, string(rotateResult));
+
+            // Verify rotation
+            assertTrue(registry.hasRegistered(config.rotatedCvmIdentityHash), "new CVM identity should be registered");
+            assertTrue(
+                !registry.hasRegistered(config.initialCvmIdentityHash), "old CVM identity should not be registered"
+            );
+            finalIdentityHash = config.rotatedCvmIdentityHash;
+        }
+
+        // Step 4: Check validity (advance time by configured amount - should be expired)
+        time += config.expiryTimeAdvance;
+        vm.warp(time);
+        assertTrue(!registry.checkCvmValidity(finalIdentityHash), "CVM should be invalid after expiry");
+    }
+
+    function _loadCalldata(string memory path, bool isBase64) internal view returns (bytes memory) {
+        string memory json = vm.readFile(string.concat(vm.projectRoot(), path));
+        if (isBase64) {
+            string memory encoded = json.readString(".calldata");
+            return Base64.decode(encoded);
+        } else {
+            return json.readBytes(".calldata");
+        }
+    }
+
+    function _verifyGoldenMeasurement(bytes memory result, string memory goldenPath) internal view {
+        bytes32 actualMeasurement = keccak256(result);
+        string memory gmJson = vm.readFile(string.concat(vm.projectRoot(), goldenPath));
+        string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
+        bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
+        assertEq(expectedMeasurement, actualMeasurement);
     }
 }
