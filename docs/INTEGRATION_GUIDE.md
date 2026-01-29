@@ -85,11 +85,7 @@ contract MyWorkloadVerifier {
         WorkloadCollaterals calldata workloadCollaterals
     ) external payable {
         // Verify attestation and get measurement hash
-        (
-            bytes memory teeOutput,
-            bytes32 measurementHash,
-            bytes memory tpmExtraData
-        ) = workloadVerifier.verifyAttestationAndGetMeasurementHash(
+        bytes32 measurementHash = workloadVerifier.verifyAttestationAndGetMeasurementHash(
             teeType,
             teeReportType,
             cloudType,
@@ -100,17 +96,10 @@ contract MyWorkloadVerifier {
         // Validate against golden measurement
         require(measurementHash == goldenMeasurementHash, "Invalid measurement");
 
-        // Validate TPM extra data (application-specific)
-        _validateTpmExtraData(tpmExtraData);
-
         emit WorkloadVerified(measurementHash);
 
         // Execute privileged operation
         _executePrivilegedOperation();
-    }
-
-    function _validateTpmExtraData(bytes memory tpmExtraData) internal {
-        // Your validation logic (e.g., nonce, replay protection)
     }
 
     function _executePrivilegedOperation() internal {
@@ -123,28 +112,27 @@ contract MyWorkloadVerifier {
 
 ### Basic Integration
 
-Use the CVMRegistry for identity management and message verification.
+Use the CVMRegistry for identity management and message verification. Applications should inherit from `CVMSignature` base contract for built-in domain separation and signature verification.
 
 ```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import {ICVMRegistry, CVMIdentity} from "@automata-network/tee-workload-measurement/interfaces/ICVMRegistry.sol";
-import {CVMRegistry} from "@automata-network/tee-workload-measurement/usecases/CVMRegistry.sol";
-import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {LibX509Verify} from "@automata-network/automata-tpm-attestation/lib/LibX509Verify.sol";
+import {CVMSignature} from "@automata-network/tee-workload-measurement/usecases/bases/CVMSignature.sol";
 
-contract MyCVMApp {
-    using LibX509Verify for CertPubkey;
-
-    CVMRegistry public immutable cvmRegistry;
+contract MyCVMApp is CVMSignature {
+    ICVMRegistry public immutable cvmRegistry;
     mapping(bytes32 => bool) public allowedMeasurements;
+
+    // App-specific replay protection
+    mapping(bytes32 => mapping(bytes32 => bool)) public usedNonces;
 
     event ActionExecuted(bytes32 indexed cvmIdentityHash);
 
-    constructor(address _cvmRegistry) {
-        cvmRegistry = CVMRegistry(_cvmRegistry);
+    constructor(address _cvmRegistry, address _p256Verifier) {
+        cvmRegistry = ICVMRegistry(_cvmRegistry);
+        _writeP256VerifyAddress(_p256Verifier);
     }
 
     function addAllowedMeasurement(bytes32 measurementHash) external {
@@ -154,71 +142,46 @@ contract MyCVMApp {
 
     function executeAction(
         bytes32 cvmIdentityHash,
-        bytes calldata message,
+        bytes calldata userData,
+        bytes32 nonce,
         bytes calldata signature
     ) external {
-        // 1. Check CVM is registered
+        // 1. Check CVM is registered and valid
         require(cvmRegistry.hasRegistered(cvmIdentityHash), "CVM not registered");
+        require(cvmRegistry.checkCvmValidity(cvmIdentityHash), "CVM expired");
 
-        // 2. Check freshness
-        require(cvmRegistry.checkTEEValidity(cvmIdentityHash), "TEE expired");
-        require(cvmRegistry.checkTPMValidity(cvmIdentityHash), "TPM expired");
-
-        // 3. Validate measurement
+        // 2. Validate measurement against golden measurement
         bytes32 measurementHash = cvmRegistry.getMeasurementHash(cvmIdentityHash);
         require(allowedMeasurements[measurementHash], "Invalid measurement");
 
-        // 4. Verify signature
-        bytes32 messageHash = _constructMessageHash(message);
-        _verifySignature(cvmIdentityHash, messageHash, signature);
+        // 3. App-specific replay protection
+        require(!usedNonces[cvmIdentityHash][nonce], "Nonce already used");
+        usedNonces[cvmIdentityHash][nonce] = true;
+
+        // 4. Construct domain-separated message using CVMSignature helper
+        bytes memory message = _generateMessage(abi.encodePacked(nonce, userData));
+
+        // 5. Verify signature using CVMSignature helper
+        CVMIdentity memory cvmIdentity = cvmRegistry.getCvmIdentity(cvmIdentityHash);
+        require(_verifySignature(cvmIdentity, signature, message), "Invalid signature");
 
         emit ActionExecuted(cvmIdentityHash);
 
-        // 5. Execute action
-        _executeAction(message);
+        // 6. Execute action
+        _executeAction(userData);
     }
 
-    function _constructMessageHash(bytes calldata message) internal view returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            bytes("CVM_WORKLOAD_USER_MESSAGE"),
-            block.chainid,
-            address(this),
-            message
-        ));
-    }
-
-    function _verifySignature(
-        bytes32 cvmIdentityHash,
-        bytes32 messageHash,
-        bytes calldata signature
-    ) internal view {
-        CVMIdentity memory identity = cvmRegistry.getCvmIdentity(cvmIdentityHash);
-
-        // Verify ECDSA signature using P256 verifier
-        // Note: This example assumes ECDSA P-256 signatures (sigAlgo.scheme == 0x0018)
-        require(
-            identity.sigAlgo.scheme == 0x0018,
-            "Only ECDSA supported in this example"
-        );
-
-        // Get P256 verifier from TPM attestation contract
-        ITpmAttestation tpmAttestation = cvmRegistry.tpmAttestation();
-        address p256Verifier = tpmAttestation.p256();
-
-        // Verify signature using the CertPubkey from identity
-        require(
-            identity.pubkey.verifySignature(
-                abi.encodePacked(messageHash),
-                signature,
-                p256Verifier
-            ),
-            "Invalid signature"
-        );
-    }
-
-    function _executeAction(bytes calldata message) internal {
+    function _executeAction(bytes calldata userData) internal {
         // Your application logic
     }
 }
 ```
+
+**Key Integration Points:**
+
+1. **Inherit from `CVMSignature`**: Provides `_generateMessage()`, `_generateMessageWithCustomPrefix()`, and `_verifySignature()` helpers
+2. **Use `checkCvmValidity()`**: Single validity check instead of separate TEE/TPM checks
+3. **Implement replay protection**: The registry does NOT provide nonce-based replay protection for apps - you must implement your own
+4. **Domain separation**: Use `_generateMessage()` for standard messages or `_generateMessageWithCustomPrefix()` for custom message types
+5. **Signature verification**: `_verifySignature()` handles both RSA and ECDSA signatures automatically based on the CVM identity's signature algorithm
 

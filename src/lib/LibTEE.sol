@@ -2,10 +2,10 @@
 // Automata Contracts
 pragma solidity ^0.8.15;
 
-import {Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {MeasureablePcr, Pcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {WorkloadCollaterals} from "../interfaces/IWorkloadVerifier.sol";
 import {Bytes48, Bytes64, LibBytes} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
+import {Pcr as NitroPcr} from "../interfaces/INitroEnclaveVerifier.sol";
 import {Sha2Ext} from "./Sha2Ext.sol";
 
 using LibBytes for bytes;
@@ -19,7 +19,8 @@ using LibTEE for SnpMeasurement global;
 enum TEEType {
     Unknown,
     IntelTDX,
-    AmdSevSnp
+    AmdSevSnp,
+    Nitro
 }
 
 enum TeeReportType {
@@ -32,7 +33,8 @@ enum TeeReportType {
 enum CloudType {
     Unset,
     GCP,
-    Azure
+    Azure,
+    AWS
 }
 
 struct ZkProof {
@@ -56,6 +58,7 @@ struct TEEVerifiedData {
     CertPubkey akPub; // verified akPub
     TdxMeasurement tdx;
     SnpMeasurement snp;
+    NitroMeasurement nitro;
 }
 
 struct SnpMeasurement {
@@ -71,6 +74,12 @@ struct TdxMeasurement {
     Bytes48 rtmr3;
 }
 
+struct NitroMeasurement {
+    string moduleId;
+    string digest;
+    NitroPcr[] pcrs;
+}
+
 error InvalidReportID();
 error UnexpectedSGXReport();
 
@@ -84,18 +93,18 @@ library LibTEE {
     ///      (Examples below use typical PCR indices: 15 or 16)
     ///      GCP + Intel TDX:
     ///      - teeData.reportID = 0 (not populated in TDX report)
-    ///      - wc.reportId = UUID from workload
+    ///      - reportId = UUID from workload
     ///      - PCR[pcrIndex] = SHA256_extend(0, SHA256(uuid))
     ///      - RTMR3 = SHA384_extend(0, SHA384(uuid))
     ///      - Verification: Check both PCR[pcrIndex] and RTMR3 match expected values
     ///      GCP + AMD SEV-SNP:
     ///      - teeData.reportID = SNP report's report_id field
-    ///      - wc.reportId = SNP report_id (should match teeData.reportID)
+    ///      - reportId = SNP report_id (should match teeData.reportID)
     ///      - PCR[pcrIndex] = SHA256_extend(0, reportID)
-    ///      - Verification: Check PCR[pcrIndex] matches and wc.reportId equals teeData.reportID
+    ///      - Verification: Check PCR[pcrIndex] matches and reportId equals teeData.reportID
     ///      Azure + Intel TDX:
     ///      - teeData.reportID = 0
-    ///      - wc.reportId = bytes16(0) (empty)
+    ///      - reportId = bytes16(0) (empty)
     ///      - PCR[pcrIndex] = SHA256_extend(0, 0)
     ///      - RTMR3 = 0
     ///      - Verification: If PCR[pcrIndex] is zero, verification passes (no UUID tracking)
@@ -105,46 +114,48 @@ library LibTEE {
     ///      - Verification: If cloudType is Azure and PCR[pcrIndex] is zero, skip check;
     ///        otherwise verify it matches
     /// @param cloudType The cloud provider type (GCP or Azure)
-    /// @param wc The workload collaterals containing PCR measurements and report ID
+    /// @param reportId The report ID bytes from the workload (UUID for TDX, report_id for SNP)
+    /// @param pcrs PCR Measurements
     /// @param pcrIndex The TPM PCR index to verify against (typically 15 or 16). Different cloud
     ///        providers and TEE types may use different indices:
     ///        - Common practice: PCR 15 for general attestation, PCR 16 for report ID
     /// @param teeData The verified TEE data extracted from the attestation report
-    /// @dev Reverts with "Invalid reportID" if:
-    ///      - Specified PCR index is not found in the workload collaterals
+    /// @dev Reverts with InvalidReportID if:
+    ///      - Specified PCR index is not found in the PCR array
     ///      - PCR value doesn't match the expected hash extension
-    ///      - For SNP: wc.reportId doesn't match teeData.reportID
+    ///      - For SNP: reportId doesn't match teeData.reportID
     ///      - For TDX: RTMR3 doesn't match the expected SHA384 extension of the UUID
     function verifyReportID(
         CloudType cloudType,
-        WorkloadCollaterals calldata wc,
+        bytes calldata reportId,
+        MeasureablePcr[] memory pcrs,
         uint256 pcrIndex,
         TEEVerifiedData memory teeData
     ) internal pure {
-        uint256 len = wc.pcrs.length;
+        uint256 len = pcrs.length;
         bool verified;
 
         for (uint256 i = 0; i < len; i++) {
-            if (wc.pcrs[i].index == pcrIndex) {
+            if (pcrs[i].index == pcrIndex) {
                 // Intel TDX (reportID == 0)
                 // TDX attestation reports don't populate reportID field in TEEVerifiedData
                 if (teeData.reportID == bytes32(0)) {
                     // Azure TDX: If PCR and rtmr3 are zero, no UUID tracking is performed
-                    if (wc.pcrs[i].pcr == bytes32(0) && teeData.tdx.rtmr3.isZero()) {
+                    if (pcrs[i].pcr == bytes32(0) && teeData.tdx.rtmr3.isZero()) {
                         verified = true;
                         break;
                     }
 
                     // GCP TDX: Verify both PCR and RTMR3 measurements
-                    Bytes48 memory reportIdSha384 = Sha2Ext.sha384(wc.reportId);
+                    Bytes48 memory reportIdSha384 = Sha2Ext.sha384(reportId);
                     Bytes48 memory expectedTdxRtmr3 =
                         Sha2Ext.sha384(abi.encodePacked(new bytes(48), reportIdSha384.first, reportIdSha384.second));
 
                     // Compute PCR = SHA256_extend(0, SHA256(reportId))
-                    bytes32 reportIdHash = sha256(abi.encodePacked(new bytes(32), sha256(wc.reportId)));
+                    bytes32 reportIdHash = sha256(abi.encodePacked(new bytes(32), sha256(reportId)));
 
                     // Verify both PCR and RTMR3 match expected values
-                    if (wc.pcrs[i].pcr == reportIdHash && expectedTdxRtmr3.equal(teeData.tdx.rtmr3)) {
+                    if (pcrs[i].pcr == reportIdHash && expectedTdxRtmr3.equal(teeData.tdx.rtmr3)) {
                         verified = true;
                         break;
                     }
@@ -155,13 +166,13 @@ library LibTEE {
                     // Azure SNP: PCR[pcrIndex] binding is disabled for Azure deployments.
                     // The TPM-TEE binding is enforced through akPub verification instead.
                     // Therefore, PCR[pcrIndex] may be zero and should be skipped.
-                    if (wc.pcrs[i].pcr == bytes32(0) && cloudType == CloudType.Azure) {
+                    if (pcrs[i].pcr == bytes32(0) && cloudType == CloudType.Azure) {
                         verified = true;
                         break;
                     }
 
-                    // GCP SNP: Verify that wc.reportId matches teeData.reportID
-                    if (wc.reportId.length > 0 && wc.reportId.readBytes32(0) != teeData.reportID) {
+                    // GCP SNP: Verify that reportId matches teeData.reportID
+                    if (reportId.length > 0 && reportId.readBytes32(0) != teeData.reportID) {
                         break;
                     }
 
@@ -169,7 +180,7 @@ library LibTEE {
                     bytes32 expectedPcr = sha256(abi.encodePacked(new bytes(32), teeData.reportID));
 
                     // Verify PCR matches expected value
-                    if (wc.pcrs[i].pcr != expectedPcr) {
+                    if (pcrs[i].pcr != expectedPcr) {
                         break;
                     }
 
@@ -193,17 +204,6 @@ library LibTEE {
         data.userReportData = snpReport.readBytes64(80);
         data.reportID = snpReport.readBytes32(320);
         data.snp.measurement = snpReport.readBytes48(144);
-        return data;
-    }
-
-    /// @notice Checks if a TDX measurement is empty (all fields are zero).
-    /// @dev This function verifies that all TDX measurement fields (mrtd, mrseam, rtmr0-rtmr3)
-    ///      are zero, indicating an uninitialized or empty measurement.
-    /// @param tdx The TDX measurement to check.
-    /// @return True if all TDX measurement fields are zero, false otherwise.
-    function isEmpty(TdxMeasurement memory tdx) internal pure returns (bool) {
-        return tdx.mrtd.isZero() && tdx.mrseam.isZero() && tdx.rtmr0.isZero() && tdx.rtmr1.isZero()
-            && tdx.rtmr2.isZero() && tdx.rtmr3.isZero();
     }
 
     /// @notice Checks if an SNP measurement is empty (measurement field is zero).
@@ -237,7 +237,78 @@ library LibTEE {
             data.tdx.rtmr3 = output.readBytes48(483);
             data.userReportData = output.readBytes64(531);
         }
-        return data;
+    }
+
+    /// @notice Checks if a TDX measurement is empty (all fields are zero).
+    /// @dev This function verifies that all TDX measurement fields (mrtd, mrseam, rtmr0-rtmr3)
+    ///      are zero, indicating an uninitialized or empty measurement.
+    /// @param tdx The TDX measurement to check.
+    /// @return True if all TDX measurement fields are zero, false otherwise.
+    function isEmpty(TdxMeasurement memory tdx) internal pure returns (bool) {
+        return tdx.mrtd.isZero() && tdx.mrseam.isZero() && tdx.rtmr0.isZero() && tdx.rtmr1.isZero()
+            && tdx.rtmr2.isZero() && tdx.rtmr3.isZero();
+    }
+
+    /// @notice Parses an AWS Nitro Enclave attestation report output into TEE verified data.
+    /// @dev This function extracts Nitro-specific fields (module ID, PCR measurements, user data)
+    ///      from a raw Nitro attestation report output. Unlike TDX/SNP which require TPM quotes,
+    ///      Nitro attestations contain PCR values directly in the report.
+    /// @param nitroEncodedOutput The ABI-encoded bytes of the Nitro attestation report output.
+    /// @return data The parsed TEE verified data containing Nitro measurements and user report data.
+    function nitroOutput(bytes memory nitroEncodedOutput) internal pure returns (TEEVerifiedData memory data) {
+        (string memory moduleId, NitroPcr[] memory pcrs, bytes memory userData) =
+            abi.decode(nitroEncodedOutput, (string, NitroPcr[], bytes));
+
+        // reads only the first 64 bytes of userData
+        data.userReportData = userData.readBytes64(0);
+        data.nitro.moduleId = moduleId;
+        data.nitro.digest = "sha384";
+        data.nitro.pcrs = pcrs;
+    }
+
+    /// @notice Checks if a Nitro measurement is empty (no PCR values present).
+    /// @dev This function verifies that the Nitro PCR array is empty, indicating
+    ///      an uninitialized or empty measurement.
+    /// @param nitro The Nitro measurement to check.
+    /// @return True if the Nitro measurement has no PCR values, false otherwise.
+    function isEmpty(NitroMeasurement memory nitro) internal pure returns (bool) {
+        return nitro.pcrs.length == 0;
+    }
+
+    /// @notice Converts Nitro PCR measurements to the final Pcr format for golden measurement.
+    /// @dev Nitro attestation reports contain PCR values directly (no TPM quote needed).
+    ///      This function filters out zero-valued PCRs and converts the 48-byte SHA-384
+    ///      values to 32-byte hashes using keccak256.
+    /// @param nitroPcrs The array of Nitro PCR measurements from the attestation report.
+    /// @return An array of Pcr structs compatible with the Measurement struct.
+    function _getFinalMeasurementFromNitro(NitroPcr[] memory nitroPcrs) internal pure returns (Pcr[] memory) {
+        uint256 len = nitroPcrs.length;
+
+        // Allocate full-size array upfront
+        Pcr[] memory result = new Pcr[](len);
+        uint256 count = 0;
+
+        // Single pass: copy non-zero PCRs and count simultaneously
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 first = nitroPcrs[i].value.first;
+            bytes16 second = nitroPcrs[i].value.second;
+            if (first != bytes32(0) || second != bytes16(0)) {
+                result[count] = Pcr({
+                    index: uint256(nitroPcrs[i].index),
+                    pcr: keccak256(abi.encodePacked(first, second)),
+                    measureEvents: new bytes32[](0),
+                    measureEventsIdx: new uint256[](0)
+                });
+                count++;
+            }
+        }
+
+        // Shrink array to actual size by updating length in memory
+        assembly ("memory-safe") {
+            mstore(result, count)
+        }
+
+        return result;
     }
 
     /// @notice Computes the digest (hash) of a measurement structure.

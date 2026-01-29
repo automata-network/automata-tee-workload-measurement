@@ -57,18 +57,17 @@ The **[Workload Verifier](./src/WorkloadVerifier.sol)** contract provides crypto
 The **[CVM Registry](./src/usecases/CVMRegistry.sol)** provides identity and lifecycle management for CVM workloads. It maps a CVM's identity to its attestation configuration, system and workload measurement hash, and freshness metadata.
 
 **Key Features:**
-- CVM Identity management for using CVM public key
-- Attested CVM identity lifecycle tracking (registration, re-attestation, TTL management)
-- Freshness enforcement via configurable TTL windows
-- Identity rotation with attestation-based proof
-- Replay protection using per-identity nonces
-- Domain separation for secure message signing
+- CVM Identity management using TPM-generated keys
+- CVM identity key certified by TPM Attestation Key (AK), guaranteeing CVM owner cannot read the private key - signatures can only be generated from within the intended CVM
+- Attested CVM identity lifecycle tracking (registration, refresh with full TEE+TPM re-attestation)
+- Freshness enforcement via configurable TTL window
+- Identity rotation while TEE report is still fresh
+- Built-in replay protection for TEE reports and TPM quotes (applications must implement their own replay protection for signed messages)
 
 **Key Capabilities:**
-- **Registration**: Bootstrap CVM identity using attestation
-- **Re-attestation**: Refresh TPM collateral while reusing TEE attestation, optionally update CVM identity
-- **TTL Management**: Configure custom freshness windows for TEE and TPM
-- **Key Rotation**: Securely rotate identity keys with attestation proof
+- **Registration**: Bootstrap CVM identity with full TEE+TPM attestation and TPM2_Certify proof
+- **Refresh**: Extend CVM validity with fresh TEE+TPM attestation (only way to extend lifetime after expiry)
+- **Key Rotation**: Rotate identity key while TEE report is still valid (using TPM2_Certify for new key)
 
 **Use Cases:**
 - Gate onchain actions based on verified CVM identity and liveness
@@ -83,7 +82,6 @@ We are continuously improving the CVM Registry to enhance security, usability, a
 **Security Enhancements:**
 - **Revocation Mechanism** - Add explicit onchain CVM identity revocation before TTL expiry
 - **TTL Bounds** - Enforce minimum and maximum TTL ranges to prevent configuration errors
-- **Registration Validation** - Prevent silent parameter mismatches during re-registration attempts
 
 **Protocol Extensions:**
 - **Multi-TEE Aggregation** - Support workloads spanning multiple enclaves for distributed systems
@@ -92,7 +90,6 @@ We are continuously improving the CVM Registry to enhance security, usability, a
 - **Cached Proof Compression** - Gas-optimized re-use of previously verified certificate chains
 
 **Developer Experience:**
-- **Enhanced Events** - Add dedicated `CVMIdentityRotated` event to distinguish rotation from re-attestation
 - **Flexible Verifier Updates** - Design migration path for upgrading immutable verifier contracts
 
 For detailed technical analysis and resolved issues, see [here](./docs/primer/cvm-registry-primer.md#8-security--trust-assumptions).

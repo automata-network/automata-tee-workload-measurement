@@ -11,7 +11,16 @@ import {
 } from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {IDcapAttestation} from "./interfaces/IDcapAttestation.sol";
-import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/ISnpAttestation.sol";
+import {
+    ISnpAttestation,
+    VerifierJournal as SnpVerifierJournal,
+    VerificationResult as SnpVerificationResult
+} from "./interfaces/ISnpAttestation.sol";
+import {
+    INitroEnclaveVerifier,
+    VerifierJournal as NitroVerifierJournal,
+    VerificationResult as NitroVerificationResult
+} from "./interfaces/INitroEnclaveVerifier.sol";
 import {IWorkloadVerifier, WorkloadCollaterals} from "./interfaces/IWorkloadVerifier.sol";
 import {
     TEEVerifiedData,
@@ -48,8 +57,9 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
     IDcapAttestation public override dcapAttestation;
     ISnpAttestation public override snpAttestation;
     ITpmAttestation public override tpmAttestation;
+    INitroEnclaveVerifier public override nitroAttestation;
 
-    uint256[47] private __gap;
+    uint256[46] private __gap;
 
     constructor() {
         _disableInitializers();
@@ -111,43 +121,22 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         external
         payable
         override
-        returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, bytes memory tpmExtraData)
+        returns (bytes memory teeOutput, TEEVerifiedData memory teeVerifiedData, Measurement memory measurement)
     {
-        (teeOutput, teeVerifiedData, tpmExtraData) =
+        (teeOutput, teeVerifiedData, measurement) =
             _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
     }
 
-    function verifyAttestationAndGetMeasurement(
-        TEEType teeType,
-        TeeReportType teeReportType,
-        CloudType cloudType,
-        bytes calldata teeAttestationReport,
-        WorkloadCollaterals calldata wc
-    ) external payable override returns (bytes memory teeOutput, Measurement memory m, bytes memory tpmExtraData) {
-        TEEVerifiedData memory teeVerifiedData;
-        (teeOutput, teeVerifiedData, tpmExtraData) =
-            _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
-        m = getMeasurement(teeVerifiedData, wc.pcrs);
+    /// @notice Compute the keccak256 hash of a Measurement struct
+    /// @param m The measurement to hash
+    /// @return The keccak256 hash of the encoded measurement
+    function computeMeasurementHash(Measurement memory m) external pure override returns (bytes32) {
+        return m.digest();
     }
 
-    function verifyAttestationAndGetMeasurementHash(
-        TEEType teeType,
-        TeeReportType teeReportType,
-        CloudType cloudType,
-        bytes calldata teeAttestationReport,
-        WorkloadCollaterals calldata wc
-    ) external payable override returns (bytes memory teeOutput, bytes32 measurementHash, bytes memory tpmExtraData) {
-        TEEVerifiedData memory teeVerifiedData;
-        (teeOutput, teeVerifiedData, tpmExtraData) =
-            _verifyAttestation(teeType, teeReportType, cloudType, teeAttestationReport, wc);
-        Measurement memory m = getMeasurement(teeVerifiedData, wc.pcrs);
-        measurementHash = m.digest();
-    }
-
-    function getMeasurement(TEEVerifiedData memory teeVerifiedData, MeasureablePcr[] memory measuredPcrs)
-        public
+    function _getMeasurement(TEEVerifiedData memory teeVerifiedData, MeasureablePcr[] calldata measuredPcrs)
+        private
         view
-        override
         returns (Measurement memory m)
     {
         Pcr[] memory pcrs = tpmAttestation.toFinalMeasurement(measuredPcrs);
@@ -171,6 +160,8 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             teeVerifiedData = LibTEE.tdxOutput(teeOutput);
         } else if (teeType == TEEType.AmdSevSnp) {
             teeVerifiedData = LibTEE.snpOutput(teeOutput);
+        } else if (teeType == TEEType.Nitro) {
+            teeVerifiedData = LibTEE.nitroOutput(teeOutput);
         } else {
             revert INVALID_TEE_TYPE(teeType);
         }
@@ -186,7 +177,7 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         CloudType cloudType,
         bytes calldata teeAttestationReport,
         WorkloadCollaterals calldata wc
-    ) private returns (bytes memory, TEEVerifiedData memory, bytes memory) {
+    ) private returns (bytes memory, TEEVerifiedData memory, Measurement memory) {
         bytes memory teeOutput = _verifyTEE(teeType, teeReportType, teeAttestationReport);
 
         // Step 0: pre-process teeOutput to get TEE Verified Data
@@ -203,8 +194,16 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             }
         }
 
-        bytes memory tpmExtraData = _verifyWorkload(cloudType, wc, teeVerifiedData);
-        return (teeOutput, teeVerifiedData, tpmExtraData);
+        // Step 1: Verify workload and get final measurement
+        Measurement memory measurement;
+        if (teeType == TEEType.Nitro) {
+            // Nitro attestations contain PCR measurements directly - skip TPM verification
+            measurement.pcrs = LibTEE._getFinalMeasurementFromNitro(teeVerifiedData.nitro.pcrs);
+        } else {
+            measurement = _verifyWorkload(cloudType, wc, teeVerifiedData);
+        }
+
+        return (teeOutput, teeVerifiedData, measurement);
     }
 
     function _verifyTEE(TEEType teeType, TeeReportType teeReportType, bytes calldata report)
@@ -215,6 +214,8 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             teeOutput = _verifyTdxAttestation(teeReportType, report);
         } else if (teeType == TEEType.AmdSevSnp) {
             teeOutput = _verifySnpAttestation(teeReportType, report);
+        } else if (teeType == TEEType.Nitro) {
+            teeOutput = _verifyNitroAttestation(teeReportType, report);
         } else {
             revert INVALID_TEE_TYPE(teeType);
         }
@@ -234,10 +235,10 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         }
 
         ZkProof memory zkProof = abi.decode(report, (ZkProof));
-        VerifierJournal memory output =
+        SnpVerifierJournal memory output =
             snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
 
-        require(uint8(output.result) == uint8(VerificationResult.Success), FAILED_TO_VERIFY_TEE());
+        require(uint8(output.result) == uint8(SnpVerificationResult.Success), FAILED_TO_VERIFY_TEE());
 
         teeOutput = output.rawReport;
     }
@@ -248,7 +249,9 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
     {
         IDcapAttestation cachedDcapAttestation = dcapAttestation;
 
-        if (reportType == TeeReportType.Solidity) {
+        if (reportType == TeeReportType.Unset) {
+            revert INVALID_TEE_REPORT_TYPE(reportType);
+        } else if (reportType == TeeReportType.Solidity) {
             bool succ;
             (succ, teeOutput) = cachedDcapAttestation.verifyAndAttestOnChain{value: msg.value}(report);
             require(succ, FAILED_TO_VERIFY_TEE());
@@ -271,11 +274,32 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
         }
     }
 
+    function _verifyNitroAttestation(TeeReportType reportType, bytes calldata report)
+        private
+        returns (bytes memory teeOutput)
+    {
+        INitroEnclaveVerifier.ZkCoProcessorType zkType;
+        if (reportType == TeeReportType.ZkSuccinct) {
+            zkType = INitroEnclaveVerifier.ZkCoProcessorType.Succinct;
+        } else if (reportType == TeeReportType.ZkRiscZero) {
+            zkType = INitroEnclaveVerifier.ZkCoProcessorType.RiscZero;
+        } else {
+            revert INVALID_TEE_REPORT_TYPE(reportType);
+        }
+
+        ZkProof memory zkProof = abi.decode(report, (ZkProof));
+        NitroVerifierJournal memory output = nitroAttestation.verify(zkProof.output, zkType, zkProof.proofBytes);
+
+        require(uint8(output.result) == uint8(NitroVerificationResult.Success), FAILED_TO_VERIFY_TEE());
+
+        teeOutput = abi.encode(bytes(output.moduleId), abi.encode(output.pcrs), output.userData);
+    }
+
     function _verifyWorkload(
         CloudType cloudType,
         WorkloadCollaterals calldata wc,
         TEEVerifiedData memory teeVerifiedData
-    ) private returns (bytes memory extraData) {
+    ) private returns (Measurement memory measurement) {
         // Cache tpmAttestation to memory to save on multiple SLOADs
         ITpmAttestation cachedTpmAttestation = tpmAttestation;
 
@@ -302,14 +326,17 @@ contract WorkloadVerifier is IWorkloadVerifier, UUPSUpgradeable, OwnableUpgradea
             require(success, FAILED_TO_VERIFY_TPM_QUOTE(errorMessage));
         }
 
-        // Step 2: Check PCR measurements and extract extraData from the quote
+        // Step 2: Check PCR measurements against the TPM quote
         {
             (bool success, bytes memory data) = cachedTpmAttestation.checkPcrMeasurements(wc.tpmQuote, wc.pcrs);
             require(success, FAILED_TO_CHECK_PCR_MEASUREMENTS(string(data)));
-            extraData = data;
         }
 
-        LibTEE.verifyReportID(cloudType, wc, 15, teeVerifiedData);
+        // Step 3: Verify report ID with MeasureablePcr
+        LibTEE.verifyReportID(cloudType, wc.reportId, wc.pcrs, 15, teeVerifiedData);
+
+        // Step 4: Convert to final measurement
+        measurement = _getMeasurement(teeVerifiedData, wc.pcrs);
     }
 
     /// @notice Extracts the attestation key (AK) public key from Azure TPM JSON data

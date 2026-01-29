@@ -11,124 +11,45 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {CVMRegistry, CVMConfig} from "../src/usecases/CVMRegistry.sol";
 
 contract CvmGcpTest is TestSetup {
-    CVMRegistry registry;
-
     using stdJson for string;
 
-    function setUp() public override {
-        super.setUp();
-
-        vm.startBroadcast(owner);
-        CVMRegistry registryImpl = new CVMRegistry(address(workloadVerifier));
-
-        bytes memory ownerInitData = abi.encodeWithSelector(CVMRegistry.initialize.selector, owner, P256_VERIFIER);
-        registry = CVMRegistry(address(new ERC1967Proxy(address(registryImpl), ownerInitData)));
-        vm.stopBroadcast();
-    }
-
     function testGcpTdxCvm() public {
-        // pinned December 18th, 2025, 0915h UTC
-        vm.warp(1766049300);
         bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
-        vm.prank(owner);
-        tpmAttestation.addCA(googleCa);
 
-        // read the calldata from sample file
-        string memory json =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-registration.json"));
-        string memory encodedCalldata = json.readString(".calldata");
-        bytes memory decodedCalldata = Base64.decode(encodedCalldata);
-
-        (bool success, bytes memory result) = address(registry).call(decodedCalldata);
-        assertTrue(success, string(result));
-
-        bytes32 actualMeasurement = keccak256(result);
-
-        string memory gmJson = vm.readFile(
-            string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-test-golden_measurements.json")
+        _runCvmWorkflowTest(
+            CvmTestConfig({
+                registerCalldataPath: "/test/testdata/gcp/tdx/registration_calldata.json",
+                refreshCalldataPath: "/test/testdata/gcp/tdx/refresh_calldata.json",
+                rotateCalldataPath: "/test/testdata/gcp/tdx/rotate_calldata.json",
+                goldenMeasurementPath: "/test/testdata/gcp/tdx/golden-measurement.json",
+                initialCvmIdentityHash: 0x08a1d4f1acc3452aac599c7b57ec21eb7efb8a3898f3b0c256432eb6d3dec8ff,
+                rotatedCvmIdentityHash: 0x540b38ecce62cde8eaaded9095742c3d041a2088483e5fd33920505c68b4c43d,
+                tpmAkRootCa: googleCa,
+                isBase64Encoded: true,
+                pinnedTimestamp: 1768975500, // January 21st, 2026, 0605h UTC
+                refreshTimeAdvance: 10 days,
+                expiryTimeAdvance: 60 days
+            })
         );
-        string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
-        bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
-
-        assertEq(expectedMeasurement, actualMeasurement);
-
-        string memory reattestJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-reattestation.json"));
-        string memory encodedReattestCalldata = reattestJson.readString(".calldata");
-        bytes memory decodedReattestCalldata = Base64.decode(encodedReattestCalldata);
-
-        (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
-        assertTrue(reattestSuccess, string(reattestResult));
-
-        bytes32 cvnIdentityHash = 0x17c7bb7b794e50177bc50f46a53f6ee57e4ca4377b7276b208b39c915988d80b;
-        CVMConfig memory config = registry.getCvmConfig(cvnIdentityHash);
-
-        uint64 teeTTLBefore = config.teeTTL;
-        uint64 tpmTTLBefore = config.tpmTTL;
-
-        string memory ttlUpdateJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/tdx/gcp-tdx-update-ttl.json"));
-        string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
-        bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
-
-        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
-        assertTrue(ttlUpdateSuccess, "TTL update failed");
-
-        CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
-        assertNotEq(updatedConfig.teeTTL, teeTTLBefore, "TEE TTL not updated");
-        assertNotEq(updatedConfig.tpmTTL, tpmTTLBefore, "TPM TTL not updated");
     }
 
     function testGcpSevSnp() public {
-        // pinned December 18th, 2025, 0900h UTC
-        vm.warp(1766048400);
         bytes memory googleCa = vm.readFileBinary(string.concat(vm.projectRoot(), "/test/testdata/gcp/tpmAkRoot.der"));
-        vm.prank(owner);
-        tpmAttestation.addCA(googleCa);
 
-        // read the calldata from sample file
-        string memory json =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-registration.json"));
-        string memory encodedCalldata = json.readString(".calldata");
-        bytes memory decodedCalldata = Base64.decode(encodedCalldata);
-
-        (bool success, bytes memory result) = address(registry).call(decodedCalldata);
-        assertTrue(success, string(result));
-
-        bytes32 actualMeasurement = keccak256(result);
-
-        string memory gmJson = vm.readFile(
-            string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-test-golden_measurements.json")
+        _runCvmWorkflowTest(
+            CvmTestConfig({
+                registerCalldataPath: "/test/testdata/gcp/snp/registration_calldata.json",
+                refreshCalldataPath: "/test/testdata/gcp/snp/refresh_calldata.json",
+                rotateCalldataPath: "/test/testdata/gcp/snp/rotate_calldata.json",
+                goldenMeasurementPath: "/test/testdata/gcp/snp/golden-measurement.json",
+                initialCvmIdentityHash: 0xc46b28a893b7f3a16ff5ed632b5471baad32820ab04bb393fcdd98b1729968e7,
+                rotatedCvmIdentityHash: 0xf45b5559278e4118afd12659c771a1f7c166bd8ee67b110d39e057515cbdcbee,
+                tpmAkRootCa: googleCa,
+                isBase64Encoded: true,
+                pinnedTimestamp: 1768977000, // January 21st, 2026, 0630h UTC
+                refreshTimeAdvance: 10 days,
+                expiryTimeAdvance: 60 days
+            })
         );
-        string memory encodedGoldenMeasurements = gmJson.readString(".golden_measurement");
-        bytes32 expectedMeasurement = bytes32(Base64.decode(encodedGoldenMeasurements));
-
-        assertEq(expectedMeasurement, actualMeasurement);
-
-        string memory reattestJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-reattestation.json"));
-        string memory encodedReattestCalldata = reattestJson.readString(".calldata");
-        bytes memory decodedReattestCalldata = Base64.decode(encodedReattestCalldata);
-
-        (bool reattestSuccess, bytes memory reattestResult) = address(registry).call(decodedReattestCalldata);
-        assertTrue(reattestSuccess, string(reattestResult));
-
-        bytes32 cvnIdentityHash = 0x1fe9147ef3a853e1412adcd1d01ed876f5aac76ffae7417a87c28da4870202f0;
-        CVMConfig memory config = registry.getCvmConfig(cvnIdentityHash);
-
-        uint64 teeTTLBefore = config.teeTTL;
-        uint64 tpmTTLBefore = config.tpmTTL;
-
-        string memory ttlUpdateJson =
-            vm.readFile(string.concat(vm.projectRoot(), "/test/testdata/gcp/snp/gcp-snp-update-ttl.json"));
-        string memory encodedTtlUpdateCalldata = ttlUpdateJson.readString(".calldata");
-        bytes memory decodedTtlUpdateCalldata = Base64.decode(encodedTtlUpdateCalldata);
-
-        (bool ttlUpdateSuccess,) = address(registry).call(decodedTtlUpdateCalldata);
-        assertTrue(ttlUpdateSuccess, "TTL update failed");
-
-        CVMConfig memory updatedConfig = registry.getCvmConfig(cvnIdentityHash);
-        assertNotEq(updatedConfig.teeTTL, teeTTLBefore, "TEE TTL not updated");
-        assertNotEq(updatedConfig.tpmTTL, tpmTTLBefore, "TPM TTL not updated");
     }
 }

@@ -15,8 +15,6 @@ This guide provides detailed technical information for integrating and working w
   - [Overview](#overview-1)
   - [Core Concepts](#core-concepts)
   - [Lifecycle Operations](#lifecycle-operations)
-  - [Integration Guide](#integration-guide-1)
-  - [Security Considerations](#security-considerations)
 
 ---
 
@@ -50,10 +48,10 @@ sequenceDiagram
         TPM-->>TPM: Extracts and verifies the AK Pubkey from a list of trusted CAs
     end
     TPM->>TPM: 4. Checks PCR Digest
-    TPM-->>W: TPM quote has been successfully verified and returns `extraData` value to the caller.
+    TPM-->>W: TPM quote has been successfully verified.
     W->>W: 5. Verifies the report ID to check binding between TEE and TPM
     W->>W: 6. Generates the measurement structure, encapsulating the TEE Report content and measured PCR values.
-    W->>A: 7. Returns the hash of the measurement and TPM `extraData` value.
+    W->>A: 7. Returns the measurement structure or hash.
 
 ```
 
@@ -79,7 +77,7 @@ sequenceDiagram
 
     > External contracts may retrieve the Golden Measurement instead of the hash, if developers intend to perform additional checks on the measurement values.
 
-7. **Measurement Hash Computation**: Optionally, computes the measurement hash, which is a holistic representation of the state of the CVM. Application developers can provide a reference measurement as a policy that CVM workloads must comply, also known as the **Golden Measurement** value. Developers should also check for the correctness of TPM `extraData` value.
+7. **Measurement Hash Computation**: Optionally, computes the measurement hash, which is a holistic representation of the state of the CVM. Application developers can provide a reference measurement as a policy that CVM workloads must comply, also known as the **Golden Measurement** value.
 
 
 
@@ -99,8 +97,8 @@ The table below shows gas costs to measure CVMs with various TEEs hosted on Azur
 | --- | --- | --- | --- | --- | --- | --- |
 | Azure TDX | ~5M gas (Onchain DCAP) | 50k gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
 | Azure AMD-SEV-SNP | 240k gas (RiscZero Groth16) | 50k gas | 42k gas (RSA) | 14k gas | 3k gas | 23k gas |
-| GCP TDX | ~5M gas (Onchain DCAP) | 397k gas | 339k gas (secp256r1) | 16k gas | 385k gas | 82k gas |
-| GCP AMD-SEV-SNP | 240k gas (RiscZero Groth16) | 397k gas | 339k gas (secp256r1) | 16k gas | 5k gas | 82k gas |
+| GCP TDX | ~5M gas (Onchain DCAP) | 397k gas | 3k gas (secp256r1) | 16k gas | 385k gas | 82k gas |
+| GCP AMD-SEV-SNP | 240k gas (RiscZero Groth16) | 397k gas | 3k gas (secp256r1) | 16k gas | 5k gas | 82k gas |
 
 
 
@@ -130,25 +128,29 @@ Once registered, the CVM’s identity key can sign authorized messages (with dom
 #### CVM Identity
 
 A CVM's identity is represented by an asymmetric key generated using the [Owner hierarchy](https://github.com/nokia/TPMCourse/blob/master/docs/keys.md#creating-keys) by the TPM, which is enabled with persistence (re-usable even after CVM reboots). The identity is defined as a `CVMIdentity` struct containing:
-- `CertPubkey pubkey`: The public portion of the key with algorithm metadata
+- `bytes tpmtPublic`: The TPM public key in TPMT_PUBLIC format (marshalled bytes)
 - `SignatureAlgorithm sigAlgo`: Signature scheme and hash algorithm
 
 **CVMIdentity Struct**:
 ```solidity
 struct CVMIdentity {
-    CertPubkey pubkey;
-    SignatureAlgorithm sigAlgo;
-}
-
-struct CertPubkey {
-    uint16 algo;    // Algorithm identifier (TPM_ALG_RSA or TPM_ALG_ECC)
-    bytes params;   // Algorithm parameters (curve ID for ECC)
-    bytes data;     // Raw public key data
+    bytes tpmtPublic;           // TPM public key in TPMT_PUBLIC format
+    SignatureAlgorithm sigAlgo; // Signature algorithm
 }
 
 struct SignatureAlgorithm {
     uint16 scheme;    // Signature scheme (TPM_ALG_RSASSA or TPM_ALG_ECDSA)
     uint16 hashAlgo;  // Hash algorithm (TPM_ALG_SHA256)
+}
+```
+
+The public key is extracted from `tpmtPublic` using `CVMShared.extractPubkeyFromTpmtPublic()`, which returns a `CertPubkey` struct:
+
+```solidity
+struct CertPubkey {
+    uint16 algo;    // Algorithm identifier (TPM_ALG_RSA or TPM_ALG_ECC)
+    bytes params;   // Algorithm parameters (curve ID for ECC)
+    bytes data;     // Raw public key data
 }
 ```
 
@@ -158,7 +160,7 @@ struct SignatureAlgorithm {
 sigAlgo.scheme   = 0x0018 (TPM_ALG_ECDSA)
 pubkey.params    = 0x0003 (TPM_ECC_NIST_P256)
 sigAlgo.hashAlgo = 0x000B (TPM_ALG_SHA256)
-pubkey.data      = 0x04 || x || y (65 bytes)
+pubkey.data      = x || y (64 bytes)
 ```
 
 **Identity Hash**: The identity hash serves as the primary key for all registry operations:
@@ -172,29 +174,49 @@ cvm_identity_hash = keccak256(abi.encodePacked(
 ))
 ```
 
-The CVM Identity hash must be embedded in the TPM `extraData` field for validation. The full `CVMIdentity` must be provided to the contract as a separate parameter for both key registration and key rotation steps.
+**CVM Identity Key Certification**: The CVM identity key must be certified by the TPM Attestation Key (AK) using the TPM2_Certify command. This proves that the CVM identity key was generated by the same TPM that produced the AK, establishing a chain of trust:
+
+1. **TEE Attestation** → Verifies the AK is genuine (bound to TEE hardware)
+2. **TPM2_Certify** → AK certifies the CVM identity key was generated by the same TPM
+3. **CVM Identity** → The certified key becomes the CVM's onchain identity
+
+This certification is provided via the `CVMIdentityCertification` struct:
+
+```solidity
+struct CVMIdentityCertification {
+    bytes certInfo;           // TPMS_ATTEST structure from TPM2_Certify
+    bytes akCertificationSig; // AK signature over certInfo
+}
+```
+
+The contract calls `ITpmAttestation.verifyTpmKeyCertification()` to verify:
+- The AK signature over `certInfo` is valid
+- The certified key name in `certInfo` matches the provided `tpmtPublic`
+- The AK used for certification matches the verified AK from TEE attestation
+
+This approach guarantees that the CVM owner does not have read access to the private key - signatures can only be generated from within the intended CVM.
 
 #### Freshness Windows (TTL)
 
-The registry enforces freshness requirements for both TEE and TPM attestations:
+The registry enforces freshness requirements via a single time-to-live window:
 
-- **TEE TTL**: Time window for TEE attestation validity (default: 30 days)
-- **TPM TTL**: Time window for TPM attestation validity (default: 60 days)
+- **TTL**: Time window for CVM validity (default: 30 days, 2,592,000 seconds)
+- **Expiration**: Stored as `uint64 expiredAt = block.timestamp + ttl`
 
-These TTLs can be customized per CVM identity through signed requests.
+The TTL can be customized at registration or refresh by specifying the `teeTTL` parameter. If set to 0, the default 30-day TTL is used. Once the TTL expires (`block.timestamp > expiredAt`), the CVM must perform a full refresh with fresh TEE and TPM attestations to extend its validity.
 
 #### Domain Separation
 
-All signed operations use domain-separated messages to prevent cross-contract and cross-chain replay attacks. The format is:
+Applications using the `CVMSignature` base contract can leverage domain-separated messages to prevent cross-contract and cross-chain replay attacks. The format is:
 
 ```solidity
 abi.encodePacked(bytes(prefix), block.chainid, address(this), userData)
 ```
 
-**Message Prefixes**:
-- `"CVM_WORKLOAD_REATTEST_TPM"` - For TPM re-attestation
-- `"CVM_WORKLOAD_TTL_CONFIG"` - For TTL configuration
+**Default Message Prefix**:
 - `"CVM_WORKLOAD_USER_MESSAGE"` - For general application-specific payloads
+
+Applications can use custom prefixes via `_generateMessageWithCustomPrefix(prefix, userData)` to distinguish different message types within their protocol.
 
 
 
@@ -229,10 +251,10 @@ Both the **CVM Workload** and **CVM Agent** run inside the Confidential VM. The 
    - Generates TEE attestation report (Intel TDX Quote or AMD SEV-SNP Report)
    - Collects TPM quote with PCR measurements
    - Gathers TPM Attestation Key and certificate chain (if applicable)
-   - Embeds CVM identity hash in TPM extraData
+   - Uses TPM2_Certify API to certify the CVM identity key with the Attestation Key (AK)
    - Encodes all collaterals as base64-encoded calldata and returns it to the workload
 
-3. **Submit Registration Transaction**: The CVM Workload submits a blockchain transaction to the Registry Contract with the `attestCvm` function call containing the attestation collaterals.
+3. **Submit Registration Transaction**: The CVM Workload submits a blockchain transaction to the Registry Contract with the `registerCvm` function call containing the attestation collaterals.
 
 4. **Verify TEE & TPM Reports**: The Registry Contract delegates verification to the Workload Verifier contract, which validates:
    - TEE report authenticity and integrity
@@ -240,14 +262,13 @@ Both the **CVM Workload** and **CVM Agent** run inside the Confidential VM. The 
    - TPM quote signature
    - PCR measurements and binding between TEE and TPM
 
-5. **Return Verification Result**: The Workload Verifier returns success with verified measurement data and TPM extraData.
+5. **Verify CVM Identity Key Certification**: The Registry Contract verifies that the CVM identity key is certified by the AK using TPM2_Certify, proving the identity key was generated by the same TPM.
 
-6. **Register CVM Identity**: The Registry Contract stores the CVM configuration (identity, measurement hash, timestamps, TTLs) and completes registration. The registered identity is a public key that uniquely represents this CVM onchain. The corresponding private key is stored securely within the CVM and used by the CVM Agent to sign any message provided by the workload. Following successful registration, any message signed by this CVM Identity is considered trusted within the configured TTL window.
+6. **Return Verification Result**: The Workload Verifier returns success with verified measurement data.
 
-Once the TTL has expired, the CVM must reattest its collaterals with the Registry contract. Two options are available:
+7. **Register CVM Identity**: The Registry Contract stores the CVM configuration (identity, measurement hash, expiration timestamp, AK binding) and completes registration. The registered identity is a public key that uniquely represents this CVM onchain. The corresponding private key is stored securely within the CVM and used by the CVM Agent to sign any message provided by the workload. Following successful registration, any message signed by this CVM Identity is considered trusted within the configured TTL window.
 
-1. **Full Re-attestation**: Perform complete registration again using `attestCvm` (see [Registration](#1-registration-attestcvm) in Lifecycle Operations below)
-2. **TPM-only Re-attestation**: Use `reattestCvmWithTpm` to save gas by reusing the stored TEE attestation (see [Re-attestation](#2-re-attestation-reattestcvmwithtpm) in Lifecycle Operations below)
+Once the TTL has expired (`block.timestamp > expiredAt`), the CVM must perform a full refresh with fresh TEE and TPM attestations to extend its validity (see [Refresh](#2-refresh-refreshcvm) in Lifecycle Operations below).
 
 ## CVM Verification Workflow
 
@@ -305,91 +326,110 @@ sequenceDiagram
 
 9. **Verify Signature**: The Application Contract verifies the signature against the retrieved public key and the original message. If verification succeeds, the Application Contract can trust that:
    - The message was signed by a registered CVM
-   - The CVM's identity is still valid (within TTL window)
+   - The CVM's identity key was certified by the TPM Attestation Key (verified during registration via TPM2_Certify)
+   - The CVM's identity is still valid (within TTL window, checked via `checkCvmValidity()`)
    - The CVM's measurement matches the golden measurement (if configured)
 
-This verification mechanism enables trustless authentication of messages from CVM workloads, allowing applications to gate sensitive operations based on verified CVM identities.
+This verification mechanism enables trustless authentication of messages from CVM workloads, allowing applications to gate sensitive operations based on verified CVM identities. The TPM2_Certify certification guarantees that the CVM owner cannot read the private key - signatures can only be generated from within the intended CVM.
 
 ### Lifecycle Operations
 
-#### 1. Registration (`attestCvm`)
+#### 1. Registration (`registerCvm`)
 
-Initial registration of a CVM identity using full attestation (TEE + TPM).
+Initial registration of a CVM identity using full attestation (TEE + TPM + TPM2_Certify).
 
 **Process**:
-1. Derive `cvmIdentityHash` from the provided CVM identity public key
-2. If first-time registration, initialize cloud/TEE types and default TTLs
+1. Extract public key from `cvmIdentity.tpmtPublic` and compute `cvmIdentityHash`
+2. Verify CVM identity is not already registered or revoked
 3. Call `workloadVerifier.verifyAttestation(...)` to verify TEE report, TPM quote, and PCRs
-4. Extract and validate identity hash from `tpmExtraData` (must match computed identity)
-5. Compute canonical measurement via `workloadVerifier.getMeasurement(...)`
-6. Store configuration (identity, timestamps, measurement hash, TPM AK)
-7. Emit `CVMUpdated` event
+4. Verify AK is not already bound to another identity
+5. Call `tpmAttestation.verifyTpmKeyCertification(...)` to verify CVM identity key is certified by the AK
+6. Compute canonical measurement hash
+7. Store configuration (identity, expiration timestamp, measurement hash, TPM AK, cloud/TEE types)
+8. Bind AK to CVM identity
+9. Emit `CVMRegistered` event
 
-**Important**: No signature from the CVM identity is required for initial registration—trust is bootstrapped entirely by attestation binding.
+**Important**: No signature from the CVM identity is required for initial registration—trust is bootstrapped entirely by attestation and TPM2_Certify certification.
 
 **Function Signature**:
 ```solidity
-function attestCvm(
+function registerCvm(
     CloudType cloudType,
     TEEType teeType,
+    uint64 teeTTL,
     TeeReportType teeReportType,
     bytes calldata teeAttestationReport,
     CVMIdentity calldata cvmIdentity,
+    CVMIdentityCertification calldata cvmCertification,
     WorkloadCollaterals calldata wc
-) external returns (Measurement memory measurements);
+) external returns (Measurement memory);
 ```
 
-#### 2. Re-attestation (`reattestCvmWithTpm`)
+#### 2. Refresh (`refreshCvm`)
 
-Refresh TPM collateral while reusing existing TEE attestation. Optionally supports identity key rotation.
+Extend CVM validity with fresh TEE and TPM attestations.
 
 **Use When**:
-- TPM collateral has expired but TEE collateral is still within TTL
-- Identity key rotation is desired
+- CVM validity has expired or is about to expire
+- Need to extend the lifetime with fresh attestation collaterals
 
 **Process**:
-1. Validate CVM-signed request with message: `prefix + chainid + contract + (nonce, sha256(tpmQuote))`
-2. Verify signature against stored `cvmIdentity`
-3. Verify TPM quote using stored `tpmAk`
-4. Check PCR measurements and extract new `extraData`
-5. Reconstruct measurement (reusing TEE report from storage)
-6. If `wc.cvmIdentity` hash differs (key rotation):
-   - Ensure TPM extra data embeds the new identity hash
-   - Create new config entry with new hash, copying prior attestation state
-   - Copy `tpmAk` to new configuration
-7. Else, update `measurementHash` and TPM freshness timestamp
-8. Emit `CVMUpdated` event
+1. Verify CVM is registered (`hasRegistered(cvmIdentityHash)`)
+2. Verify TEE report and TPM quote replay protection (not reused)
+3. Call `workloadVerifier.verifyAttestation(...)` to verify fresh TEE report, TPM quote, and PCRs
+4. Verify AK binding matches registered identity (prevents AK swap attacks)
+5. Compute new measurement hash
+6. Update configuration: `expiredAt`, `measurementHash`, `teeAttestationOutput`
+7. Do NOT update: `cvmIdentity`, `tpmAk`, `teeType`, `cloudType`
+8. Emit `CVMRefreshed` event
 
-**Important**: TEE freshness timestamp is NOT refreshed—design enforces periodic full re-attestation at TEE TTL boundary.
+**Important**:
+- No signature required (not a signed operation)
+- Requires BOTH fresh TEE attestation report AND fresh TPM quote
+- Does NOT support identity rotation (use `rotateCvmIdentityKey` instead)
+- This is the only way to extend validity after TTL expires
 
 **Function Signature**:
 ```solidity
-function reattestCvmWithTpm(
+function refreshCvm(
     bytes32 cvmIdentityHash,
-    bytes calldata signature,
-    CVMIdentity calldata updateCvmIdentity,
+    uint64 teeTTL,
+    TeeReportType teeReportType,
+    bytes calldata teeAttestationReport,
     WorkloadCollaterals calldata wc
-) external returns (Measurement memory measurements);
+) external returns (Measurement memory);
 ```
 
-#### 3. TTL Management (`setCollateralTTL`)
+#### 3. Key Rotation (`rotateCvmIdentityKey`)
 
-Configure custom freshness windows for TEE and TPM attestations.
+Rotate the CVM identity key while the TEE report is still valid.
+
+**Use When**:
+- Need to rotate identity key without full re-attestation
+- TEE report is still fresh (not expired)
+- Want to change the signing key for the CVM
 
 **Process**:
-1. Validate both TEE and TPM collaterals are currently valid
-2. Verify CVM-signed request with message: `prefix + chainid + contract + (nonce, newTEEttl, newTPMttl)`
-3. Update `teeTTL` and/or `tpmTTL`
-4. Increment nonce
-5. Emit `CVMTTLUpdated` event
+1. Verify CVM is registered and not expired (`block.timestamp <= config.expiredAt`)
+2. Extract new public key and compute new identity hash
+3. Verify new identity is not revoked or already registered
+4. Call `tpmAttestation.verifyTpmKeyCertification(...)` with stored `config.tpmAk` to verify new key is certified
+5. Copy configuration to new identity hash
+6. Revoke old identity (mark as revoked to prevent re-registration)
+7. Update AK binding from old identity to new identity
+8. Emit `CVMIdentityRotated(oldHash, newHash)` event
+
+**Important**:
+- Only allowed while TEE report is still valid (saves gas by reusing existing attestation)
+- Does NOT require new TEE or TPM attestation
+- New identity key must be certified by the same AK
 
 **Function Signature**:
 ```solidity
-function setCollateralTTL(
+function rotateCvmIdentityKey(
     bytes32 cvmIdentityHash,
-    bytes calldata signature,
-    uint64 teeTTL,
-    uint64 tpmTTL
+    CVMIdentity calldata newCvmIdentity,
+    CVMIdentityCertification calldata newCvmCertification
 ) external;
 ```
 
@@ -409,8 +449,7 @@ Verify a message signed by a registered CVM identity. This operation is typicall
    - `signature`: The cryptographic signature from the CVM
 2. Consumer contract queries CVM Registry:
    - Check if CVM is registered: `hasRegistered(cvmIdentityHash)`
-   - Verify TEE collateral freshness: `checkTEEValidity(cvmIdentityHash)`
-   - Verify TPM collateral freshness: `checkTPMValidity(cvmIdentityHash)`
+   - Verify CVM is still valid: `checkCvmValidity(cvmIdentityHash)`
    - Retrieve CVM identity public key: `getCvmIdentity(cvmIdentityHash)`
 3. Consumer contract validates measurement (optional):
    - Retrieve measurement hash: `getMeasurementHash(cvmIdentityHash)`
@@ -422,19 +461,18 @@ Verify a message signed by a registered CVM identity. This operation is typicall
 5. If all checks pass, trust the message and execute the requested operation
 
 **Important Notes**:
-- Consumer contracts are responsible for implementing their own replay protection mechanism
-- The CVM Registry provides freshness guarantees via TTLs, but applications should validate against their own golden measurements
-- Signature verification should use domain-separated messages to prevent cross-contract replay attacks
+- **Replay protection is NOT built into CVMRegistry for application messages** - consumer contracts MUST implement their own nonce-based or timestamp-based replay protection
+- The CVM Registry only provides replay protection for TEE reports and TPM quotes during registration/refresh
+- The CVM identity key is certified by the AK (via TPM2_Certify), guaranteeing the private key cannot be read by the CVM owner
+- Applications should inherit from `CVMSignature` base contract for domain-separated message construction and signature verification
 
 **Related View Functions**:
 ```solidity
 function hasRegistered(bytes32 cvmIdentityHash) external view returns (bool);
-function checkTEEValidity(bytes32 cvmIdentityHash) external view returns (bool valid);
-function checkTPMValidity(bytes32 cvmIdentityHash) external view returns (bool valid);
-function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (CVMIdentity memory identity);
-function getMeasurementHash(bytes32 cvmIdentityHash) external view returns (bytes32 hash);
-function getCvmConfig(bytes32 cvmIdentityHash) external view returns (CVMConfig memory config);
-function nonces(bytes32 cvmIdentityHash) external view returns (uint256);
+function checkCvmValidity(bytes32 cvmIdentityHash) external view returns (bool);
+function getCvmIdentity(bytes32 cvmIdentityHash) external view returns (CVMIdentity memory);
+function getMeasurementHash(bytes32 cvmIdentityHash) external view returns (bytes32);
+function getCvmConfig(bytes32 cvmIdentityHash) external view returns (CVMConfig memory);
 ```
 
 **Signed Message Format** (for application-specific messages):

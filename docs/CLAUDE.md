@@ -134,11 +134,8 @@ When integrating `WorkloadVerifier`:
 1. Deploy or connect to existing verifier contract
 2. Prepare TEE attestation report and workload collateral
 3. Call appropriate verification method based on needs:
-   - `verifyAttestation()`: Returns TEE verified data
-   - `verifyAttestationAndGetMeasurement()`: Returns full measurement object
-   - `verifyAttestationAndGetMeasurementHash()`: Returns measurement hash only
+   - `verifyAttestation()`: Returns TEE verified data, TEE output, and measurement
 4. Validate returned measurement against golden measurement
-5. Check TPM extraData for application-specific validation
 
 ## CVM Registry Use Case
 
@@ -146,62 +143,82 @@ The `CVMRegistry.sol` contract provides a production-ready implementation for ma
 
 ### Key Features
 - **Identity Management**: Maps CVM workload identity (TPM-generated public key) to attestation configuration
-- **Attestation Lifecycle**: Supports initial registration, re-attestation, and key rotation
-- **TTL Management**: Configurable time-to-live for TEE reports (30 days default) and TPM quotes (60 days default)
-- **Signature Verification**: Domain-separated message signing for secure operations
-- **Upgradeability**: UUPS proxy pattern for contract upgrades
+- **TPM2_Certify Key Certification**: CVM identity key certified by TPM Attestation Key, guaranteeing owner cannot read private key
+- **Attestation Lifecycle**: Supports initial registration, refresh, and key rotation
+- **TTL Management**: Single configurable time-to-live (30 days default)
+- **AK Binding**: One-to-one binding between Attestation Key and CVM identity
+- **Replay Protection**: Built-in for TEE reports and TPM quotes (apps must implement own message replay protection)
 
 ### Core Workflows
 
-#### 1. Initial Registration (`attestCvm`)
-- No signature required (bootstrap via attestation binding)
+#### 1. Registration (`registerCvm`)
+- No signature required (bootstrap via attestation and TPM2_Certify binding)
 - Verifies TEE report and TPM quote through WorkloadVerifier
-- Extracts identity from TPM extraData and validates binding
-- Stores configuration with both TEE and TPM timestamps
+- Verifies CVM identity key is certified by AK via TPM2_Certify
+- Checks AK is not already bound to another identity
+- Stores configuration with expiration timestamp, measurement hash, and AK binding
 
-#### 2. TPM-Only Re-attestation (`reattestCvmWithTpm`)
-- Used when TPM collateral expired but TEE still valid
-- Requires signature from current CVM identity
-- Updates TPM timestamp and measurement hash
-- Supports key rotation if new identity provided in TPM extraData
+#### 2. Refresh (`refreshCvm`)
+- Extends CVM validity with fresh TEE and TPM attestations
+- No signature required
+- Verifies AK binding matches registered identity
+- Updates expiration timestamp and measurement hash
+- Does NOT support identity rotation (use rotateCvmIdentityKey instead)
 
-#### 3. TTL Configuration (`setCollateralTTL`)
-- Requires signature from CVM identity
-- Updates TEE and TPM time-to-live values
-- Uses nonce for replay protection
+#### 3. Key Rotation (`rotateCvmIdentityKey`)
+- Rotates identity key while TEE report is still valid
+- New key must be certified by same AK via TPM2_Certify
+- Revokes old identity and updates AK binding
+- Saves gas by reusing existing attestation data
 
 ### Implementation Details
 
+#### CVMIdentity Structure
+```solidity
+struct CVMIdentity {
+    bytes tpmtPublic;           // TPM public key in TPMT_PUBLIC format
+    SignatureAlgorithm sigAlgo; // Signature scheme and hash algorithm
+}
+```
+
 #### Identity Hash Computation
+Public key is extracted from `tpmtPublic`, then:
 ```solidity
 keccak256(abi.encodePacked(
-    cvmIdentity.sigAlgo.scheme,
-    cvmIdentity.pubkey.params,
-    cvmIdentity.sigAlgo.hashAlgo,
-    cvmIdentity.pubkey.data
+    sigAlgo.scheme,
+    pubkey.params,
+    sigAlgo.hashAlgo,
+    pubkey.data
 ))
 ```
 
-#### TPM Extra Data Format
+#### TPM2_Certify Certification
+```solidity
+struct CVMIdentityCertification {
+    bytes certInfo;           // TPMS_ATTEST from TPM2_Certify
+    bytes akCertificationSig; // AK signature over certInfo
+}
 ```
-uint8 magic_prefix || bytes32 cvmIdentityHash || bytes nonce
-```
-Maximum 50 bytes to support all cloud providers (Azure/GCP/AWS)
+The contract verifies:
+- AK signature over certInfo is valid
+- Certified key name matches provided tpmtPublic
+- AK used for certification matches verified AK from TEE attestation
 
-#### Message Domain Separation
+#### Message Domain Separation (for Apps using CVMSignature)
 ```
 abi.encodePacked(bytes(prefix), block.chainid, address(this), userData)
 ```
-Prefixes:
-- `CVM_WORKLOAD_REATTEST_TPM`
-- `CVM_WORKLOAD_TTL_CONFIG`
-- `CVM_WORKLOAD_USER_MESSAGE`
+Default prefix:
+- `CVM_WORKLOAD_USER_MESSAGE` (apps can define custom prefixes)
 
 ### Security Considerations
-- Nonce-based replay protection per identity
-- Measurement normalization (zeros TDX rtmr3 for stability)
-- Identity binding verified through TPM extraData
-- Immutable WorkloadVerifier reference prevents verification bypass
+- **TPM2_Certify Chain of Trust**: TEE → AK → CVM Identity Key ensures private key cannot be read by CVM owner
+- **AK Binding**: One-to-one mapping between AK and CVM identity prevents AK reuse across identities
+- **Replay Protection**: TEE reports and TPM quotes cannot be reused (hash-based tracking)
+- **Identity Revocation**: Rotated identities are marked as revoked to prevent re-registration
+- **Measurement Normalization**: Zeros TDX rtmr3 for stability across reboots
+- **Immutable WorkloadVerifier**: Reference fixed at deployment prevents verification bypass
+- **App-Level Replay Protection**: Applications MUST implement their own nonce/timestamp-based replay protection for signed messages
 
 ## Known Limitations & Considerations
 
