@@ -8,9 +8,7 @@ enum CloudType {
     /// @dev Microsoft Azure Confidential VMs
     Azure,
     /// @dev Google Cloud Confidential VMs
-    GCP,
-    /// @dev Amazon Web Services Nitro Enclaves
-    AWS
+    GCP
 }
 
 /// @notice Trusted Execution Environment type supported by the platform
@@ -25,10 +23,10 @@ enum TEEType {
 enum VerificationBackendType {
     /// @dev On-chain Solidity verification
     Solidity,
-    /// @dev Zero-knowledge proof via Succinct SP1
-    ZkSuccinct,
     /// @dev Zero-knowledge proof via RISC Zero
-    ZkRiscZero
+    ZkRiscZero,
+    /// @dev Zero-knowledge proof via Succinct SP1
+    ZkSuccinct
 }
 
 /// @notice TPM report format for platform binding verification

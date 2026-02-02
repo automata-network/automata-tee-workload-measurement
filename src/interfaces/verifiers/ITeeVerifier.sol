@@ -8,7 +8,7 @@ struct TeeVerificationResult {
     /// @dev True if the TEE report signature and structure are valid
     bool valid;
     /// @dev REPORT_DATA field extracted from the TEE report (binding nonce/commitment)
-    bytes32 reportData;
+    bytes reportData;
     /// @dev TEE technology type (Intel TDX or AMD SEV-SNP)
     TEEType teeType;
 }
@@ -21,5 +21,5 @@ interface ITeeVerifier {
     /// @notice Verifies a TEE attestation report
     /// @param teeReport The TEE attestation report to verify (contains backend type, TEE type, and data)
     /// @return result Verification result containing validity status, report data, and TEE type
-    function verifyTeeReport(TeeReport calldata teeReport) external view returns (TeeVerificationResult memory result);
+    function verifyTeeReport(TeeReport calldata teeReport) external returns (TeeVerificationResult memory result);
 }
