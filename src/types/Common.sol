@@ -26,31 +26,12 @@ enum AccessMode {
 }
 
 // ============================================================================
-// Domain Constants
-// ============================================================================
-
-/// @dev Domain separator for public identity fingerprint computation (prevents cross-domain replay)
-bytes32 constant KEY_DOMAIN = keccak256("KEY_RESOLVER_V1");
-/// @dev Domain separator for session ID computation
-bytes32 constant SESSION_DOMAIN = keccak256("CVM_SESSION_V1");
-/// @dev Domain separator for session key delegation signatures (TPM key → session key)
-bytes32 constant DELEGATION_DOMAIN = keccak256("CVM_SESSION_KEY_DELEGATION");
-/// @dev Domain separator for base image ID computation
-bytes32 constant BASEIMAGE_DOMAIN = keccak256("CVM_BASEIMAGE_V1");
-/// @dev Domain separator for platform profile ID computation
-bytes32 constant PLATFORM_PROFILE_DOMAIN = keccak256("CVM_PLATFORM_PROFILE_V1");
-/// @dev Domain separator for measurement variant key computation
-bytes32 constant PLATFORM_VARIANT_DOMAIN = keccak256("CVM_PLATFORM_VARIANT_V1");
-/// @dev Domain separator for workload ID computation
-bytes32 constant WORKLOAD_DOMAIN = keccak256("CVM_WORKLOAD_V1");
-
-// ============================================================================
 // Primitive Structs
 // ============================================================================
 
 /// @notice Generic public key identity representation
 struct PublicIdentity {
-    /// @dev Algorithm identifier (1=RSA-2048, 2=RSA-4096, 3=ECDSA-P256, 4=ECDSA-P384, 5=Ed25519)
+    /// @dev Algorithm identifier
     uint8 typeId;
     /// @dev Public key bytes in algorithm-specific encoding (DER, X.509 SPKI, or raw coordinates)
     bytes key;
