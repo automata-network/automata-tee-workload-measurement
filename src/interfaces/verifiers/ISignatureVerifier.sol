@@ -10,7 +10,7 @@ import {PublicIdentity} from "../../types/Common.sol";
 interface ISignatureVerifier {
     /// @notice Verifies a cryptographic signature against a public identity
     /// @param identity The public key identity to verify against
-    /// @param message The message hash that was signed (typically keccak256 of data)
+    /// @param message The message hash that was signed (hash algorithm dictated by the signature scheme)
     /// @param signature The cryptographic signature bytes (format depends on identity.typeId)
     /// @return valid True if the signature is valid for the given identity and message
     function verify(PublicIdentity calldata identity, bytes32 message, bytes calldata signature)

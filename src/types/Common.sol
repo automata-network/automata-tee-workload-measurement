@@ -99,10 +99,6 @@ struct PlatformProfile {
 /// @dev Base image = privileged OS environment (kernel, bootloader, CVM agent), measured by PCR 0-19
 /// @dev platform profiles are stored separately, indexed by (baseImageId, profileId)
 struct BaseImageSpec {
-    /// @dev Active status flag
-    bool isActive;
-    /// @dev Base image owner address (as bytes32)
-    bytes32 owner;
     /// @dev Human-readable image name (e.g., "ubuntu-confidential-22.04")
     string name;
     /// @dev Semantic version (e.g., "1.2.3")
@@ -128,10 +124,6 @@ struct AttributeRequirement {
 /// @dev Implementation note: owner/exists/active tracked separately in contract storage
 /// @dev Workload = containerized application (unprivileged), measured by PCR 20-23
 struct WorkloadSpec {
-    /// @dev Active status flag
-    bool isActive;
-    /// @dev Workload owner address (as bytes32)
-    bytes32 owner;
     /// @dev Human-readable workload name (e.g., "ml-training-service")
     string name;
     /// @dev Semantic version (e.g., "2.1.0")

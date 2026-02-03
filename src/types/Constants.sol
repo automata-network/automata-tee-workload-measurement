@@ -21,12 +21,10 @@ bytes32 constant PLATFORM_VARIANT_DOMAIN = keccak256("CVM_PLATFORM_VARIANT_V1");
 bytes32 constant WORKLOAD_DOMAIN = keccak256("CVM_WORKLOAD_V1");
 
 // ============================================================================
-// Algorithm Constants
+// Algorithm Constants (JWT Standard Names - RFC 7518)
 // ============================================================================
 
-uint8 constant ALGO_ID_RSA_2048 = 1;
-uint8 constant ALGO_ID_RSA_4096 = 2;
-uint8 constant ALGO_ID_ECDSA_SECP256R1 = 3;
-uint8 constant ALGO_ID_ECDSA_SECP256K1 = 4;
-uint8 constant ALGO_ID_ECDSA_SECP384R1 = 5;
-uint8 constant ALGO_ID_ED25519 = 6;
+uint8 constant ALGO_ID_NULL = 0;
+uint8 constant ALGO_ID_RS256 = 1; // RSA PKCS#1 v1.5 with SHA-256
+uint8 constant ALGO_ID_ES256 = 2; // ECDSA P-256 curve with SHA-256
+uint8 constant ALGO_ID_ES256K = 3; // ECDSA secp256k1 curve with SHA-256

@@ -7,6 +7,10 @@ import {WorkloadSpec, PublicIdentity} from "../../types/Common.sol";
 struct WorkloadSpecStorage {
     /// @dev Existence flag to distinguish unregistered from registered workloads
     bool exists;
+    /// @dev Active status flag (soft delete)
+    bool isActive;
+    /// @dev Workload owner fingerprint
+    bytes32 owner;
     /// @dev The workload specification
     WorkloadSpec workloadSpec;
 }
@@ -18,7 +22,7 @@ interface IWorkloadRegistry {
 
     /// @notice Emitted when a new workload is registered
     /// @param workloadId Computed identifier for the workload
-    /// @param owner Owner fingerprint (bytes32 encoding of PublicIdentity fingerprint)
+    /// @param owner Owner fingerprint
     /// @param name Human-readable workload name
     /// @param version Semantic version string
     event WorkloadRegistered(bytes32 indexed workloadId, bytes32 indexed owner, string name, string version);
@@ -58,6 +62,13 @@ interface IWorkloadRegistry {
     /// @param workloadId The workload identifier
     /// @return spec The complete workload specification
     function getWorkload(bytes32 workloadId) external view returns (WorkloadSpec memory spec);
+
+    /// @notice Get the owner fingerprint of a registered workload
+    /// @dev Returns the keccak256 fingerprint computed from the owner's PublicIdentity
+    ///      This fingerprint is used for ownership verification in deactivation and access control
+    /// @param workloadId The workload identifier
+    /// @return The owner's identity fingerprint (bytes32)
+    function getWorkloadOwner(bytes32 workloadId) external view returns (bytes32);
 
     /// @notice Check if a workload is active
     /// @param workloadId The workload identifier

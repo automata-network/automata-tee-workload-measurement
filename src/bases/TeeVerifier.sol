@@ -157,7 +157,8 @@ abstract contract TeeVerifier is ITeeVerifier {
         ISnpAttestation.ZkCoProcessorType zkType =
             ISnpAttestation.ZkCoProcessorType(uint8(teeReport.verificationBackendType));
 
-        VerifierJournal memory journal = snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
+        VerifierJournal memory journal =
+            snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
 
         // If verification failed, return invalid result
         if (journal.result != VerificationResult.Success) {

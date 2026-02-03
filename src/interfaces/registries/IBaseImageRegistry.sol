@@ -6,6 +6,8 @@ import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity} from
 /// @dev implements mapping (bytes32 baseImageId => BaseImageSpecStorage)
 struct BaseImageSpecStorage {
     bool exists;
+    bool isActive;
+    bytes32 owner;
     BaseImageSpec spec;
     bytes32[] platformProfileIds;
 }
@@ -117,6 +119,13 @@ interface IBaseImageRegistry {
             PlatformProfile memory platformProfile,
             MeasurementVariant memory variant
         );
+
+    /// @notice Get the owner fingerprint of a registered base image
+    /// @dev Returns the keccak256 fingerprint computed from the owner's PublicIdentity
+    ///      This fingerprint is used for ownership verification in deactivation and access control
+    /// @param baseImageId The base image identifier
+    /// @return The owner's identity fingerprint (bytes32)
+    function getBaseImageOwner(bytes32 baseImageId) external view returns (bytes32);
 
     /// @notice Check if a base image is active
     /// @param baseImageId The base image identifier
