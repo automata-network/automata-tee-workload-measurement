@@ -51,6 +51,7 @@ interface ISessionRegistry {
     /// @param baseImageId The base image identifier
     /// @param platformProfileId The platform profile identifier
     /// @param variantId The measurement variant identifier
+    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the session owner
     /// @param ownerSignature Signature over the session registration data by ownerIdentity
     /// @return sessionId The unique identifier for the registered session
@@ -60,6 +61,7 @@ interface ISessionRegistry {
         bytes32 baseImageId,
         bytes32 platformProfileId,
         bytes32 variantId,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 sessionId);
@@ -71,10 +73,15 @@ interface ISessionRegistry {
 
     /// @notice Revoke a session (only by owner)
     /// @param sessionId The session identifier
+    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the session owner
     /// @param ownerSignature Signature over the revocation request by ownerIdentity
-    function revokeSession(bytes32 sessionId, PublicIdentity calldata ownerIdentity, bytes calldata ownerSignature)
-        external;
+    function revokeSession(
+        bytes32 sessionId,
+        uint64 expireAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external;
 
     /// @notice Check if a session is active (not revoked and not expired)
     /// @param sessionId The session identifier
@@ -90,4 +97,9 @@ interface ISessionRegistry {
     /// @param ownerFingerprint The owner fingerprint
     /// @return Array of session IDs
     function getOwnerSessions(bytes32 ownerFingerprint) external view returns (bytes32[] memory);
+
+    /// @notice Get the current nonce for an owner (for replay protection)
+    /// @param ownerFingerprint The owner fingerprint
+    /// @return nonce The current nonce value
+    function getNonce(bytes32 ownerFingerprint) external view returns (uint256 nonce);
 }

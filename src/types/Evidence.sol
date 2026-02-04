@@ -8,7 +8,9 @@ enum CloudType {
     /// @dev Microsoft Azure Confidential VMs
     Azure,
     /// @dev Google Cloud Confidential VMs
-    GCP
+    GCP,
+    /// @dev Amazon Web Services Confidential VMs
+    AWS
 }
 
 /// @notice Trusted Execution Environment type supported by the platform

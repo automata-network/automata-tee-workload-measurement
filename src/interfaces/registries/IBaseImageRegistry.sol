@@ -15,14 +15,14 @@ struct BaseImageSpecStorage {
 /// @dev implements mapping (bytes32 platformProfileId => PlatformProfileStorage)
 struct PlatformProfileStorage {
     bool exists;
-    PlatformProfile profile;
-    bytes32[] variantKeys;
+    PlatformProfile platformProfile;
+    bytes32[] variantIds;
 }
 
 /// @dev implements mapping (bytes32 variantKey => MeasurementVariantStorage)
 struct MeasurementVariantStorage {
     bool exists;
-    MeasurementVariant variant;
+    MeasurementVariant measurementVariant;
 }
 
 interface IBaseImageRegistry {
@@ -60,10 +60,11 @@ interface IBaseImageRegistry {
 
     /// @notice Register a new base image with platform profiles and measurement variants (immutable after registration)
     /// @dev Parallel array invariant: spec.profileIds[i] → platformProfiles[i] → measurementVariants[i][]
-    /// @dev Inner parallel array: platformProfiles[i].variantKeys[j] → measurementVariants[i][j]
+    /// @dev Inner parallel array: platformProfiles[i].variantIds[j] → measurementVariants[i][j]
     /// @param spec Base image specification (name, version, uri, profileIds)
-    /// @param platformProfiles Platform-specific profiles (invariants, attributes, variantKeys) - must match spec.profileIds length
-    /// @param measurementVariants Machine-type-specific PCR overrides - measurementVariants[i].length must equal platformProfiles[i].variantKeys.length
+    /// @param platformProfiles Platform-specific profiles (invariants, attributes, variantIds) - must match spec.profileIds length
+    /// @param measurementVariants Machine-type-specific PCR overrides - measurementVariants[i].length must equal platformProfiles[i].variantIds.length
+    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the base image owner
     /// @param ownerSignature Signature over the base image registration data by ownerIdentity
     /// @return baseImageId The unique identifier for the registered base image (domain-separated hash)
@@ -71,16 +72,19 @@ interface IBaseImageRegistry {
         BaseImageSpec calldata spec,
         PlatformProfile[] calldata platformProfiles,
         MeasurementVariant[][] calldata measurementVariants,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 baseImageId);
 
     /// @notice Deactivate a base image (soft delete)
     /// @param baseImageId The base image identifier
+    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the base image owner
     /// @param ownerSignature Signature over the deactivation request by ownerIdentity
     function deactivateBaseImage(
         bytes32 baseImageId,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external;

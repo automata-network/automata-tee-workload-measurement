@@ -2,7 +2,13 @@
 pragma solidity ^0.8.27;
 
 import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity} from "./types/Common.sol";
-import {BASEIMAGE_DOMAIN, PLATFORM_PROFILE_DOMAIN, PLATFORM_VARIANT_DOMAIN} from "./types/Constants.sol";
+import {
+    BASEIMAGE_DOMAIN,
+    PLATFORM_PROFILE_DOMAIN,
+    PLATFORM_VARIANT_DOMAIN,
+    BASEIMAGE_REGISTER_MSG,
+    BASEIMAGE_DEACTIVATE_MSG
+} from "./types/Constants.sol";
 import {
     IBaseImageRegistry,
     BaseImageSpecStorage,
@@ -31,6 +37,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
     error ArrayLengthMismatch();
     error InvalidSignature();
     error Unauthorized();
+    error SignatureExpired();
 
     // ============================================================================
     // Storage
@@ -62,6 +69,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         BaseImageSpec calldata spec,
         PlatformProfile[] calldata platformProfiles,
         MeasurementVariant[][] calldata measurementVariants,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 baseImageId) {
@@ -71,20 +79,34 @@ contract BaseImageRegistry is IBaseImageRegistry {
             revert ArrayLengthMismatch();
         }
 
-        // Compute owner fingerprint (pure, no state write)
-        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+        // Check signature expiration
+        if (block.timestamp > expireAt) {
+            revert SignatureExpired();
+        }
 
-        // Compute base image ID
-        baseImageId = keccak256(abi.encode(BASEIMAGE_DOMAIN, ownerFingerprint, spec.name, spec.version));
+        // Compute base image ID (simplified: name only)
+        baseImageId = keccak256(abi.encode(BASEIMAGE_DOMAIN, spec.name));
 
         // Check for duplicate
         if (_baseImages[baseImageId].exists) {
             revert BaseImageAlreadyExists(baseImageId);
         }
 
-        // Build signed message (6-arg: DOMAIN, chainid, address(this), msg.sender, baseImageId, paramsHash)
-        bytes32 paramsHash = sha256(abi.encode(spec, platformProfiles, measurementVariants));
-        bytes32 message = sha256(_buildRegistrationMessage(baseImageId, paramsHash));
+        // Compute owner fingerprint after duplicate check
+        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+
+        // Build signed message (operation-specific domain, no msg.sender, raw params)
+        bytes32 message = sha256(
+            abi.encode(
+                BASEIMAGE_REGISTER_MSG,
+                block.chainid,
+                address(this),
+                expireAt,
+                spec,
+                platformProfiles,
+                measurementVariants
+            )
+        );
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
@@ -106,7 +128,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
 
             // Store platform profile
             _platformProfiles[platformProfileId].exists = true;
-            _platformProfiles[platformProfileId].profile = profile;
+            _platformProfiles[platformProfileId].platformProfile = profile;
             _baseImages[baseImageId].platformProfileIds.push(platformProfileId);
 
             emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
@@ -121,8 +143,8 @@ contract BaseImageRegistry is IBaseImageRegistry {
 
                 // Store variant
                 _variants[variantId].exists = true;
-                _variants[variantId].variant = variant;
-                _platformProfiles[platformProfileId].variantKeys.push(variantId);
+                _variants[variantId].measurementVariant = variant;
+                _platformProfiles[platformProfileId].variantIds.push(variantId);
 
                 // Link variant to base image
                 _baseImageVariants[baseImageId][variantId] = true;
@@ -137,9 +159,15 @@ contract BaseImageRegistry is IBaseImageRegistry {
     /// @inheritdoc IBaseImageRegistry
     function deactivateBaseImage(
         bytes32 baseImageId,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external {
+        // Check signature expiration
+        if (block.timestamp > expireAt) {
+            revert SignatureExpired();
+        }
+
         // Check exists and active
         if (!_baseImages[baseImageId].exists) {
             revert BaseImageNotFound(baseImageId);
@@ -154,8 +182,9 @@ contract BaseImageRegistry is IBaseImageRegistry {
             revert Unauthorized();
         }
 
-        // Build signed message (5-arg: no paramsHash)
-        bytes32 message = sha256(_buildDeactivationMessage(baseImageId));
+        // Build signed message (operation-specific domain, no msg.sender, raw params)
+        bytes32 message =
+            sha256(abi.encode(BASEIMAGE_DEACTIVATE_MSG, block.chainid, address(this), expireAt, baseImageId));
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
@@ -185,7 +214,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         if (!_platformProfiles[platformProfileId].exists) {
             revert PlatformProfileNotFound(platformProfileId);
         }
-        return _platformProfiles[platformProfileId].profile;
+        return _platformProfiles[platformProfileId].platformProfile;
     }
 
     /// @inheritdoc IBaseImageRegistry
@@ -193,7 +222,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         if (!_variants[variantId].exists) {
             revert MeasurementVariantNotFound(variantId);
         }
-        return _variants[variantId].variant;
+        return _variants[variantId].measurementVariant;
     }
 
     /// @inheritdoc IBaseImageRegistry
@@ -216,8 +245,11 @@ contract BaseImageRegistry is IBaseImageRegistry {
             revert MeasurementVariantNotFound(variantId);
         }
 
-        return
-            (_baseImages[baseImageId].spec, _platformProfiles[platformProfileId].profile, _variants[variantId].variant);
+        return (
+            _baseImages[baseImageId].spec,
+            _platformProfiles[platformProfileId].platformProfile,
+            _variants[variantId].measurementVariant
+        );
     }
 
     /// @inheritdoc IBaseImageRegistry
@@ -236,24 +268,5 @@ contract BaseImageRegistry is IBaseImageRegistry {
     /// @inheritdoc IBaseImageRegistry
     function hasVariant(bytes32 baseImageId, bytes32 variantId) external view returns (bool) {
         return _baseImageVariants[baseImageId][variantId];
-    }
-
-    // ============================================================================
-    // Internal Helper Functions
-    // ============================================================================
-
-    /// @dev Constructs the registration message for signature verification
-    /// @param baseImageId The base image identifier
-    /// @param paramsHash The hash of registration parameters (spec, profiles, variants)
-    /// @return The encoded message ready for hashing
-    function _buildRegistrationMessage(bytes32 baseImageId, bytes32 paramsHash) internal view returns (bytes memory) {
-        return abi.encode(BASEIMAGE_DOMAIN, block.chainid, address(this), msg.sender, baseImageId, paramsHash);
-    }
-
-    /// @dev Constructs the deactivation message for signature verification
-    /// @param baseImageId The base image identifier
-    /// @return The encoded message ready for hashing
-    function _buildDeactivationMessage(bytes32 baseImageId) internal view returns (bytes memory) {
-        return abi.encode(BASEIMAGE_DOMAIN, block.chainid, address(this), msg.sender, baseImageId);
     }
 }

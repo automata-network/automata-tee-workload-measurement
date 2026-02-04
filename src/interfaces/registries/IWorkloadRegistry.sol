@@ -37,23 +37,27 @@ interface IWorkloadRegistry {
     // ============================================================================
 
     /// @notice Register a new workload with policy and PCR specifications (immutable after registration)
-    /// @dev Workload ID is computed as: keccak256(abi.encode(WORKLOAD_DOMAIN, ownerFingerprint, spec.name, spec.version))
+    /// @dev Workload ID is computed as: keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name))
     /// @param spec Complete workload specification (name, version, policy, pcrs)
+    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the workload owner
     /// @param ownerSignature Signature over the workload registration data by ownerIdentity
     /// @return workloadId The unique identifier for the registered workload (domain-separated hash)
     function registerWorkload(
         WorkloadSpec calldata spec,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 workloadId);
 
     /// @notice Deactivate a workload (soft delete)
     /// @param workloadId The workload identifier
+    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the workload owner
     /// @param ownerSignature Signature over the deactivation request by ownerIdentity
     function deactivateWorkload(
         bytes32 workloadId,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external;

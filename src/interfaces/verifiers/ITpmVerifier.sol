@@ -32,8 +32,9 @@ interface ITpmVerifier {
     /// @notice Verifies a TPM Quote report (PCR snapshot with signature)
     /// @param tpmReport The TPM Quote report to verify
     /// @param akPub The Attestation Key public identity (root of trust from AK collateral)
+    /// @param expectedExtraData The extraData that must be present in the TPM quote (for nonce binding)
     /// @return result Verification result containing PCR values and AK fingerprint
-    function verifyTpmQuote(TpmReport calldata tpmReport, PublicIdentity calldata akPub)
+    function verifyTpmQuote(TpmReport calldata tpmReport, PublicIdentity calldata akPub, bytes32 expectedExtraData)
         external
         view
         returns (TpmQuoteVerificationResult memory result);

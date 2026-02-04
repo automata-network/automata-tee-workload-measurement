@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {WorkloadSpec, PublicIdentity, AccessMode} from "./types/Common.sol";
-import {WORKLOAD_DOMAIN} from "./types/Constants.sol";
+import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/verifiers/ISignatureVerifier.sol";
 import {IKeyResolver} from "./interfaces/registries/IKeyResolver.sol";
@@ -21,6 +21,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
     error WorkloadNotActive(bytes32 workloadId);
     error InvalidSignature();
     error Unauthorized();
+    error SignatureExpired();
 
     // ============================================================================
     // Storage
@@ -48,23 +49,28 @@ contract WorkloadRegistry is IWorkloadRegistry {
     /// @inheritdoc IWorkloadRegistry
     function registerWorkload(
         WorkloadSpec calldata spec,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 workloadId) {
-        // Compute owner fingerprint (pure, no state write)
-        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+        // Check signature expiration
+        if (block.timestamp > expireAt) {
+            revert SignatureExpired();
+        }
 
-        // Compute workload ID
-        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, ownerFingerprint, spec.name, spec.version));
+        // Compute workload ID (simplified: name only)
+        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name));
 
         // Check for duplicate
         if (_workloads[workloadId].exists) {
             revert WorkloadAlreadyExists(workloadId);
         }
 
-        // Build signed message (6-arg)
-        bytes32 paramsHash = sha256(abi.encode(spec));
-        bytes32 message = sha256(_buildRegistrationMessage(workloadId, paramsHash));
+        // Compute owner fingerprint after duplicate check
+        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+
+        // Build signed message (operation-specific domain, no msg.sender, raw params)
+        bytes32 message = sha256(abi.encode(WORKLOAD_REGISTER_MSG, block.chainid, address(this), expireAt, spec));
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
@@ -88,9 +94,15 @@ contract WorkloadRegistry is IWorkloadRegistry {
     /// @inheritdoc IWorkloadRegistry
     function deactivateWorkload(
         bytes32 workloadId,
+        uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external {
+        // Check signature expiration
+        if (block.timestamp > expireAt) {
+            revert SignatureExpired();
+        }
+
         // Check exists and active
         if (!_workloads[workloadId].exists) {
             revert WorkloadNotFound(workloadId);
@@ -105,8 +117,9 @@ contract WorkloadRegistry is IWorkloadRegistry {
             revert Unauthorized();
         }
 
-        // Build signed message (5-arg: no paramsHash)
-        bytes32 message = sha256(_buildDeactivationMessage(workloadId));
+        // Build signed message (operation-specific domain, no msg.sender, raw params)
+        bytes32 message =
+            sha256(abi.encode(WORKLOAD_DEACTIVATE_MSG, block.chainid, address(this), expireAt, workloadId));
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
@@ -156,24 +169,5 @@ contract WorkloadRegistry is IWorkloadRegistry {
             // BLACKLIST
             return !_baseImageSet[workloadId][baseImageId];
         }
-    }
-
-    // ============================================================================
-    // Internal Helper Functions
-    // ============================================================================
-
-    /// @dev Constructs the registration message for signature verification
-    /// @param workloadId The workload identifier
-    /// @param paramsHash The hash of registration parameters (spec)
-    /// @return The encoded message ready for hashing
-    function _buildRegistrationMessage(bytes32 workloadId, bytes32 paramsHash) internal view returns (bytes memory) {
-        return abi.encode(WORKLOAD_DOMAIN, block.chainid, address(this), msg.sender, workloadId, paramsHash);
-    }
-
-    /// @dev Constructs the deactivation message for signature verification
-    /// @param workloadId The workload identifier
-    /// @return The encoded message ready for hashing
-    function _buildDeactivationMessage(bytes32 workloadId) internal view returns (bytes memory) {
-        return abi.encode(WORKLOAD_DOMAIN, block.chainid, address(this), msg.sender, workloadId);
     }
 }

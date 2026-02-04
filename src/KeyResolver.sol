@@ -8,7 +8,7 @@ import {IKeyResolver} from "./interfaces/registries/IKeyResolver.sol";
 /// @title KeyResolver
 /// @notice Registry for CVM session key identities with fingerprint-based lookups
 /// @dev Stores PublicIdentity structs indexed by their domain-separated fingerprint
-///      Fingerprints are computed as: keccak256(abi.encode(KEY_DOMAIN, typeId, keccak256(key)))
+///      Fingerprints are computed as: keccak256(abi.encode(KEY_DOMAIN, typeId, key))
 contract KeyResolver is IKeyResolver {
     // ============================================================================
     // Errors
@@ -34,7 +34,7 @@ contract KeyResolver is IKeyResolver {
 
     /// @inheritdoc IKeyResolver
     function computeFingerprint(PublicIdentity calldata identity) external pure returns (bytes32 fingerprint) {
-        return keccak256(abi.encode(KEY_DOMAIN, identity.typeId, keccak256(identity.key)));
+        return keccak256(abi.encode(KEY_DOMAIN, identity.typeId, identity.key));
     }
 
     /// @inheritdoc IKeyResolver
@@ -45,7 +45,7 @@ contract KeyResolver is IKeyResolver {
         }
 
         // Compute fingerprint
-        fingerprint = keccak256(abi.encode(KEY_DOMAIN, identity.typeId, keccak256(identity.key)));
+        fingerprint = keccak256(abi.encode(KEY_DOMAIN, identity.typeId, identity.key));
 
         // Check if already registered (idempotent)
         if (_identities[fingerprint].typeId != ALGO_ID_NULL) {

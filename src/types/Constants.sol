@@ -19,6 +19,22 @@ bytes32 constant PLATFORM_PROFILE_DOMAIN = keccak256("CVM_PLATFORM_PROFILE_V1");
 bytes32 constant PLATFORM_VARIANT_DOMAIN = keccak256("CVM_PLATFORM_VARIANT_V1");
 /// @dev Domain separator for workload ID computation
 bytes32 constant WORKLOAD_DOMAIN = keccak256("CVM_WORKLOAD_V1");
+/// @dev Domain separator for TPM quote extraData nonce binding (used by SessionRegistry)
+bytes32 constant SESSION_NONCE_DOMAIN = keccak256("CVM_SESSION_REG_NONCE_V1");
+
+// ─── Operation Message Separators ──────────────────────────────────────
+/// @dev Message separator for base image registration message signatures
+bytes32 constant BASEIMAGE_REGISTER_MSG = keccak256("CVM_MSG_BASEIMAGE_REGISTER_V1");
+/// @dev Message separator for base image deactivation message signatures
+bytes32 constant BASEIMAGE_DEACTIVATE_MSG = keccak256("CVM_MSG_BASEIMAGE_DEACTIVATE_V1");
+/// @dev Message separator for workload registration message signatures
+bytes32 constant WORKLOAD_REGISTER_MSG = keccak256("CVM_MSG_WORKLOAD_REGISTER_V1");
+/// @dev Message separator for workload deactivation message signatures
+bytes32 constant WORKLOAD_DEACTIVATE_MSG = keccak256("CVM_MSG_WORKLOAD_DEACTIVATE_V1");
+/// @dev Message separator for session registration message signatures
+bytes32 constant SESSION_REGISTER_MSG = keccak256("CVM_MSG_SESSION_REGISTER_V1");
+/// @dev Message separator for session revocation message signatures
+bytes32 constant SESSION_REVOKE_MSG = keccak256("CVM_MSG_SESSION_REVOKE_V1");
 
 // ============================================================================
 // Algorithm Constants (JWT Standard Names - RFC 7518)
