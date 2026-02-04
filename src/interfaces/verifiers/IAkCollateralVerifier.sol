@@ -12,8 +12,6 @@ struct AkCollateralVerificationResult {
     /// @dev Fingerprint of the AK public key (for session binding)
     bytes32 akPubFingerprint;
     /// @dev Expected binding hash from the TEE report (provider-specific)
-    ///      - Azure: SHA256 of JWK "n" field (RSA modulus)
-    ///      - GCP: SHA256 of leaf certificate DER bytes
     bytes32 bindingHash;
 }
 
@@ -27,6 +25,5 @@ interface IAkCollateralVerifier {
     /// @return result Verification result containing AK identity, fingerprint, and binding hash
     function verifyAkCollateral(AkPubCollateral calldata collateral)
         external
-        view
         returns (AkCollateralVerificationResult memory result);
 }

@@ -36,7 +36,6 @@ interface ITpmVerifier {
     /// @return result Verification result containing PCR values and AK fingerprint
     function verifyTpmQuote(TpmReport calldata tpmReport, PublicIdentity calldata akPub, bytes32 expectedExtraData)
         external
-        view
         returns (TpmQuoteVerificationResult memory result);
 
     /// @notice Verifies a TPM Certify report (key certification with signature)

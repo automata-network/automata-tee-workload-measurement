@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {PcrValue, PublicIdentity} from "./Common.sol";
+import {PublicIdentity} from "./Common.sol";
+import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 
 /// @notice Cloud provider classification for attestation routing
 enum CloudType {

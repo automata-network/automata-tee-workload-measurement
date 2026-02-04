@@ -2,8 +2,9 @@
 pragma solidity ^0.8.27;
 
 import {PublicIdentity} from "./types/Common.sol";
-import {KEY_DOMAIN, ALGO_ID_NULL} from "./types/Constants.sol";
+import {ALGO_ID_NULL} from "./types/Constants.sol";
 import {IKeyResolver} from "./interfaces/registries/IKeyResolver.sol";
+import {LibKey} from "./lib/LibKey.sol";
 
 /// @title KeyResolver
 /// @notice Registry for CVM session key identities with fingerprint-based lookups
@@ -34,7 +35,7 @@ contract KeyResolver is IKeyResolver {
 
     /// @inheritdoc IKeyResolver
     function computeFingerprint(PublicIdentity calldata identity) external pure returns (bytes32 fingerprint) {
-        return keccak256(abi.encode(KEY_DOMAIN, identity.typeId, identity.key));
+        return LibKey.computeKeyFingerprint(identity);
     }
 
     /// @inheritdoc IKeyResolver
@@ -45,7 +46,7 @@ contract KeyResolver is IKeyResolver {
         }
 
         // Compute fingerprint
-        fingerprint = keccak256(abi.encode(KEY_DOMAIN, identity.typeId, identity.key));
+        fingerprint = LibKey.computeKeyFingerprint(identity);
 
         // Check if already registered (idempotent)
         if (_identities[fingerprint].typeId != ALGO_ID_NULL) {
@@ -60,10 +61,10 @@ contract KeyResolver is IKeyResolver {
 
     /// @inheritdoc IKeyResolver
     function getIdentity(bytes32 fingerprint) external view returns (PublicIdentity memory identity) {
-        identity = _identities[fingerprint];
         if (identity.typeId == ALGO_ID_NULL) {
             revert IdentityNotFound(fingerprint);
         }
+        identity = _identities[fingerprint];
     }
 
     /// @inheritdoc IKeyResolver

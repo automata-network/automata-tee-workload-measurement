@@ -58,16 +58,6 @@ struct Attribute {
     bytes32 value;
 }
 
-/// @notice PCR value with event replay log (from TPM quote)
-struct PcrValue {
-    /// @dev PCR index (0-23)
-    uint8 pcrIndex;
-    /// @dev Final PCR value (cumulative hash)
-    bytes32 value;
-    /// @dev Event hashes that were extended into this PCR (for DYNAMIC verification modes)
-    bytes32[] eventLogHashes;
-}
-
 // ============================================================================
 // Platform Registry Structs (BaseImageRegistry)
 // ============================================================================
