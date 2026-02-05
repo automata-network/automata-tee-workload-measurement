@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {WorkloadSpec, PublicIdentity, AccessMode} from "./types/Common.sol";
+import {WorkloadSpec, PublicIdentity, AccessMode, PcrSpec} from "./types/Common.sol";
 import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
@@ -22,6 +22,8 @@ contract WorkloadRegistry is IWorkloadRegistry {
     error InvalidSignature();
     error Unauthorized();
     error SignatureExpired();
+    error InvalidPcrOrder();
+    error PcrIndexOutOfRange(uint8 pcrIndex);
 
     // ============================================================================
     // Storage
@@ -55,6 +57,8 @@ contract WorkloadRegistry is IWorkloadRegistry {
         if (block.timestamp > expireAt) {
             revert SignatureExpired();
         }
+
+        _validatePcrSpecsSorted(spec.pcrs);
 
         // Compute workload ID (simplified: name only)
         workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name));
@@ -166,6 +170,21 @@ contract WorkloadRegistry is IWorkloadRegistry {
         } else {
             // BLACKLIST
             return !_baseImageSet[workloadId][baseImageId];
+        }
+    }
+
+    function _validatePcrSpecsSorted(PcrSpec[] calldata pcrs) private pure {
+        uint256 len = pcrs.length;
+        uint256 prevIdx;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 idx = pcrs[i].pcrIndex;
+            if (idx >= 24) {
+                revert PcrIndexOutOfRange(idx);
+            }
+            if (i > 0 && idx <= prevIdx) {
+                revert InvalidPcrOrder();
+            }
+            prevIdx = idx;
         }
     }
 }

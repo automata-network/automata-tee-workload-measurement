@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity} from "./types/Common.sol";
+import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity, PcrSpec} from "./types/Common.sol";
 import {
     BASEIMAGE_DOMAIN,
     PLATFORM_PROFILE_DOMAIN,
@@ -38,6 +38,8 @@ contract BaseImageRegistry is IBaseImageRegistry {
     error InvalidSignature();
     error Unauthorized();
     error SignatureExpired();
+    error InvalidPcrOrder();
+    error PcrIndexOutOfRange(uint8 pcrIndex);
 
     // ============================================================================
     // Storage
@@ -79,6 +81,17 @@ contract BaseImageRegistry is IBaseImageRegistry {
         // Check signature expiration
         if (block.timestamp > expireAt) {
             revert SignatureExpired();
+        }
+
+        // Validate PCR ordering for profiles and variants
+        for (uint256 i = 0; i < platformCount; i++) {
+            PlatformProfile calldata profile = platformProfiles[i];
+            _validatePcrSpecsSorted(profile.invariants);
+
+            MeasurementVariant[] calldata variants = measurementVariants[i];
+            for (uint256 j = 0; j < variants.length; j++) {
+                _validatePcrSpecsSorted(variants[j].overridePcrs);
+            }
         }
 
         // Compute base image ID (simplified: name only)
@@ -262,5 +275,20 @@ contract BaseImageRegistry is IBaseImageRegistry {
     /// @inheritdoc IBaseImageRegistry
     function hasVariant(bytes32 variantId) external view returns (bool) {
         return _variants[variantId].exists;
+    }
+
+    function _validatePcrSpecsSorted(PcrSpec[] calldata pcrs) private pure {
+        uint256 len = pcrs.length;
+        uint256 prevIdx;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 idx = pcrs[i].pcrIndex;
+            if (idx >= 24) {
+                revert PcrIndexOutOfRange(idx);
+            }
+            if (i > 0 && idx <= prevIdx) {
+                revert InvalidPcrOrder();
+            }
+            prevIdx = idx;
+        }
     }
 }
