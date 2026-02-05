@@ -136,9 +136,8 @@ interface IBaseImageRegistry {
     /// @return True if the base image is active
     function isBaseImageActive(bytes32 baseImageId) external view returns (bool);
 
-    /// @notice Check if a variant exists
-    /// @param baseImageId The base image identifier
+    /// @notice Check if a measurement variant exists
     /// @param variantId The variant identifier
     /// @return True if the variant exists
-    function hasVariant(bytes32 baseImageId, bytes32 variantId) external view returns (bool);
+    function hasVariant(bytes32 variantId) external view returns (bool);
 }

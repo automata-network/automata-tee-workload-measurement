@@ -48,7 +48,6 @@ contract BaseImageRegistry is IBaseImageRegistry {
     mapping(bytes32 => BaseImageSpecStorage) private _baseImages;
     mapping(bytes32 => PlatformProfileStorage) private _platformProfiles;
     mapping(bytes32 => MeasurementVariantStorage) private _variants;
-    mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageVariants;
 
     // ============================================================================
     // Constructor
@@ -143,9 +142,6 @@ contract BaseImageRegistry is IBaseImageRegistry {
                 _variants[variantId].exists = true;
                 _variants[variantId].measurementVariant = variant;
                 _platformProfiles[platformProfileId].variantIds.push(variantId);
-
-                // Link variant to base image
-                _baseImageVariants[baseImageId][variantId] = true;
 
                 emit MeasurementVariantRegistered(platformProfileId, variantId, variant.name);
             }
@@ -264,7 +260,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
     }
 
     /// @inheritdoc IBaseImageRegistry
-    function hasVariant(bytes32 baseImageId, bytes32 variantId) external view returns (bool) {
-        return _baseImageVariants[baseImageId][variantId];
+    function hasVariant(bytes32 variantId) external view returns (bool) {
+        return _variants[variantId].exists;
     }
 }
