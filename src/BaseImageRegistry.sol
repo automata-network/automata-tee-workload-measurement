@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity, PcrSpec} from "./types/Common.sol";
+import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity, PcrSpec, Attribute} from "./types/Common.sol";
 import {
     BASEIMAGE_DOMAIN,
     PLATFORM_PROFILE_DOMAIN,
@@ -40,6 +40,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
     error SignatureExpired();
     error InvalidPcrOrder();
     error PcrIndexOutOfRange(uint8 pcrIndex);
+    error DuplicateAttributeKey(bytes32 key);
 
     // ============================================================================
     // Storage
@@ -87,10 +88,12 @@ contract BaseImageRegistry is IBaseImageRegistry {
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
             _validatePcrSpecsSorted(profile.invariants);
+            _validateUniqueAttributeKeys(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
+                _validateUniqueAttributeKeys(variants[j].attributes);
             }
         }
 
@@ -289,6 +292,34 @@ contract BaseImageRegistry is IBaseImageRegistry {
                 revert InvalidPcrOrder();
             }
             prevIdx = idx;
+        }
+    }
+
+    function _validateUniqueAttributeKeys(Attribute[] calldata attrs) private pure {
+        uint256 len = attrs.length;
+        if (len < 2) {
+            return;
+        }
+
+        uint256 cap = 1;
+        while (cap < len * 2) {
+            cap <<= 1;
+        }
+
+        bytes32[] memory keys = new bytes32[](cap);
+        bool[] memory used = new bool[](cap);
+
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 key = attrs[i].key;
+            uint256 slot = uint256(key) & (cap - 1);
+            while (used[slot]) {
+                if (keys[slot] == key) {
+                    revert DuplicateAttributeKey(key);
+                }
+                slot = (slot + 1) & (cap - 1);
+            }
+            used[slot] = true;
+            keys[slot] = key;
         }
     }
 }

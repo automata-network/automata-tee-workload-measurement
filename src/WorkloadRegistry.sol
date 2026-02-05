@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {WorkloadSpec, PublicIdentity, AccessMode, PcrSpec} from "./types/Common.sol";
+import {WorkloadSpec, PublicIdentity, AccessMode, PcrSpec, AttributeRequirement} from "./types/Common.sol";
 import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
@@ -24,6 +24,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
     error SignatureExpired();
     error InvalidPcrOrder();
     error PcrIndexOutOfRange(uint8 pcrIndex);
+    error DuplicateRequirementKey(bytes32 key);
 
     // ============================================================================
     // Storage
@@ -59,6 +60,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
         }
 
         _validatePcrSpecsSorted(spec.pcrs);
+        _validateUniqueRequirementKeys(spec.requirements);
 
         // Compute workload ID (simplified: name only)
         workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name));
@@ -185,6 +187,34 @@ contract WorkloadRegistry is IWorkloadRegistry {
                 revert InvalidPcrOrder();
             }
             prevIdx = idx;
+        }
+    }
+
+    function _validateUniqueRequirementKeys(AttributeRequirement[] calldata requirements) private pure {
+        uint256 len = requirements.length;
+        if (len < 2) {
+            return;
+        }
+
+        uint256 cap = 1;
+        while (cap < len * 2) {
+            cap <<= 1;
+        }
+
+        bytes32[] memory keys = new bytes32[](cap);
+        bool[] memory used = new bool[](cap);
+
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 key = requirements[i].key;
+            uint256 slot = uint256(key) & (cap - 1);
+            while (used[slot]) {
+                if (keys[slot] == key) {
+                    revert DuplicateRequirementKey(key);
+                }
+                slot = (slot + 1) & (cap - 1);
+            }
+            used[slot] = true;
+            keys[slot] = key;
         }
     }
 }
