@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {MeasureablePcr} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-
 import {stdJson} from "forge-std/StdJson.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {WorkloadCollaterals} from "../../src/interfaces/IWorkloadVerifier.sol";
-import {Measurement, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
+// TODO: Update to new registry system
+// import {WorkloadCollaterals} from "../../src/interfaces/IWorkloadVerifier.sol";
+// import {Measurement, Pcr, ZkProof} from "../../src/lib/LibTEE.sol";
 import {LibBytes} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
 
 struct SnpTestData {
@@ -273,6 +272,8 @@ library TestDataLib {
         testData.goldenMeasurement = parseSnpGoldenMeasurement(json, ".golden_measurement");
     }
 
+    // TODO: Update to new registry system
+    /*
     function loadZkReport(string memory path) internal view returns (ZkProof memory zkReport) {
         string memory json = internalVm.readFile(path);
         zkReport.output = json.readBytes(".raw_proof.journal");
@@ -346,4 +347,5 @@ library TestDataLib {
             gm.pcrs[i].measureEventsIdx = snpGoldenMeasurement.pcrs[i].measureEventsIdx;
         }
     }
+    */
 }
