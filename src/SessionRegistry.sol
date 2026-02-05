@@ -650,33 +650,76 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         pure
         returns (PcrSpec[] memory merged)
     {
-        // Copy invariants to merged array
-        merged = new PcrSpec[](invariants.length);
-        for (uint256 i = 0; i < invariants.length; i++) {
-            merged[i] = invariants[i];
+        // Max PCR indices are 0..23, so allocate once and compact later
+        merged = new PcrSpec[](24);
+
+        uint256 overrideMask = 0;
+        uint256 presentMask = 0;
+
+        // Apply overrides while building overrideMask
+        for (uint256 i = 0; i < overrides.length; i++) {
+            uint256 idx = uint256(overrides[i].pcrIndex);
+            uint256 bit = (uint256(1) << idx);
+            overrideMask |= bit;
+
+            merged[idx] = overrides[i];
+            presentMask |= bit;
         }
 
-        // Apply overrides
-        for (uint256 i = 0; i < overrides.length; i++) {
-            // Find matching pcrIndex in merged array
-            for (uint256 j = 0; j < merged.length; j++) {
-                if (merged[j].pcrIndex == overrides[i].pcrIndex) {
-                    merged[j] = overrides[i];
-                    break;
-                }
+        // Insert invariants that are not overridden
+        for (uint256 i = 0; i < invariants.length; i++) {
+            uint256 idx = uint256(invariants[i].pcrIndex);
+            uint256 bit = (uint256(1) << idx);
+            if ((overrideMask & bit) == 0) {
+                merged[idx] = invariants[i];
+                presentMask |= bit;
             }
+        }
+
+        // Compact into sorted order by pcrIndex
+        uint256 writeIdx = 0;
+        for (uint256 idx = 0; idx < 24; idx++) {
+            if ((presentMask & (uint256(1) << idx)) != 0) {
+                if (writeIdx != idx) {
+                    merged[writeIdx] = merged[idx];
+                }
+                writeIdx++;
+            }
+        }
+
+        assembly ("memory-safe") {
+            mstore(merged, writeIdx)
         }
 
         return merged;
     }
 
     /// @dev Evaluates all PCR specs against measured PCR values
-    /// @param specs PCR specifications to evaluate
-    /// @param pcrValues Measured PCR values from TPM quote
+    /// @param specs PCR specifications to evaluate (sorted by pcrIndex)
+    /// @param pcrValues Measured PCR values from TPM quote (sorted by pcrIndex)
     function _evaluatePcrSpecs(PcrSpec[] memory specs, PcrValue[] memory pcrValues) internal pure {
-        for (uint256 i = 0; i < specs.length; i++) {
-            PcrValue memory measured = _findPcrValue(pcrValues, specs[i].pcrIndex);
-            _evaluateSinglePcr(specs[i], measured);
+        uint256 i = 0;
+        uint256 j = 0;
+
+        while (i < specs.length && j < pcrValues.length) {
+            uint8 specIdx = specs[i].pcrIndex;
+            uint8 measuredIdx = pcrValues[j].pcrIndex;
+
+            if (measuredIdx == specIdx) {
+                _evaluateSinglePcr(specs[i], pcrValues[j]);
+                i++;
+                j++;
+            } else if (measuredIdx < specIdx) {
+                // Measured PCR not required by spec, skip it
+                j++;
+            } else {
+                // Spec PCR missing from measured set
+                revert PCRNotFound(specIdx);
+            }
+        }
+
+        if (i < specs.length) {
+            revert PCRNotFound(specs[i].pcrIndex);
         }
     }
 
@@ -743,23 +786,40 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         pure
         returns (Attribute[] memory merged)
     {
-        // Copy profile attributes to merged array
-        merged = new Attribute[](profileAttrs.length);
+        // Count profile attributes that are not overridden by the variant
+        uint256 profileCount = 0;
         for (uint256 i = 0; i < profileAttrs.length; i++) {
-            merged[i] = profileAttrs[i];
-        }
-
-        // Apply variant overrides
-        for (uint256 i = 0; i < variantAttrs.length; i++) {
-            bool found = false;
-            for (uint256 j = 0; j < merged.length; j++) {
-                if (merged[j].key == variantAttrs[i].key) {
-                    merged[j] = variantAttrs[i];
-                    found = true;
+            bool overridden = false;
+            for (uint256 j = 0; j < variantAttrs.length; j++) {
+                if (profileAttrs[i].key == variantAttrs[j].key) {
+                    overridden = true;
                     break;
                 }
             }
-            // If variant attribute is new, we don't add it (variant only overrides, doesn't extend)
+            if (!overridden) {
+                profileCount++;
+            }
+        }
+
+        // Merge: profile attributes without overrides, then all variant attributes
+        merged = new Attribute[](profileCount + variantAttrs.length);
+        uint256 writeIdx = 0;
+        for (uint256 i = 0; i < profileAttrs.length; i++) {
+            bool overridden = false;
+            for (uint256 j = 0; j < variantAttrs.length; j++) {
+                if (profileAttrs[i].key == variantAttrs[j].key) {
+                    overridden = true;
+                    break;
+                }
+            }
+            if (!overridden) {
+                merged[writeIdx] = profileAttrs[i];
+                writeIdx++;
+            }
+        }
+        for (uint256 i = 0; i < variantAttrs.length; i++) {
+            merged[writeIdx] = variantAttrs[i];
+            writeIdx++;
         }
 
         return merged;
