@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {PublicIdentity} from "../../types/Common.sol";
+import {PublicIdentity} from "../types/Common.sol";
 
 /// @title ISignatureVerifier
 /// @notice On-chain verification of cryptographic signatures against PublicIdentity keys

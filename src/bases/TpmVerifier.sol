@@ -4,33 +4,41 @@ pragma solidity ^0.8.27;
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {
-    ITpmVerifier,
-    TpmQuoteVerificationResult,
-    TpmCertifyVerificationResult
-} from "../interfaces/verifiers/ITpmVerifier.sol";
-import {
     TpmReport,
     TpmReportType,
     TpmQuoteReport,
     TpmCertifyReport,
-    VerificationBackendType
+    VerificationBackendType,
+    PcrValue
 } from "../types/Evidence.sol";
 import {PublicIdentity} from "../types/Common.sol";
 import {LibKey} from "../lib/LibKey.sol";
+import {TpmBase} from "./TpmBase.sol";
+
+/// @notice Result of TPM Quote verification
+struct TpmQuoteVerificationResult {
+    /// @dev True if the TPM quote signature is valid and structure is well-formed
+    bool valid;
+    /// @dev PCR values extracted from the quote (with event logs for DYNAMIC verification)
+    PcrValue[] pcrValues;
+}
+
+/// @notice Result of TPM Certify verification
+struct TpmCertifyVerificationResult {
+    /// @dev True if the TPM certify signature is valid and structure is well-formed
+    bool valid;
+    /// @dev Public identity of the certified key (extracted from TPMT_PUBLIC)
+    PublicIdentity certifiedKey;
+    /// @dev Fingerprint of the certified key (for session binding)
+    bytes32 certifiedKeyFingerprint;
+}
 
 /// @title TpmVerifier
 /// @notice Abstract base contract for verifying TPM quotes and TPM certify operations
 /// @dev Wraps ITpmAttestation from automata-tpm-attestation library and handles type conversions
 ///      between our PublicIdentity representation and the library's CertPubkey representation.
 ///      Designed to be inherited by SessionRegistry following the TeeVerifier pattern.
-abstract contract TpmVerifier is ITpmVerifier {
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Immutables - TPM Attestation Contract
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
-    /// @notice TPM attestation verifier contract from automata-tpm-attestation library
-    ITpmAttestation public immutable tpmAttestation;
-
+abstract contract TpmVerifier is TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants - TPMA_OBJECT Attribute Masks
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -64,28 +72,13 @@ abstract contract TpmVerifier is ITpmVerifier {
     /// @notice TPMA_OBJECT attributes contain forbidden bits
     error TpmaObjectForbiddenBitsSet(uint32 attributes, uint32 forbiddenMask);
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Constructor
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
-    /// @notice Initializes the TpmVerifier with the TPM attestation contract
-    /// @param _tpmAttestation Address of the TPM attestation verifier contract
-    constructor(ITpmAttestation _tpmAttestation) {
-        tpmAttestation = _tpmAttestation;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Public Interface - TPM Quote Verification
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
     /// @notice Verifies a TPM Quote report (PCR snapshot with signature)
     /// @param tpmReport The TPM Quote report to verify
     /// @param akPub The Attestation Key public identity (root of trust from AK collateral)
     /// @param expectedExtraData The extraData that must be present in the TPM quote (for nonce binding)
     /// @return result Verification result containing PCR values and AK fingerprint
-    function verifyTpmQuote(TpmReport calldata tpmReport, PublicIdentity calldata akPub, bytes32 expectedExtraData)
-        public
-        override
+    function verifyTpmQuote(TpmReport memory tpmReport, PublicIdentity memory akPub, bytes32 expectedExtraData)
+        internal
         returns (TpmQuoteVerificationResult memory result)
     {
         // Validate TPM report type
@@ -124,27 +117,16 @@ abstract contract TpmVerifier is ITpmVerifier {
             revert TpmQuotePcrCheckFailed();
         }
 
-        // Compute AK fingerprint
-        bytes32 akPubFingerprint = LibKey.computeKeyFingerprint(akPub);
-
-        return
-            TpmQuoteVerificationResult({
-                valid: true, pcrValues: quoteReport.pcrValues, akPubFingerprint: akPubFingerprint
-            });
+        return TpmQuoteVerificationResult({valid: true, pcrValues: quoteReport.pcrValues});
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Public Interface - TPM Certify Verification
-    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Verifies a TPM Certify report (key certification with signature)
     /// @param tpmReport The TPM Certify report to verify
     /// @param akPub The Attestation Key public identity (root of trust from AK collateral)
     /// @return result Verification result containing certified key identity and fingerprints
-    function verifyTpmCertify(TpmReport calldata tpmReport, PublicIdentity calldata akPub)
-        public
+    function verifyTpmCertify(TpmReport memory tpmReport, PublicIdentity memory akPub)
+        internal
         view
-        override
         returns (TpmCertifyVerificationResult memory result)
     {
         // Validate TPM report type
@@ -180,23 +162,15 @@ abstract contract TpmVerifier is ITpmVerifier {
 
         // Compute fingerprints
         bytes32 certifiedKeyFingerprint = LibKey.computeKeyFingerprint(certifiedKey);
-        bytes32 akPubFingerprint = LibKey.computeKeyFingerprint(akPub);
 
         return TpmCertifyVerificationResult({
-            valid: true,
-            certifiedKey: certifiedKey,
-            certifiedKeyFingerprint: certifiedKeyFingerprint,
-            akPubFingerprint: akPubFingerprint
+            valid: true, certifiedKey: certifiedKey, certifiedKeyFingerprint: certifiedKeyFingerprint
         });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Internal Helpers - Attribute Validation
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
     /// @dev Validates that forbidden TPMA_OBJECT attribute bits are not set
     /// @param tpmtPublic The TPMT_PUBLIC structure containing attributes at offset 4
-    function _validateClearBits(bytes memory tpmtPublic) internal pure {
+    function _validateClearBits(bytes memory tpmtPublic) private pure {
         require(tpmtPublic.length >= 8, "TPMT_PUBLIC too short");
 
         // Extract uint32 attributes from tpmtPublic[4:8] (big-endian)

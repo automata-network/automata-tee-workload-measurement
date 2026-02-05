@@ -2,15 +2,28 @@
 pragma solidity ^0.8.27;
 
 import {TeeReport, TEEType, VerificationBackendType, ZkProof} from "../types/Evidence.sol";
-import {ITeeVerifier, TeeVerificationResult} from "../interfaces/verifiers/ITeeVerifier.sol";
 import {IDcapAttestation} from "../interfaces/external/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal, VerificationResult} from "../interfaces/external/ISnpAttestation.sol";
+
+/// @notice Result of TEE attestation report verification
+struct TeeVerificationResult {
+    /// @dev True if the TEE report signature and structure are valid
+    bool valid;
+    /// @dev Full report body extracted from the TEE attestation
+    ///      - For Intel TDX: TD10 (584 bytes) or TD15 (648 bytes) quote body
+    ///      - For AMD SEV-SNP: Full attestation report (1184 bytes)
+    ///      Use TeeVerifier._extractDcapReportData() or _extractSnpReportData()
+    ///      to extract the 64-byte user data field from this report body.
+    bytes reportData;
+    /// @dev TEE technology type (Intel TDX or AMD SEV-SNP)
+    TEEType teeType;
+}
 
 /// @title TeeVerifier
 /// @notice Abstract base contract for verifying TEE attestation reports across multiple backends
 /// @dev Dispatches verification to vendor-specific contracts (DCAP for Intel TDX, SNP for AMD SEV-SNP)
 ///      and extracts reportData from the verified output. Designed to be inherited by SessionRegistry.
-abstract contract TeeVerifier is ITeeVerifier {
+abstract contract TeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -37,14 +50,17 @@ abstract contract TeeVerifier is ITeeVerifier {
     /// @dev Size of TD15 quote body in bytes
     uint256 internal constant TD15_QUOTE_BODY_SIZE = 648;
 
+    /// @dev Offset of quote body in DCAP output (2+2+1+6 byte header)
+    uint256 internal constant DCAP_QUOTE_BODY_OFFSET = 11;
+
     /// @dev Size of reportData field in bytes
     uint256 internal constant REPORT_DATA_SIZE = 64;
 
-    /// @dev Absolute offset of reportData in DCAP output (11 + 520)
-    uint256 internal constant DCAP_REPORT_DATA_START = 531; // 11 + 520
+    /// @dev Offset of reportData within quote body
+    uint256 internal constant DCAP_REPORT_DATA_START = 520;
 
-    /// @dev Minimum valid DCAP output length (must contain header + reportData)
-    uint256 internal constant DCAP_MIN_OUTPUT_LEN = 595; // 531 + 64
+    /// @dev Minimum valid quote body length (must contain reportData)
+    uint256 internal constant DCAP_MIN_OUTPUT_LEN = 584; // TD10_QUOTE_BODY_SIZE (520 + 64)
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants - SNP Raw Report Layout
@@ -84,24 +100,127 @@ abstract contract TeeVerifier is ITeeVerifier {
         snpAttestation = _snpAttestation;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Public Interface
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
     /// @notice Verifies a TEE attestation report
     /// @param teeReport The TEE attestation report to verify (contains backend type, TEE type, and data)
     /// @return result Verification result containing validity status, report data, and TEE type
-    function verifyTeeReport(TeeReport calldata teeReport)
-        public
-        override
-        returns (TeeVerificationResult memory result)
-    {
+    function verifyTeeReport(TeeReport memory teeReport) internal returns (TeeVerificationResult memory result) {
         if (teeReport.teeType == TEEType.IntelTDX) {
             return _verifyIntelTdx(teeReport);
         } else if (teeReport.teeType == TEEType.AmdSevSnp) {
             return _verifyAmdSevSnp(teeReport);
         } else {
             revert UnsupportedTeeType(teeReport.teeType);
+        }
+    }
+
+    /// @dev Extracts the full quote body from DCAP packed output bytes
+    /// @param output The DCAP verifier output (abi.encodePacked format)
+    /// @return quoteBody The extracted TD10 (584 bytes) or TD15 (648 bytes) quote body
+    function extractDcapQuoteBody(bytes memory output) private pure returns (bytes memory quoteBody) {
+        // Validate minimum length to read quoteBodyType
+        if (output.length < 4) {
+            revert InvalidDcapOutput();
+        }
+
+        // Read quoteBodyType (uint16 BE) from bytes [2:4]
+        uint16 quoteBodyType;
+        assembly ("memory-safe") {
+            // Load word containing bytes [0:32], shift right to get uint16 at [2:4]
+            let word := mload(add(output, 0x20))
+            // Shift right 240 bits (30 bytes) to get the 2-byte value at offset 2
+            quoteBodyType := shr(240, word)
+        }
+
+        // Determine body size based on quote type
+        uint256 bodySize;
+        if (quoteBodyType == QUOTE_BODY_TYPE_TD10) {
+            bodySize = TD10_QUOTE_BODY_SIZE;
+        } else if (quoteBodyType == QUOTE_BODY_TYPE_TD15) {
+            bodySize = TD15_QUOTE_BODY_SIZE;
+        } else {
+            revert InvalidDcapOutput();
+        }
+
+        // Validate output length
+        if (output.length < DCAP_QUOTE_BODY_OFFSET + bodySize) {
+            revert InvalidDcapOutput();
+        }
+
+        // Allocate quote body buffer
+        quoteBody = new bytes(bodySize);
+
+        // Copy quote body from output[11:11+bodySize] using assembly
+        assembly ("memory-safe") {
+            let src := add(add(output, 0x20), DCAP_QUOTE_BODY_OFFSET)
+            let dst := add(quoteBody, 0x20)
+            let remaining := bodySize
+
+            // Copy in 32-byte chunks
+            for {} gt(remaining, 0) {} {
+                mstore(dst, mload(src))
+                src := add(src, 0x20)
+                dst := add(dst, 0x20)
+                remaining := sub(remaining, 0x20)
+            }
+        }
+    }
+
+    /// @dev Extracts the 64-byte reportData from a DCAP quote body
+    /// @param quoteBody The TD10 or TD15 quote body (output of _extractDcapQuoteBody)
+    /// @return reportData The extracted 64-byte reportData field at offset 520
+    function extractDcapReportData(bytes memory quoteBody) internal pure returns (bytes memory reportData) {
+        // Validate minimum length to contain reportData
+        if (quoteBody.length < DCAP_MIN_OUTPUT_LEN) {
+            revert InvalidDcapOutput();
+        }
+
+        // Allocate reportData buffer
+        reportData = new bytes(REPORT_DATA_SIZE);
+
+        // Copy reportData from quoteBody[520:584] using assembly
+        assembly ("memory-safe") {
+            let src := add(add(quoteBody, 0x20), DCAP_REPORT_DATA_START)
+            let dst := add(reportData, 0x20)
+            // Copy first 32 bytes
+            mstore(dst, mload(src))
+            // Copy remaining 32 bytes
+            mstore(add(dst, 0x20), mload(add(src, 0x20)))
+        }
+    }
+
+    /// @dev Extracts the full SNP attestation report from journal
+    /// @param rawReport The SNP raw report bytes from VerifierJournal (already the full report)
+    /// @return attestationReport The attestation report (validated and returned directly)
+    function extractSnpAttestationReport(bytes memory rawReport) private pure returns (bytes memory attestationReport) {
+        // Validate minimum length
+        if (rawReport.length < SNP_MIN_REPORT_LEN) {
+            revert InvalidSnpReport();
+        }
+
+        // rawReport IS the attestation report - return directly (no copy needed)
+        return rawReport;
+    }
+
+    /// @dev Extracts reportData from SNP raw report bytes
+    /// @param rawReport The SNP raw report bytes from VerifierJournal
+    /// @return reportData The extracted 64-byte REPORT_DATA field
+    function extractSnpReportData(bytes memory rawReport) internal pure returns (bytes memory reportData) {
+        // Validate minimum length to contain REPORT_DATA
+        if (rawReport.length < SNP_MIN_REPORT_LEN) {
+            revert InvalidSnpReport();
+        }
+
+        // Allocate reportData buffer
+        reportData = new bytes(REPORT_DATA_SIZE);
+
+        // Copy reportData from rawReport[0x50:0x90] using assembly
+        assembly ("memory-safe") {
+            let src := add(add(rawReport, 0x20), SNP_REPORT_DATA_OFFSET)
+            let dst := add(reportData, 0x20)
+            // Copy first 32 bytes
+            mstore(dst, mload(src))
+            // Copy remaining 32 bytes
+            mstore(add(dst, 0x20), mload(add(src, 0x20)))
         }
     }
 
@@ -112,7 +231,7 @@ abstract contract TeeVerifier is ITeeVerifier {
     /// @dev Verifies an Intel TDX attestation report using DCAP
     /// @param teeReport The TEE report containing Intel TDX quote data
     /// @return result Verification result with extracted reportData
-    function _verifyIntelTdx(TeeReport calldata teeReport) internal returns (TeeVerificationResult memory result) {
+    function _verifyIntelTdx(TeeReport memory teeReport) private returns (TeeVerificationResult memory result) {
         bool success;
         bytes memory output;
 
@@ -135,16 +254,16 @@ abstract contract TeeVerifier is ITeeVerifier {
             return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.IntelTDX});
         }
 
-        // Extract reportData from DCAP output
-        bytes memory reportData = _extractDcapReportData(output);
+        // Extract quote body from DCAP output (Step 1)
+        bytes memory quoteBody = extractDcapQuoteBody(output);
 
-        return TeeVerificationResult({valid: true, reportData: reportData, teeType: TEEType.IntelTDX});
+        return TeeVerificationResult({valid: true, reportData: quoteBody, teeType: TEEType.IntelTDX});
     }
 
     /// @dev Verifies an AMD SEV-SNP attestation report
     /// @param teeReport The TEE report containing SEV-SNP report data
     /// @return result Verification result with extracted reportData
-    function _verifyAmdSevSnp(TeeReport calldata teeReport) internal returns (TeeVerificationResult memory result) {
+    function _verifyAmdSevSnp(TeeReport memory teeReport) private returns (TeeVerificationResult memory result) {
         // SNP does not support Solidity backend (no on-chain verifier exists)
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
             revert UnsupportedBackendType(teeReport.verificationBackendType);
@@ -165,78 +284,9 @@ abstract contract TeeVerifier is ITeeVerifier {
             return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.AmdSevSnp});
         }
 
-        // Extract reportData from SNP raw report
-        bytes memory reportData = _extractSnpReportData(journal.rawReport);
+        // Extract attestation report from SNP journal (Step 1)
+        bytes memory attestationReport = extractSnpAttestationReport(journal.rawReport);
 
-        return TeeVerificationResult({valid: true, reportData: reportData, teeType: TEEType.AmdSevSnp});
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Internal - Report Data Extraction
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
-    /// @dev Extracts reportData from DCAP packed output bytes
-    /// @param output The DCAP verifier output (abi.encodePacked format)
-    /// @return reportData The extracted 64-byte reportData field
-    function _extractDcapReportData(bytes memory output) internal pure returns (bytes memory reportData) {
-        // Validate minimum length to read quoteBodyType
-        if (output.length < 4) {
-            revert InvalidDcapOutput();
-        }
-
-        // Read quoteBodyType (uint16 BE) from bytes [2:4]
-        uint16 quoteBodyType;
-        assembly ("memory-safe") {
-            // Load word containing bytes [0:32], shift right to get uint16 at [2:4]
-            let word := mload(add(output, 0x20))
-            // Shift right 240 bits (30 bytes) to get the 2-byte value at offset 2
-            quoteBodyType := shr(240, word)
-        }
-
-        // Validate quoteBodyType is TD10 or TD15
-        if (quoteBodyType != QUOTE_BODY_TYPE_TD10 && quoteBodyType != QUOTE_BODY_TYPE_TD15) {
-            revert InvalidDcapOutput();
-        }
-
-        // Validate minimum length to contain reportData
-        if (output.length < DCAP_MIN_OUTPUT_LEN) {
-            revert InvalidDcapOutput();
-        }
-
-        // Allocate reportData buffer
-        reportData = new bytes(REPORT_DATA_SIZE);
-
-        // Copy reportData from output[531:595] using assembly
-        assembly ("memory-safe") {
-            let src := add(add(output, 0x20), DCAP_REPORT_DATA_START)
-            let dst := add(reportData, 0x20)
-            // Copy first 32 bytes
-            mstore(dst, mload(src))
-            // Copy remaining 32 bytes
-            mstore(add(dst, 0x20), mload(add(src, 0x20)))
-        }
-    }
-
-    /// @dev Extracts reportData from SNP raw report bytes
-    /// @param rawReport The SNP raw report bytes from VerifierJournal
-    /// @return reportData The extracted 64-byte REPORT_DATA field
-    function _extractSnpReportData(bytes memory rawReport) internal pure returns (bytes memory reportData) {
-        // Validate minimum length to contain REPORT_DATA
-        if (rawReport.length < SNP_MIN_REPORT_LEN) {
-            revert InvalidSnpReport();
-        }
-
-        // Allocate reportData buffer
-        reportData = new bytes(REPORT_DATA_SIZE);
-
-        // Copy reportData from rawReport[0x50:0x90] using assembly
-        assembly ("memory-safe") {
-            let src := add(add(rawReport, 0x20), SNP_REPORT_DATA_OFFSET)
-            let dst := add(reportData, 0x20)
-            // Copy first 32 bytes
-            mstore(dst, mload(src))
-            // Copy remaining 32 bytes
-            mstore(add(dst, 0x20), mload(add(src, 0x20)))
-        }
+        return TeeVerificationResult({valid: true, reportData: attestationReport, teeType: TEEType.AmdSevSnp});
     }
 }

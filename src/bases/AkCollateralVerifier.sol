@@ -3,26 +3,31 @@ pragma solidity ^0.8.27;
 
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../interfaces/verifiers/IAkCollateralVerifier.sol";
 import {AkPubCollateral, AkPubCollateralType} from "../types/Evidence.sol";
 import {PublicIdentity} from "../types/Common.sol";
 import {LibString} from "@solady/utils/LibString.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 import {LibKey} from "../lib/LibKey.sol";
+import {TpmBase} from "./TpmBase.sol";
+
+/// @notice Result of AK collateral verification
+struct AkCollateralVerificationResult {
+    /// @dev True if the AK collateral is valid (signature chain verified)
+    bool valid;
+    /// @dev Extracted Attestation Key public identity
+    PublicIdentity akPub;
+    /// @dev Fingerprint of the AK public key (for session binding)
+    bytes32 akPubFingerprint;
+    /// @dev Expected binding hash from the TEE report (provider-specific)
+    bytes32 bindingHash;
+}
 
 /// @title AkCollateralVerifier
 /// @notice Abstract base contract for verifying AK collateral (Azure JWK / GCP cert chain)
 /// @dev Wraps ITpmAttestation from automata-tpm-attestation library for cert chain verification
 ///      and implements custom Azure JWK parsing. Designed to be inherited by SessionRegistry
 ///      following the TeeVerifier pattern.
-abstract contract AkCollateralVerifier is IAkCollateralVerifier {
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Immutables - TPM Attestation Contract
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
-    /// @notice TPM attestation verifier contract from automata-tpm-attestation library
-    ITpmAttestation public immutable tpmAttestation;
-
+abstract contract AkCollateralVerifier is TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -36,26 +41,11 @@ abstract contract AkCollateralVerifier is IAkCollateralVerifier {
     /// @notice GCP certificate chain verification failed
     error GcpCertChainVerificationFailed();
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Constructor
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
-    /// @notice Initializes the AkCollateralVerifier with the TPM attestation contract
-    /// @param _tpmAttestation Address of the TPM attestation verifier contract
-    constructor(ITpmAttestation _tpmAttestation) {
-        tpmAttestation = _tpmAttestation;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Public Interface
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
     /// @notice Verifies AK collateral and extracts the AK public key
     /// @param collateral The AK collateral to verify (Azure JWK or GCP cert chain)
     /// @return result Verification result containing AK identity, fingerprint, and binding hash
-    function verifyAkCollateral(AkPubCollateral calldata collateral)
-        public
-        override
+    function verifyAkCollateral(AkPubCollateral memory collateral)
+        internal
         returns (AkCollateralVerificationResult memory result)
     {
         if (collateral.akPubCollateralType == AkPubCollateralType.AzureAkPubJson) {
@@ -74,8 +64,8 @@ abstract contract AkCollateralVerifier is IAkCollateralVerifier {
     /// @dev Verifies Azure AK collateral (JWK JSON format)
     /// @param data The Azure JWK JSON bytes
     /// @return result Verification result with extracted AK public key
-    function _verifyAzureAkCollateral(bytes calldata data)
-        internal
+    function _verifyAzureAkCollateral(bytes memory data)
+        private
         pure
         returns (AkCollateralVerificationResult memory result)
     {
@@ -96,7 +86,7 @@ abstract contract AkCollateralVerifier is IAkCollateralVerifier {
     /// @dev Parses Azure JWK JSON to extract RSA public key
     /// @param jsonBytes The Azure JWK JSON bytes
     /// @return certPubkey The extracted RSA public key as CertPubkey
-    function _parseAzureJwkAkPub(bytes calldata jsonBytes) internal pure returns (PublicIdentity memory) {
+    function _parseAzureJwkAkPub(bytes memory jsonBytes) private pure returns (PublicIdentity memory) {
         // Convert bytes to string for parsing
         string memory json = string(jsonBytes);
 
@@ -173,10 +163,7 @@ abstract contract AkCollateralVerifier is IAkCollateralVerifier {
     /// @dev Verifies GCP AK collateral (X.509 certificate chain)
     /// @param data The GCP certificate chain (abi-encoded bytes[] array)
     /// @return result Verification result with extracted AK public key
-    function _verifyGcpAkCollateral(bytes calldata data)
-        internal
-        returns (AkCollateralVerificationResult memory result)
-    {
+    function _verifyGcpAkCollateral(bytes memory data) private returns (AkCollateralVerificationResult memory result) {
         // Decode certificate chain
         bytes[] memory certs = abi.decode(data, (bytes[]));
 
@@ -190,7 +177,6 @@ abstract contract AkCollateralVerifier is IAkCollateralVerifier {
         // Compute fingerprint
         bytes32 akPubFingerprint = LibKey.computeKeyFingerprint(akPub);
 
-        // GCP binding: placeholder (user will provide GCP binding spec later)
         // GCP binding is typically via PCR15, handled separately by SessionRegistry
         bytes32 bindingHash = bytes32(0);
 

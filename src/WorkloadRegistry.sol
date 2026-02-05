@@ -4,8 +4,8 @@ pragma solidity ^0.8.27;
 import {WorkloadSpec, PublicIdentity, AccessMode} from "./types/Common.sol";
 import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
-import {ISignatureVerifier} from "./interfaces/verifiers/ISignatureVerifier.sol";
-import {IKeyResolver} from "./interfaces/registries/IKeyResolver.sol";
+import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
+import {LibKey} from "./lib/LibKey.sol";
 
 /// @title WorkloadRegistry
 /// @notice Registry for workload specifications with access control and PCR policies
@@ -28,7 +28,6 @@ contract WorkloadRegistry is IWorkloadRegistry {
     // ============================================================================
 
     ISignatureVerifier public immutable signatureVerifier;
-    IKeyResolver public immutable keyResolver;
 
     mapping(bytes32 => WorkloadSpecStorage) private _workloads;
     mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageSet;
@@ -37,9 +36,8 @@ contract WorkloadRegistry is IWorkloadRegistry {
     // Constructor
     // ============================================================================
 
-    constructor(ISignatureVerifier _signatureVerifier, IKeyResolver _keyResolver) {
+    constructor(ISignatureVerifier _signatureVerifier) {
         signatureVerifier = _signatureVerifier;
-        keyResolver = _keyResolver;
     }
 
     // ============================================================================
@@ -67,7 +65,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
         }
 
         // Compute owner fingerprint after duplicate check
-        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
         bytes32 message = sha256(abi.encode(WORKLOAD_REGISTER_MSG, block.chainid, address(this), expireAt, spec));
@@ -112,7 +110,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
         }
 
         // Compute owner fingerprint and verify ownership
-        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         if (_workloads[workloadId].owner != ownerFingerprint) {
             revert Unauthorized();
         }

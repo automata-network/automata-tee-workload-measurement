@@ -3,7 +3,7 @@ pragma solidity ^0.8.27;
 
 import {PublicIdentity} from "./types/Common.sol";
 import {ALGO_ID_RS256, ALGO_ID_ES256, ALGO_ID_ES256K} from "./types/Constants.sol";
-import {ISignatureVerifier} from "./interfaces/verifiers/ISignatureVerifier.sol";
+import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {Asn1Decode, NodePtr} from "./lib/Asn1Decode.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
@@ -28,13 +28,6 @@ contract SignatureVerifier is ISignatureVerifier {
         P256_VERIFIER_ADDRESS = p256VerifierAddress;
     }
 
-    /// @notice Verifies a cryptographic signature against a PublicIdentity.
-    /// @dev Dispatches to the appropriate algorithm implementation based on
-    ///      identity.typeId. Reverts if the typeId is unsupported.
-    /// @param identity The public key to verify against.
-    /// @param hash The message digest (bytes32) that was signed.
-    /// @param signature The raw signature bytes (algorithm-specific encoding).
-    /// @return valid True if the signature is valid for the given message and key.
     function verify(PublicIdentity calldata identity, bytes32 hash, bytes calldata signature)
         external
         view

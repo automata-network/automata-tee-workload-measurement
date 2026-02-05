@@ -15,8 +15,8 @@ import {
     PlatformProfileStorage,
     MeasurementVariantStorage
 } from "./interfaces/registries/IBaseImageRegistry.sol";
-import {ISignatureVerifier} from "./interfaces/verifiers/ISignatureVerifier.sol";
-import {IKeyResolver} from "./interfaces/registries/IKeyResolver.sol";
+import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
+import {LibKey} from "./lib/LibKey.sol";
 
 /// @title BaseImageRegistry
 /// @notice Hierarchical registry for base images, platform profiles, and measurement variants
@@ -44,7 +44,6 @@ contract BaseImageRegistry is IBaseImageRegistry {
     // ============================================================================
 
     ISignatureVerifier public immutable signatureVerifier;
-    IKeyResolver public immutable keyResolver;
 
     mapping(bytes32 => BaseImageSpecStorage) private _baseImages;
     mapping(bytes32 => PlatformProfileStorage) private _platformProfiles;
@@ -55,9 +54,8 @@ contract BaseImageRegistry is IBaseImageRegistry {
     // Constructor
     // ============================================================================
 
-    constructor(ISignatureVerifier _signatureVerifier, IKeyResolver _keyResolver) {
+    constructor(ISignatureVerifier _signatureVerifier) {
         signatureVerifier = _signatureVerifier;
-        keyResolver = _keyResolver;
     }
 
     // ============================================================================
@@ -93,7 +91,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         }
 
         // Compute owner fingerprint after duplicate check
-        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
         bytes32 message = sha256(
@@ -177,7 +175,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         }
 
         // Compute owner fingerprint and verify ownership
-        bytes32 ownerFingerprint = keyResolver.computeFingerprint(ownerIdentity);
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         if (_baseImages[baseImageId].owner != ownerFingerprint) {
             revert Unauthorized();
         }
