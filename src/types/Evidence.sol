@@ -128,3 +128,13 @@ struct AttestationEvidence {
     /// @dev Session public key (operational key for application use)
     PublicIdentity sessionKey;
 }
+
+struct SessionRotationEvidence {
+    TpmReport tpmQuoteReport;
+    TpmReport tpmCertifyReport;
+    bytes sessionKeySignature;
+    PublicIdentity sessionKey;
+    bytes rotationSignature;
+    PublicIdentity oldTpmSigningKey;
+    PublicIdentity akPub;
+}

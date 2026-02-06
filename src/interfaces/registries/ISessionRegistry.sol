@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {CVMSession, PublicIdentity} from "../../types/Common.sol";
-import {AttestationEvidence, TpmReport} from "../../types/Evidence.sol";
+import {AttestationEvidence, TpmReport, SessionRotationEvidence} from "../../types/Evidence.sol";
 
 interface ISessionRegistry {
     // ============================================================================
@@ -119,28 +119,16 @@ interface ISessionRegistry {
 
     /// @notice Rotate a session's TPM signing key and session key
     /// @param oldSessionId The session to rotate
-    /// @param teeReportSignatureHash keccak256(teeReport.data) from the original attestation
-    /// @param tpmQuoteReport New TPM quote report (fresh nonce, fresh PCRs)
-    /// @param tpmCertifyReport TPM certify report for new TPM signing key
-    /// @param sessionKeySignature Delegation signature from new TPM signing key
-    /// @param sessionKey New session public key
-    /// @param rotationSignature Old TPM signing key signature authorizing rotation
-    /// @param oldTpmSigningKey Full public key of the old TPM signing key
-    /// @param akPub Full AK public key
+    /// @param teeReportBytesHash keccak256(teeReport.data) from the original attestation
+    /// @param rotationEvidence The rotation evidence bundle (TPM reports, signatures, keys)
     /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The session owner's public key
     /// @param ownerSignature Signature over the rotation message by the owner
     /// @return newSessionId The derived identifier for the new rotated session
     function rotateSession(
         bytes32 oldSessionId,
-        bytes32 teeReportSignatureHash,
-        TpmReport calldata tpmQuoteReport,
-        TpmReport calldata tpmCertifyReport,
-        bytes calldata sessionKeySignature,
-        PublicIdentity calldata sessionKey,
-        bytes calldata rotationSignature,
-        PublicIdentity calldata oldTpmSigningKey,
-        PublicIdentity calldata akPub,
+        bytes32 teeReportBytesHash,
+        SessionRotationEvidence calldata rotationEvidence,
         uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
