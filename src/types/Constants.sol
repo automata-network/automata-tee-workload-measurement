@@ -11,6 +11,8 @@ bytes32 constant KEY_DOMAIN = keccak256("KEY_RESOLVER_V1");
 bytes32 constant SESSION_DOMAIN = keccak256("CVM_SESSION_V1");
 /// @dev Domain separator for session key delegation signatures (TPM key → session key)
 bytes32 constant DELEGATION_DOMAIN = keccak256("CVM_SESSION_KEY_DELEGATION");
+/// @dev Domain separator for session key rotation authorization (old TPM key → new keys)
+bytes32 constant ROTATION_DOMAIN = keccak256("CVM_SESSION_KEY_ROTATION");
 /// @dev Domain separator for base image ID computation
 bytes32 constant BASEIMAGE_DOMAIN = keccak256("CVM_BASEIMAGE_V1");
 /// @dev Domain separator for platform profile ID computation
@@ -35,6 +37,8 @@ bytes32 constant WORKLOAD_DEACTIVATE_MSG = keccak256("CVM_MSG_WORKLOAD_DEACTIVAT
 bytes32 constant SESSION_REGISTER_MSG = keccak256("CVM_MSG_SESSION_REGISTER_V1");
 /// @dev Message separator for session revocation message signatures
 bytes32 constant SESSION_REVOKE_MSG = keccak256("CVM_MSG_SESSION_REVOKE_V1");
+/// @dev Message separator for session rotation message signatures
+bytes32 constant SESSION_ROTATE_MSG = keccak256("CVM_MSG_SESSION_ROTATE_V1");
 
 // ============================================================================
 // Algorithm Constants (JWT Standard Names - RFC 7518)

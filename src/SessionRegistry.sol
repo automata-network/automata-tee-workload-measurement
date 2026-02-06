@@ -7,7 +7,6 @@ import {ISnpAttestation} from "./interfaces/external/ISnpAttestation.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {IBaseImageRegistry} from "./interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "./interfaces/registries/IWorkloadRegistry.sol";
-import {IKeyResolver} from "./interfaces/registries/IKeyResolver.sol";
 import {ISessionRegistry} from "./interfaces/registries/ISessionRegistry.sol";
 import {TeeVerifier, TeeVerificationResult} from "./bases/TeeVerifier.sol";
 import {TpmVerifier, TpmQuoteVerificationResult, TpmCertifyVerificationResult, TpmBase} from "./bases/TpmVerifier.sol";
@@ -21,16 +20,17 @@ import {
     AttributeRequirement,
     WorkloadSpec,
     PlatformProfile,
-    MeasurementVariant,
-    BaseImageSpec
+    MeasurementVariant
 } from "./types/Common.sol";
 import {AttestationEvidence, TpmQuoteReport, TpmReport, AkPubCollateralType, TEEType} from "./types/Evidence.sol";
 import {
     SESSION_DOMAIN,
     DELEGATION_DOMAIN,
+    ROTATION_DOMAIN,
     SESSION_NONCE_DOMAIN,
     SESSION_REGISTER_MSG,
-    SESSION_REVOKE_MSG
+    SESSION_REVOKE_MSG,
+    SESSION_ROTATE_MSG
 } from "./types/Constants.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {LibBytes} from "./lib/LibBytes.sol";
@@ -53,9 +53,6 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
 
     /// @notice Workload registry for workload policy enforcement
     IWorkloadRegistry public immutable workloadRegistry;
-
-    /// @notice Key resolver for session key registration
-    IKeyResolver public immutable keyResolver;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants - TEE Binding Offsets
@@ -91,6 +88,44 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
 
     /// @dev Owner session list
     mapping(bytes32 => bytes32[]) private _ownerSessions;
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // Internal Structs - Rotation
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    /// @dev Rotation context derived from the old session
+    struct RotationContext {
+        bytes32 ownerFingerprint;
+        bytes32 baseImageId;
+        bytes32 workloadId;
+        bytes32 platformProfileId;
+        bytes32 measurementVariantId;
+        uint64 expiresAt;
+    }
+
+    /// @dev Rotation inputs (copied from calldata to reduce stack usage)
+    struct RotationInputs {
+        bytes32 oldSessionId;
+        bytes32 teeReportSignatureHash;
+        TpmReport tpmQuoteReport;
+        TpmReport tpmCertifyReport;
+        bytes sessionKeySignature;
+        PublicIdentity sessionKey;
+        bytes rotationSignature;
+        PublicIdentity oldTpmSigningKey;
+        PublicIdentity akPub;
+        uint64 expireAt;
+        PublicIdentity ownerIdentity;
+        bytes ownerSignature;
+    }
+
+    /// @dev Rotation results produced from TPM verification and delegation
+    struct RotationResults {
+        bytes32 newSessionId;
+        bytes32 newTpmSigningKeyFingerprint;
+        bytes32 sessionKeyFingerprint;
+        PublicIdentity newTpmSigningKey;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors
@@ -167,20 +202,17 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
     /// @param _signatureVerifier Signature verifier for owner authentication
     /// @param _baseImageRegistry Base image registry for platform profiles
     /// @param _workloadRegistry Workload registry for workload policies
-    /// @param _keyResolver Key resolver for session key registration
     constructor(
         IDcapAttestation _dcapAttestation,
         ISnpAttestation _snpAttestation,
         ITpmAttestation _tpmAttestation,
         ISignatureVerifier _signatureVerifier,
         IBaseImageRegistry _baseImageRegistry,
-        IWorkloadRegistry _workloadRegistry,
-        IKeyResolver _keyResolver
+        IWorkloadRegistry _workloadRegistry
     ) TeeVerifier(_dcapAttestation, _snpAttestation) TpmBase(_tpmAttestation) {
         signatureVerifier = _signatureVerifier;
         baseImageRegistry = _baseImageRegistry;
         workloadRegistry = _workloadRegistry;
-        keyResolver = _keyResolver;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -199,15 +231,10 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         bytes calldata ownerSignature
     ) external returns (bytes32 sessionId) {
         // ─────────────────────────────────────────────────────────────────────────────────
-        // Preliminary: Session Registration Signature and Expiry Check
+        // Preliminary: Signature Expiry Check
         // ─────────────────────────────────────────────────────────────────────────────────
         if (block.timestamp > expireAt) {
             revert SignatureExpired();
-        }
-        // Verify owner signature over session registration message
-        bytes32 message = sha256(abi.encode(SESSION_REGISTER_MSG, block.chainid, address(this), expireAt, sessionId));
-        if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
         }
 
         // ─────────────────────────────────────────────────────────────────────────────────
@@ -254,8 +281,14 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         );
 
         // ─────────────────────────────────────────────────────────────────────────────────
-        // STEP 9: Session Creation
+        // STEP 9: Owner Signature Verification + Session Creation
         // ─────────────────────────────────────────────────────────────────────────────────
+
+        // Verify owner signature over session registration message
+        bytes32 message = sha256(abi.encode(SESSION_REGISTER_MSG, block.chainid, address(this), expireAt, sessionId));
+        if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
+            revert InvalidSignature();
+        }
 
         // Create session with TTL handling
         uint64 expiresAt = workloadSpec.ttl == 0 ? type(uint64).max : uint64(block.timestamp) + workloadSpec.ttl;
@@ -282,9 +315,6 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
 
         // Add to owner session list
         _ownerSessions[attestationResult.ownerFingerprint].push(sessionId);
-
-        // Register session key to key resolver
-        keyResolver.registerIdentity(evidence.sessionKey);
 
         // Emit events
         emit SessionRegistered(
@@ -352,6 +382,42 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
+    // External Interface - Session Rotation
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    /// @inheritdoc ISessionRegistry
+    function rotateSession(
+        bytes32 oldSessionId,
+        bytes32 teeReportSignatureHash,
+        TpmReport calldata tpmQuoteReport,
+        TpmReport calldata tpmCertifyReport,
+        bytes calldata sessionKeySignature,
+        PublicIdentity calldata sessionKey,
+        bytes calldata rotationSignature,
+        PublicIdentity calldata oldTpmSigningKey,
+        PublicIdentity calldata akPub,
+        uint64 expireAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 newSessionId) {
+        RotationInputs memory inputs;
+        inputs.oldSessionId = oldSessionId;
+        inputs.teeReportSignatureHash = teeReportSignatureHash;
+        inputs.tpmQuoteReport = tpmQuoteReport;
+        inputs.tpmCertifyReport = tpmCertifyReport;
+        inputs.sessionKeySignature = sessionKeySignature;
+        inputs.sessionKey = sessionKey;
+        inputs.rotationSignature = rotationSignature;
+        inputs.oldTpmSigningKey = oldTpmSigningKey;
+        inputs.akPub = akPub;
+        inputs.expireAt = expireAt;
+        inputs.ownerIdentity = ownerIdentity;
+        inputs.ownerSignature = ownerSignature;
+
+        return _rotateSession(inputs);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
     // External Interface - View Functions
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
@@ -388,6 +454,207 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
     /// @inheritdoc ISessionRegistry
     function getNonce(bytes32 ownerFingerprint) external view returns (uint256 nonce) {
         return _ownerNonces[ownerFingerprint];
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // Internal - Session Rotation Helpers
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    function _rotateSession(RotationInputs memory inputs) internal returns (bytes32 newSessionId) {
+        RotationContext memory ctx = _loadRotationContext(inputs);
+
+        (PcrValue[] memory pcrValues, bytes32 tpmSignatureHash) =
+            _verifyRotationQuote(inputs, ctx.ownerFingerprint);
+
+        RotationResults memory results = _verifyRotationCertifyAndDelegation(inputs, tpmSignatureHash, ctx);
+
+        _evaluateRotationPolicy(ctx, pcrValues);
+
+        _finalizeRotation(inputs, results, ctx);
+
+        return results.newSessionId;
+    }
+
+    function _loadRotationContext(RotationInputs memory inputs) internal view returns (RotationContext memory ctx) {
+        if (!_sessionExists[inputs.oldSessionId]) {
+            revert SessionNotFound();
+        }
+
+        CVMSession storage oldSession = _sessions[inputs.oldSessionId];
+
+        if (!oldSession.isActive) {
+            revert SessionAlreadyRevoked();
+        }
+
+        if (block.timestamp > oldSession.expiresAt) {
+            revert SessionNotActive();
+        }
+
+        bytes32 oldTpmSigningKeyFingerprint = LibKey.computeKeyFingerprint(inputs.oldTpmSigningKey);
+        if (oldTpmSigningKeyFingerprint != oldSession.tpmSigningKeyFingerprint) {
+            revert Unauthorized();
+        }
+
+        bytes32 akPubFingerprint = LibKey.computeKeyFingerprint(inputs.akPub);
+        if (akPubFingerprint != oldSession.akPubKeyFingerprint) {
+            revert Unauthorized();
+        }
+
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(inputs.ownerIdentity);
+        if (ownerFingerprint != oldSession.owner) {
+            revert Unauthorized();
+        }
+
+        return RotationContext({
+            ownerFingerprint: ownerFingerprint,
+            baseImageId: oldSession.baseImageId,
+            workloadId: oldSession.workloadId,
+            platformProfileId: oldSession.platformProfileId,
+            measurementVariantId: oldSession.measurementVariantId,
+            expiresAt: oldSession.expiresAt
+        });
+    }
+
+    function _verifyRotationQuote(RotationInputs memory inputs, bytes32 ownerFingerprint)
+        internal
+        returns (PcrValue[] memory pcrValues, bytes32 tpmSignatureHash)
+    {
+        uint256 nonce = _ownerNonces[ownerFingerprint];
+        bytes32 expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, ownerFingerprint, nonce));
+
+        TpmQuoteVerificationResult memory quoteResult =
+            verifyTpmQuote(inputs.tpmQuoteReport, inputs.akPub, expectedExtraData);
+        if (!quoteResult.valid) {
+            revert TPMQuoteVerificationFailed();
+        }
+
+        TpmQuoteReport memory quoteReport = abi.decode(inputs.tpmQuoteReport.data, (TpmQuoteReport));
+        return (quoteResult.pcrValues, keccak256(quoteReport.tpmSignature));
+    }
+
+    function _evaluateRotationPolicy(RotationContext memory ctx, PcrValue[] memory pcrValues) internal view {
+        if (!workloadRegistry.isWorkloadActive(ctx.workloadId)) {
+            revert WorkloadNotActive(ctx.workloadId);
+        }
+
+        if (!baseImageRegistry.isBaseImageActive(ctx.baseImageId)) {
+            revert BaseImageNotActive(ctx.baseImageId);
+        }
+
+        if (!workloadRegistry.isBaseImageAllowed(ctx.workloadId, ctx.baseImageId)) {
+            revert BaseImageNotAllowed(ctx.baseImageId);
+        }
+
+        (, PlatformProfile memory platformProfile, MeasurementVariant memory variant) =
+            baseImageRegistry.getVariant(ctx.baseImageId, ctx.platformProfileId, ctx.measurementVariantId);
+
+        WorkloadSpec memory workloadSpec = workloadRegistry.getWorkload(ctx.workloadId);
+
+        // No TEE re-attestation during rotation; skip GCP PCR15 binding check
+        _evaluatePolicy(pcrValues, platformProfile, variant, workloadSpec, bytes32(0));
+    }
+
+    function _verifyRotationCertifyAndDelegation(
+        RotationInputs memory inputs,
+        bytes32 tpmSignatureHash,
+        RotationContext memory ctx
+    ) internal view returns (RotationResults memory results) {
+        TpmCertifyVerificationResult memory certifyResult =
+            verifyTpmCertify(inputs.tpmCertifyReport, inputs.akPub);
+        if (!certifyResult.valid) {
+            revert TPMCertifyVerificationFailed();
+        }
+
+        bytes32 sessionKeyFingerprint = LibKey.computeKeyFingerprint(inputs.sessionKey);
+
+        bytes32 rotationMessage = keccak256(
+            abi.encode(
+                ROTATION_DOMAIN,
+                inputs.oldSessionId,
+                certifyResult.certifiedKeyFingerprint,
+                sessionKeyFingerprint,
+                inputs.teeReportSignatureHash
+            )
+        );
+
+        if (!signatureVerifier.verify(inputs.oldTpmSigningKey, rotationMessage, inputs.rotationSignature)) {
+            revert InvalidSignature();
+        }
+
+        bytes32 newSessionId = _computeSessionId(tpmSignatureHash, inputs.teeReportSignatureHash);
+        if (_sessionExists[newSessionId]) {
+            revert SessionAlreadyExists();
+        }
+
+        bytes32 delegationMessage = keccak256(
+            abi.encode(DELEGATION_DOMAIN, ctx.baseImageId, ctx.workloadId, newSessionId, sessionKeyFingerprint)
+        );
+
+        if (!signatureVerifier.verify(certifyResult.certifiedKey, delegationMessage, inputs.sessionKeySignature)) {
+            revert SessionKeyDelegationFailed();
+        }
+
+        return RotationResults({
+            newSessionId: newSessionId,
+            newTpmSigningKeyFingerprint: certifyResult.certifiedKeyFingerprint,
+            sessionKeyFingerprint: sessionKeyFingerprint,
+            newTpmSigningKey: certifyResult.certifiedKey
+        });
+    }
+
+    function _finalizeRotation(RotationInputs memory inputs, RotationResults memory results, RotationContext memory ctx)
+        internal
+    {
+        if (block.timestamp > inputs.expireAt) {
+            revert SignatureExpired();
+        }
+
+        bytes32 message = sha256(
+            abi.encode(
+                SESSION_ROTATE_MSG,
+                block.chainid,
+                address(this),
+                inputs.expireAt,
+                inputs.oldSessionId,
+                results.newSessionId
+            )
+        );
+
+        if (!signatureVerifier.verify(inputs.ownerIdentity, message, inputs.ownerSignature)) {
+            revert InvalidSignature();
+        }
+
+        _sessions[inputs.oldSessionId].isActive = false;
+
+        _sessions[results.newSessionId] = CVMSession({
+            sessionId: results.newSessionId,
+            owner: ctx.ownerFingerprint,
+            akPubKeyFingerprint: _sessions[inputs.oldSessionId].akPubKeyFingerprint,
+            tpmSigningKeyFingerprint: results.newTpmSigningKeyFingerprint,
+            sessionKeyFingerprint: results.sessionKeyFingerprint,
+            baseImageId: ctx.baseImageId,
+            workloadId: ctx.workloadId,
+            platformProfileId: ctx.platformProfileId,
+            measurementVariantId: ctx.measurementVariantId,
+            registeredAt: uint64(block.timestamp),
+            expiresAt: ctx.expiresAt,
+            isActive: true
+        });
+
+        _sessionExists[results.newSessionId] = true;
+
+        _ownerNonces[ctx.ownerFingerprint] += 1;
+        _ownerSessions[ctx.ownerFingerprint].push(results.newSessionId);
+
+        emit SessionRotated(
+            inputs.oldSessionId,
+            results.newSessionId,
+            ctx.ownerFingerprint,
+            results.newTpmSigningKeyFingerprint,
+            results.sessionKeyFingerprint
+        );
+
+        emit AttestationKeysRevealed(results.newSessionId, inputs.akPub, results.newTpmSigningKey, inputs.sessionKey);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -495,7 +762,9 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         TpmQuoteReport memory quoteReport = abi.decode(evidence.tpmQuoteReport.data, (TpmQuoteReport));
 
         // Compute session ID
-        bytes32 sessionId = keccak256(abi.encode(SESSION_DOMAIN, quoteReport.tpmSignature, evidence.teeReport.data));
+        bytes32 tpmSignatureHash = keccak256(quoteReport.tpmSignature);
+        bytes32 teeReportSignatureHash = keccak256(evidence.teeReport.data);
+        bytes32 sessionId = _computeSessionId(tpmSignatureHash, teeReportSignatureHash);
 
         // Build delegation message
         bytes32 delegationMessage =
@@ -507,6 +776,15 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         }
 
         return DelegationResult({sessionId: sessionId, sessionKeyFingerprint: sessionKeyFingerprint});
+    }
+
+    /// @dev Computes the domain-separated session ID from signature hashes
+    function _computeSessionId(bytes32 tpmSignatureHash, bytes32 teeReportSignatureHash)
+        internal
+        pure
+        returns (bytes32 sessionId)
+    {
+        return keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportSignatureHash));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════

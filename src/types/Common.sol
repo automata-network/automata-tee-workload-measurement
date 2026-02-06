@@ -142,7 +142,7 @@ struct WorkloadSpec {
 struct CVMSession {
     // Identity
     bytes32 sessionId; // Unique session identifier
-    bytes32 owner; // Session owner (address encoded as bytes32)
+    bytes32 owner; // Session owner (PublicIdentity fingerprint)
 
     // Key Fingerprints (complete verification chain)
     bytes32 akPubKeyFingerprint; // Attestation Key (root of trust)
