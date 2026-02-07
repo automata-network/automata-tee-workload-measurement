@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity, PcrSpec, Attribute} from "./types/Common.sol";
+import {
+    BaseImageSpec,
+    PlatformProfile,
+    MeasurementVariant,
+    PublicIdentity,
+    PcrSpec,
+    Attribute
+} from "./types/Common.sol";
 import {
     BASEIMAGE_DOMAIN,
     PLATFORM_PROFILE_DOMAIN,

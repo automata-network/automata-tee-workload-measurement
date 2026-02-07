@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.15;
 
-import {BytesUtils} from "@automata-network/automata-tpm-attestation/lib/BytesUtils.sol";
-import {Bytes48} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
+import {BytesUtils} from "./BytesUtils.sol";
+import {Bytes48} from "./LibBytes.sol";
 
 library Sha2Ext {
     using BytesUtils for bytes;
