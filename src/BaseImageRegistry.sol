@@ -135,7 +135,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
 
         // Store base image
         _baseImages[baseImageId].exists = true;
-        _baseImages[baseImageId].isActive = true;
+        _baseImages[baseImageId].isRevoked = false;
         _baseImages[baseImageId].owner = ownerFingerprint;
         _baseImages[baseImageId].spec = spec;
 
@@ -189,7 +189,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         if (!_baseImages[baseImageId].exists) {
             revert BaseImageNotFound(baseImageId);
         }
-        if (!_baseImages[baseImageId].isActive) {
+        if (_baseImages[baseImageId].isRevoked) {
             revert BaseImageNotActive(baseImageId);
         }
 
@@ -209,7 +209,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         }
 
         // Deactivate
-        _baseImages[baseImageId].isActive = false;
+        _baseImages[baseImageId].isRevoked = true;
 
         emit BaseImageDeactivated(baseImageId, ownerFingerprint);
     }
@@ -278,8 +278,8 @@ contract BaseImageRegistry is IBaseImageRegistry {
     }
 
     /// @inheritdoc IBaseImageRegistry
-    function isBaseImageActive(bytes32 baseImageId) external view returns (bool) {
-        return _baseImages[baseImageId].exists && _baseImages[baseImageId].isActive;
+    function isBaseImageRevoked(bytes32 baseImageId) external view returns (bool) {
+        return _baseImages[baseImageId].isRevoked;
     }
 
     /// @inheritdoc IBaseImageRegistry

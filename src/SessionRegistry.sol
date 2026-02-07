@@ -694,11 +694,11 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         view
         returns (PolicyContext memory ctx)
     {
-        if (!workloadRegistry.isWorkloadActive(workloadId)) {
+        if (workloadRegistry.isWorkloadRevoked(workloadId)) {
             revert WorkloadNotActive(workloadId);
         }
 
-        if (!baseImageRegistry.isBaseImageActive(baseImageId)) {
+        if (baseImageRegistry.isBaseImageRevoked(baseImageId)) {
             revert BaseImageNotActive(baseImageId);
         }
 

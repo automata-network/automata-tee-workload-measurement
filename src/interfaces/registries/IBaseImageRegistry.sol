@@ -6,7 +6,7 @@ import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity} from
 /// @dev implements mapping (bytes32 baseImageId => BaseImageSpecStorage)
 struct BaseImageSpecStorage {
     bool exists;
-    bool isActive;
+    bool isRevoked;
     bytes32 owner;
     BaseImageSpec spec;
     bytes32[] platformProfileIds;
@@ -131,10 +131,10 @@ interface IBaseImageRegistry {
     /// @return The owner's identity fingerprint (bytes32)
     function getBaseImageOwner(bytes32 baseImageId) external view returns (bytes32);
 
-    /// @notice Check if a base image is active
+    /// @notice Check if a base image is revoked
     /// @param baseImageId The base image identifier
-    /// @return True if the base image is active
-    function isBaseImageActive(bytes32 baseImageId) external view returns (bool);
+    /// @return True if the base image is revoked
+    function isBaseImageRevoked(bytes32 baseImageId) external view returns (bool);
 
     /// @notice Check if a measurement variant exists
     /// @param variantId The variant identifier

@@ -61,10 +61,10 @@ contract KeyResolver is IKeyResolver {
 
     /// @inheritdoc IKeyResolver
     function getIdentity(bytes32 fingerprint) external view returns (PublicIdentity memory identity) {
+        identity = _identities[fingerprint];
         if (identity.typeId == ALGO_ID_NULL) {
             revert IdentityNotFound(fingerprint);
         }
-        identity = _identities[fingerprint];
     }
 
     /// @inheritdoc IKeyResolver

@@ -83,7 +83,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
 
         // Store workload
         _workloads[workloadId].exists = true;
-        _workloads[workloadId].isActive = true;
+        _workloads[workloadId].isRevoked = false;
         _workloads[workloadId].owner = ownerFingerprint;
         _workloads[workloadId].workloadSpec = spec;
 
@@ -111,7 +111,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
         if (!_workloads[workloadId].exists) {
             revert WorkloadNotFound(workloadId);
         }
-        if (!_workloads[workloadId].isActive) {
+        if (_workloads[workloadId].isRevoked) {
             revert WorkloadNotActive(workloadId);
         }
 
@@ -131,7 +131,7 @@ contract WorkloadRegistry is IWorkloadRegistry {
         }
 
         // Deactivate
-        _workloads[workloadId].isActive = false;
+        _workloads[workloadId].isRevoked = true;
 
         emit WorkloadDeactivated(workloadId, ownerFingerprint);
     }
@@ -153,8 +153,8 @@ contract WorkloadRegistry is IWorkloadRegistry {
     }
 
     /// @inheritdoc IWorkloadRegistry
-    function isWorkloadActive(bytes32 workloadId) external view returns (bool) {
-        return _workloads[workloadId].exists && _workloads[workloadId].isActive;
+    function isWorkloadRevoked(bytes32 workloadId) external view returns (bool) {
+        return _workloads[workloadId].isRevoked;
     }
 
     /// @inheritdoc IWorkloadRegistry
