@@ -20,7 +20,7 @@ library LibBytes {
     bytes16 private constant _SYMBOLS = "0123456789abcdef";
 
     function readBytes48(bytes memory input, uint256 offset) internal pure returns (Bytes48 memory output) {
-        assembly {
+        assembly ("memory-safe") {
             function store48(dest, src, off) {
                 mstore(dest, mload(add(add(src, 0x20), off)))
                 mstore(add(dest, 0x20), mload(add(add(src, 0x40), off)))
@@ -30,7 +30,7 @@ library LibBytes {
     }
 
     function readBytes64(bytes memory input, uint256 offset) internal pure returns (Bytes64 memory output) {
-        assembly {
+        assembly ("memory-safe") {
             function store64(dest, src, off) {
                 mstore(dest, mload(add(add(src, 0x20), off)))
                 mstore(add(dest, 0x20), mload(add(add(src, 0x40), off)))
@@ -40,19 +40,19 @@ library LibBytes {
     }
 
     function readBytes2(bytes memory input, uint256 offset) internal pure returns (bytes2 output) {
-        assembly {
+        assembly ("memory-safe") {
             output := mload(add(add(input, 0x20), offset))
         }
     }
 
     function readBytes4(bytes memory input, uint256 offset) internal pure returns (bytes4 output) {
-        assembly {
+        assembly ("memory-safe") {
             output := mload(add(add(input, 0x20), offset))
         }
     }
 
     function readBytes32(bytes memory input, uint256 offset) internal pure returns (bytes32 output) {
-        assembly {
+        assembly ("memory-safe") {
             output := mload(add(add(input, 0x20), offset))
         }
     }
