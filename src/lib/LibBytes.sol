@@ -19,6 +19,9 @@ struct Bytes48 {
 library LibBytes {
     bytes16 private constant _SYMBOLS = "0123456789abcdef";
 
+    /// @notice Byte array length is invalid
+    error InvalidLength();
+
     function readBytes48(bytes memory input, uint256 offset) internal pure returns (Bytes48 memory output) {
         assembly ("memory-safe") {
             function store48(dest, src, off) {
@@ -58,12 +61,12 @@ library LibBytes {
     }
 
     function toBytes48(bytes memory data) internal pure returns (Bytes48 memory) {
-        require(data.length == 48, "Invalid length");
+        if (data.length != 48) revert InvalidLength();
         return readBytes48(data, 0);
     }
 
     function toBytes64(bytes memory data) internal pure returns (Bytes64 memory) {
-        require(data.length == 64, "Invalid length");
+        if (data.length != 64) revert InvalidLength();
         return readBytes64(data, 0);
     }
 

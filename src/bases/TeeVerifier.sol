@@ -77,10 +77,10 @@ abstract contract TeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice TEE type is not supported by this verifier
-    error UnsupportedTeeType(TEEType teeType);
+    error UnsupportedTeeType();
 
     /// @notice Verification backend type is not supported for this TEE type
-    error UnsupportedBackendType(VerificationBackendType backendType);
+    error UnsupportedBackendType();
 
     /// @notice DCAP output is malformed or too short
     error InvalidDcapOutput();
@@ -109,7 +109,7 @@ abstract contract TeeVerifier {
         } else if (teeReport.teeType == TEEType.AmdSevSnp) {
             return _verifyAmdSevSnp(teeReport);
         } else {
-            revert UnsupportedTeeType(teeReport.teeType);
+            revert UnsupportedTeeType();
         }
     }
 
@@ -266,7 +266,7 @@ abstract contract TeeVerifier {
     function _verifyAmdSevSnp(TeeReport memory teeReport) private returns (TeeVerificationResult memory result) {
         // SNP does not support Solidity backend (no on-chain verifier exists)
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
-            revert UnsupportedBackendType(teeReport.verificationBackendType);
+            revert UnsupportedBackendType();
         }
 
         // ZK proof verification

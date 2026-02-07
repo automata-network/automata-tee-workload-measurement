@@ -33,13 +33,10 @@ abstract contract AkCollateralVerifier is TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice AK collateral type is not supported
-    error UnsupportedAkCollateralType(AkPubCollateralType collateralType);
+    error UnsupportedAkCollateralType();
 
     /// @notice Azure JWK parsing failed
-    error AzureJwkParsingFailed(string reason);
-
-    /// @notice GCP certificate chain verification failed
-    error GcpCertChainVerificationFailed();
+    error AzureJwkParsingFailed();
 
     /// @notice Verifies AK collateral and extracts the AK public key
     /// @param collateral The AK collateral to verify (Azure JWK or GCP cert chain)
@@ -53,7 +50,7 @@ abstract contract AkCollateralVerifier is TpmBase {
         } else if (collateral.akPubCollateralType == AkPubCollateralType.GcpCertChain) {
             return _verifyGcpAkCollateral(collateral.data);
         } else {
-            revert UnsupportedAkCollateralType(collateral.akPubCollateralType);
+            revert UnsupportedAkCollateralType();
         }
     }
 
@@ -93,32 +90,32 @@ abstract contract AkCollateralVerifier is TpmBase {
         // Find "kid":"HCLAkPub" to identify the correct key
         uint256 kidPos = LibString.indexOf(json, '"kid":"HCLAkPub"');
         if (kidPos == type(uint256).max) {
-            revert AzureJwkParsingFailed("HCLAkPub not found");
+            revert AzureJwkParsingFailed();
         }
 
         // Extract "kty" field (must be "RSA")
         uint256 ktyPos = LibString.indexOf(json, '"kty":"');
         if (ktyPos == type(uint256).max) {
-            revert AzureJwkParsingFailed("kty field not found");
+            revert AzureJwkParsingFailed();
         }
 
         // Check if kty is "RSA" (position + 7 chars for "kty":" = start of value)
         string memory ktyValue = LibString.slice(json, ktyPos + 7, ktyPos + 10);
         if (!LibString.eq(ktyValue, "RSA")) {
-            revert AzureJwkParsingFailed("kty must be RSA");
+            revert AzureJwkParsingFailed();
         }
 
         // Extract "n" field (RSA modulus, base64url encoded)
         uint256 nPos = LibString.indexOf(json, '"n":"');
         if (nPos == type(uint256).max) {
-            revert AzureJwkParsingFailed("n field not found");
+            revert AzureJwkParsingFailed();
         }
 
         // Find the closing quote for "n" value
         uint256 nStart = nPos + 5; // Skip '"n":"'
         uint256 nEnd = LibString.indexOf(LibString.slice(json, nStart), '"');
         if (nEnd == type(uint256).max) {
-            revert AzureJwkParsingFailed("n field malformed");
+            revert AzureJwkParsingFailed();
         }
         nEnd += nStart;
 
@@ -127,13 +124,13 @@ abstract contract AkCollateralVerifier is TpmBase {
         // Extract "e" field (RSA exponent, base64url encoded)
         uint256 ePos = LibString.indexOf(json, '"e":"');
         if (ePos == type(uint256).max) {
-            revert AzureJwkParsingFailed("e field not found");
+            revert AzureJwkParsingFailed();
         }
 
         uint256 eStart = ePos + 5; // Skip '"e":"'
         uint256 eEnd = LibString.indexOf(LibString.slice(json, eStart), '"');
         if (eEnd == type(uint256).max) {
-            revert AzureJwkParsingFailed("e field malformed");
+            revert AzureJwkParsingFailed();
         }
         eEnd += eStart;
 
@@ -145,10 +142,10 @@ abstract contract AkCollateralVerifier is TpmBase {
 
         // Validate decoded values
         if (nBytes.length == 0) {
-            revert AzureJwkParsingFailed("n decode failed");
+            revert AzureJwkParsingFailed();
         }
         if (eBytes.length == 0) {
-            revert AzureJwkParsingFailed("e decode failed");
+            revert AzureJwkParsingFailed();
         }
 
         // Build RSA public key using LibX509

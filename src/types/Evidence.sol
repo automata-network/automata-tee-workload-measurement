@@ -4,16 +4,6 @@ pragma solidity ^0.8.27;
 import {PublicIdentity} from "./Common.sol";
 import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 
-/// @notice Cloud provider classification for attestation routing
-enum CloudType {
-    /// @dev Microsoft Azure Confidential VMs
-    Azure,
-    /// @dev Google Cloud Confidential VMs
-    GCP,
-    /// @dev Amazon Web Services Confidential VMs
-    AWS
-}
-
 /// @notice Trusted Execution Environment type supported by the platform
 enum TEEType {
     /// @dev Intel Trust Domain Extensions (TDX)

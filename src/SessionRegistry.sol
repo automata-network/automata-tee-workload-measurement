@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 import {IDcapAttestation} from "./interfaces/external/IDcapAttestation.sol";
 import {ISnpAttestation} from "./interfaces/external/ISnpAttestation.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
@@ -42,7 +43,6 @@ import {
 import {LibKey} from "./lib/LibKey.sol";
 import {LibBytes, Bytes48} from "./lib/LibBytes.sol";
 import {Sha2Ext} from "./lib/Sha2Ext.sol";
-import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 
 /// @title SessionRegistry
 /// @notice Central orchestrator for CVM session registration with 9-step attestation verification
@@ -142,10 +142,10 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
     error SessionKeyDelegationFailed();
 
     /// @notice PCR verification failed
-    error PCRVerificationFailed(uint8 pcrIndex);
+    error PCRVerificationFailed();
 
     /// @notice PCR not found in quote
-    error PCRNotFound(uint8 pcrIndex);
+    error PCRNotFound();
 
     /// @notice Attribute not found
     error AttributeNotFound(bytes32 key);
@@ -876,7 +876,7 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
 
             // Verify PCR15 matches expected value
             if (measuredPcr15.value != expectedPcr15) {
-                revert PCRVerificationFailed(GCP_BINDING_PCR_INDEX);
+                revert PCRVerificationFailed();
             }
         }
 
@@ -951,10 +951,13 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
 
         // Compute expected RTMR3 = sha384( bytes48(0) || sha384(UUID) )
         Bytes48 memory uuidHash = Sha2Ext.sha384(uuidBytes);
-        Bytes48 memory expectedRtmr3 = Sha2Ext.sha384(abi.encodePacked(
-            new bytes(48),          // 48 zero bytes
-            uuidHash.first, uuidHash.second // 48-byte inner hash
-        ));
+        Bytes48 memory expectedRtmr3 = Sha2Ext.sha384(
+            abi.encodePacked(
+                new bytes(48), // 48 zero bytes
+                uuidHash.first,
+                uuidHash.second // 48-byte inner hash
+            )
+        );
 
         if (!LibBytes.equal(actualRtmr3, expectedRtmr3)) {
             revert TEEAKBindingFailed();
@@ -1057,12 +1060,12 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
                 j++;
             } else {
                 // Spec PCR missing from measured set
-                revert PCRNotFound(specIdx);
+                revert PCRNotFound();
             }
         }
 
         if (i < specs.length) {
-            revert PCRNotFound(specs[i].pcrIndex);
+            revert PCRNotFound();
         }
     }
 
@@ -1076,7 +1079,7 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
                 return pcrValues[i];
             }
         }
-        revert PCRNotFound(pcrIndex);
+        revert PCRNotFound();
     }
 
     /// @dev Evaluates a single PCR spec against a measured PCR value
@@ -1086,7 +1089,7 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         if (spec.verifyType == PcrVerifyType.STATIC) {
             // STATIC: exact value match
             if (measured.value != spec.matchData[0]) {
-                revert PCRVerificationFailed(spec.pcrIndex);
+                revert PCRVerificationFailed();
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSET) {
             // DYNAMIC_SUBSET: eventLogHashes ⊆ matchData
@@ -1099,7 +1102,7 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
                     }
                 }
                 if (!found) {
-                    revert PCRVerificationFailed(spec.pcrIndex);
+                    revert PCRVerificationFailed();
                 }
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSEQUENCE) {
@@ -1111,7 +1114,7 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
                 }
             }
             if (matchIdx != spec.matchData.length) {
-                revert PCRVerificationFailed(spec.pcrIndex);
+                revert PCRVerificationFailed();
             }
         }
     }
@@ -1130,24 +1133,11 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
         pure
         returns (Attribute[] memory merged)
     {
-        // Count profile attributes that are not overridden by the variant
-        uint256 profileCount = 0;
-        for (uint256 i = 0; i < profileAttrs.length; i++) {
-            bool overridden = false;
-            for (uint256 j = 0; j < variantAttrs.length; j++) {
-                if (profileAttrs[i].key == variantAttrs[j].key) {
-                    overridden = true;
-                    break;
-                }
-            }
-            if (!overridden) {
-                profileCount++;
-            }
-        }
-
-        // Merge: profile attributes without overrides, then all variant attributes
-        merged = new Attribute[](profileCount + variantAttrs.length);
+        // Allocate max-size array (worst case: no overlaps)
+        merged = new Attribute[](profileAttrs.length + variantAttrs.length);
         uint256 writeIdx = 0;
+
+        // Single-pass: add profile attributes that are not overridden
         for (uint256 i = 0; i < profileAttrs.length; i++) {
             bool overridden = false;
             for (uint256 j = 0; j < variantAttrs.length; j++) {
@@ -1161,9 +1151,16 @@ contract SessionRegistry is ISessionRegistry, TeeVerifier, TpmVerifier, AkCollat
                 writeIdx++;
             }
         }
+
+        // Add all variant attributes
         for (uint256 i = 0; i < variantAttrs.length; i++) {
             merged[writeIdx] = variantAttrs[i];
             writeIdx++;
+        }
+
+        // Trim array to actual size using assembly
+        assembly ("memory-safe") {
+            mstore(merged, writeIdx)
         }
 
         return merged;

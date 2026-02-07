@@ -212,7 +212,7 @@ library BytesUtils {
     }
 
     function readBytes8(bytes memory b, uint256 index) internal pure returns (bytes8 result) {
-        require(b.length >= index + 8, "GREATER_OR_EQUAL_TO_8_LENGTH_REQUIRED");
+        require(b.length >= index + 8);
 
         // Arrays are prefixed by a 32 byte length field
         index += 32;

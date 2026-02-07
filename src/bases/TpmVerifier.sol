@@ -58,19 +58,25 @@ abstract contract TpmVerifier is TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice TPM report type does not match expected type for this operation
-    error UnexpectedTpmReportType(TpmReportType expected, TpmReportType actual);
+    error UnexpectedTpmReportType();
 
     /// @notice Verification backend type is not supported for TPM verification
-    error UnsupportedTpmBackendType(VerificationBackendType backendType);
+    error UnsupportedTpmBackendType();
 
     /// @notice TPM quote extraData does not match expected nonce
-    error TpmQuoteExtraDataMismatch(bytes expected, bytes actual);
+    error TpmQuoteExtraDataMismatch();
 
     /// @notice TPM quote PCR measurement check failed
     error TpmQuotePcrCheckFailed();
 
+    /// @notice TPM quote library verification failed
+    error TpmQuoteLibraryFailed();
+
     /// @notice TPMA_OBJECT attributes contain forbidden bits
-    error TpmaObjectForbiddenBitsSet(uint32 attributes, uint32 forbiddenMask);
+    error TpmaObjectForbiddenBitsSet();
+
+    /// @notice TPMT_PUBLIC structure is too short
+    error TpmtPublicTooShort();
 
     /// @notice Verifies a TPM Quote report (PCR snapshot with signature)
     /// @param tpmReport The TPM Quote report to verify
@@ -83,12 +89,12 @@ abstract contract TpmVerifier is TpmBase {
     {
         // Validate TPM report type
         if (tpmReport.tpmReportType != TpmReportType.TpmQuote) {
-            revert UnexpectedTpmReportType(TpmReportType.TpmQuote, tpmReport.tpmReportType);
+            revert UnexpectedTpmReportType();
         }
 
         // Only Solidity backend supported for now (ZK support planned)
         if (tpmReport.verificationBackendType != VerificationBackendType.Solidity) {
-            revert UnsupportedTpmBackendType(tpmReport.verificationBackendType);
+            revert UnsupportedTpmBackendType();
         }
 
         // Decode TPM quote report
@@ -103,11 +109,11 @@ abstract contract TpmVerifier is TpmBase {
         );
 
         // Library returns false on failure instead of reverting in some paths
-        require(success, string(extraData));
+        if (!success) revert TpmQuoteLibraryFailed();
 
         // Validate extraData matches expected nonce
         if (keccak256(extraData) != keccak256(abi.encodePacked(expectedExtraData))) {
-            revert TpmQuoteExtraDataMismatch(abi.encodePacked(expectedExtraData), extraData);
+            revert TpmQuoteExtraDataMismatch();
         }
 
         // Check PCR measurements (library emits events, reverts on failure)
@@ -131,12 +137,12 @@ abstract contract TpmVerifier is TpmBase {
     {
         // Validate TPM report type
         if (tpmReport.tpmReportType != TpmReportType.TpmCertify) {
-            revert UnexpectedTpmReportType(TpmReportType.TpmCertify, tpmReport.tpmReportType);
+            revert UnexpectedTpmReportType();
         }
 
         // Only Solidity backend supported for now
         if (tpmReport.verificationBackendType != VerificationBackendType.Solidity) {
-            revert UnsupportedTpmBackendType(tpmReport.verificationBackendType);
+            revert UnsupportedTpmBackendType();
         }
 
         // Decode TPM certify report
@@ -171,7 +177,7 @@ abstract contract TpmVerifier is TpmBase {
     /// @dev Validates that forbidden TPMA_OBJECT attribute bits are not set
     /// @param tpmtPublic The TPMT_PUBLIC structure containing attributes at offset 4
     function _validateClearBits(bytes memory tpmtPublic) private pure {
-        require(tpmtPublic.length >= 8, "TPMT_PUBLIC too short");
+        if (tpmtPublic.length < 8) revert TpmtPublicTooShort();
 
         // Extract uint32 attributes from tpmtPublic[4:8] (big-endian)
         uint32 attributes;
@@ -184,7 +190,7 @@ abstract contract TpmVerifier is TpmBase {
 
         // Check forbidden bits are not set
         if ((attributes & TPMA_OBJECT_REQUIRED_CLEAR) != 0) {
-            revert TpmaObjectForbiddenBitsSet(attributes, TPMA_OBJECT_REQUIRED_CLEAR);
+            revert TpmaObjectForbiddenBitsSet();
         }
     }
 }
