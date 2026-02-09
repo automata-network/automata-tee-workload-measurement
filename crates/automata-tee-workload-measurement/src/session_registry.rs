@@ -40,16 +40,14 @@ impl SessionRegistry {
     /// Query the nonce for a given owner fingerprint.
     ///
     /// The nonce is used in TPM quote extraData binding to prevent replay attacks.
-    pub async fn get_nonce(&self, owner_fingerprint: B256) -> Result<u64> {
+    pub async fn get_nonce(&self, owner_fingerprint: B256) -> Result<U256> {
         let nonce = self
             .stub
             .getNonce(owner_fingerprint)
             .call()
             .await
             .context("Failed to call getNonce")?;
-        // Convert U256 to u64 (will be 0 if overflow)
-        let nonce_u64: u64 = nonce.try_into().unwrap_or(0);
-        Ok(nonce_u64)
+        Ok(nonce)
     }
 
     /// Register a session to the SessionRegistry contract.

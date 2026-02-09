@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use alloy::{ext::NetworkProvider, primitives::Address, signers::local::PrivateKeySigner};
+use alloy::{
+    ext::NetworkProvider,
+    primitives::{Address, U256},
+    signers::local::PrivateKeySigner,
+};
 use anyhow::{Context, Result};
 
 use crate::{
@@ -14,6 +18,7 @@ use crate::{
     workload_registry::WorkloadRegistry,
 };
 
+#[allow(dead_code)]
 pub struct WorkloadMeasurement {
     cfg: WorkloadMeasurementConfig,
     provider: NetworkProvider,
