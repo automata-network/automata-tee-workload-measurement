@@ -94,6 +94,8 @@ interface ISessionRegistry {
 
     function getSessionId(bytes32 sessionFingerprint) external view returns (bytes32 sessionId);
 
+    function getSessionOwner(bytes32 sessionId) external view returns (bytes32 ownerFingerprint);
+
     /// @notice Revoke a session (only by owner)
     /// @param sessionId The session identifier
     /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)

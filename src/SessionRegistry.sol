@@ -380,6 +380,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         return _sessionFingerprintsToIds[sessionFingerprint];
     }
 
+    function getSessionOwner(bytes32 sessionId) external view returns (bytes32 ownerFingerprint) {
+        CVMSessionStorage storage sessionStorage = _sessions[sessionId];
+        if (!sessionStorage.exists) {
+            revert SessionNotFound();
+        }
+        return sessionStorage.owner;
+    }
+
     /// @inheritdoc ISessionRegistry
     function isSessionActive(bytes32 sessionId) external view returns (bool) {
         return _isSessionActive(_sessions[sessionId]);
