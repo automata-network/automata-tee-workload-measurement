@@ -87,7 +87,7 @@ impl Relay {
 
         // Convert owner identity
         let owner_identity = PublicIdentity {
-            typeId: request.owner_identity.typeId,
+            type_id: request.owner_identity.type_id,
             key: request.owner_identity.key,
         };
 
@@ -96,8 +96,8 @@ impl Relay {
 
         // Pre-compute session ID for logging
         let session_id = compute_session_id_from_parts(
-            &request.evidence.tpmQuoteReport.data,
-            &request.evidence.teeReport.data,
+            &request.evidence.tpm_quote_report.data,
+            &request.evidence.tee_report.data,
         )?;
 
         info!(
@@ -141,7 +141,7 @@ impl Relay {
 
         // Convert owner identity
         let owner_identity = PublicIdentity {
-            typeId: request.owner_identity.typeId,
+            type_id: request.owner_identity.type_id,
             key: request.owner_identity.key,
         };
 
@@ -151,7 +151,7 @@ impl Relay {
         // Pre-compute new session ID for logging
         let new_session_id = compute_new_session_id(
             tee_report_bytes_hash,
-            &rotation_evidence.tpmQuoteReport.data,
+            &rotation_evidence.tpm_quote_report.data,
         )?;
 
         info!(

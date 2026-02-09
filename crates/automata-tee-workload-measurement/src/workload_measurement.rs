@@ -27,9 +27,10 @@ pub struct WorkloadMeasurement {
     workload_registry: WorkloadRegistry,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkloadMeasurementConfig {
     pub rpc_url: String,
-    pub registry_address: Address,
     pub relay_key: Option<PrivateKeySigner>,
     pub session_registry_address: Address,
 }

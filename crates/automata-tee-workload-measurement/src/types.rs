@@ -57,6 +57,7 @@ impl std::fmt::Display for AppRef {
 
 /// Request for registerSession
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegisterSessionRequest {
     /// Attestation evidence from CVM agent
     pub evidence: AttestationEvidence,
@@ -78,6 +79,7 @@ pub struct RegisterSessionRequest {
 
 /// Response from registerSession
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegisterSessionResponse {
     /// The registered session ID
     pub session_id: B256,
@@ -87,6 +89,7 @@ pub struct RegisterSessionResponse {
 
 /// Request for rotateSession
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RotateSessionRequest {
     /// Old session ID to rotate from
     pub old_session_id: B256,
@@ -104,6 +107,7 @@ pub struct RotateSessionRequest {
 
 /// Response from rotateSession
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RotateSessionResponse {
     /// The new session ID after rotation
     pub new_session_id: B256,
