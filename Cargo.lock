@@ -211,7 +211,7 @@ dependencies = [
 [[package]]
 name = "alloy-ext"
 version = "1.6.1"
-source = "git+ssh://git@github.com/automata-network/alloy-ext.git#38c9d8b6a5eb5b1185c5bd1e812a2a6f1149f197"
+source = "git+https://github.com/automata-network/alloy-ext.git#38c9d8b6a5eb5b1185c5bd1e812a2a6f1149f197"
 dependencies = [
  "alloy",
  "alloy-signer-aws",
