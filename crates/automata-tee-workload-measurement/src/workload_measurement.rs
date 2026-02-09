@@ -2,10 +2,11 @@ use std::time::Duration;
 
 use alloy::{
     ext::{NetworkProvider, ProviderEx},
-    primitives::{Address, U256},
+    primitives::{Address, B256, U256},
     signers::local::PrivateKeySigner,
 };
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     base_image_registry::BaseImageRegistry,
@@ -31,7 +32,7 @@ pub struct WorkloadMeasurement {
 #[serde(rename_all = "camelCase")]
 pub struct WorkloadMeasurementConfig {
     pub rpc_url: String,
-    pub relay_key: Option<PrivateKeySigner>,
+    pub relay_key: Option<B256>,
     pub session_registry_address: Address,
 }
 
@@ -49,7 +50,8 @@ impl WorkloadMeasurement {
         .await
         .with_context(|| format!("connect to {}", cfg.rpc_url))?;
         if let Some(relay_key) = &cfg.relay_key {
-            provider = provider.with_signer(relay_key.clone());
+            let relay_key = PrivateKeySigner::from_bytes(&relay_key)?;
+            provider = provider.with_signer(relay_key);
         }
         let session_registry = SessionRegistry::new(cfg.session_registry_address, provider.clone());
         let base_image_registry = session_registry.base_image_registry().await?;
