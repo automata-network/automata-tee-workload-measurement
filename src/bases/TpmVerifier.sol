@@ -83,7 +83,7 @@ abstract contract TpmVerifier is TpmBase {
     /// @param akPub The Attestation Key public identity (root of trust from AK collateral)
     /// @param expectedExtraData The extraData that must be present in the TPM quote (for nonce binding)
     /// @return result Verification result containing PCR values and AK fingerprint
-    function verifyTpmQuote(TpmReport memory tpmReport, PublicIdentity memory akPub, bytes32 expectedExtraData)
+    function verifyTpmQuote(TpmReport memory tpmReport, PublicIdentity memory akPub, bytes memory expectedExtraData)
         internal
         returns (TpmQuoteVerificationResult memory result)
     {
@@ -112,7 +112,7 @@ abstract contract TpmVerifier is TpmBase {
         if (!success) revert TpmQuoteLibraryFailed();
 
         // Validate extraData matches expected nonce
-        if (keccak256(extraData) != keccak256(abi.encodePacked(expectedExtraData))) {
+        if (keccak256(extraData) != keccak256(expectedExtraData)) {
             revert TpmQuoteExtraDataMismatch();
         }
 

@@ -6,12 +6,15 @@ import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from ".
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title WorkloadRegistry
 /// @notice Registry for workload specifications with access control and PCR policies
 /// @dev Workload = containerized application (unprivileged), measured by PCR 20-23
 ///      Supports three access modes: ANY (all base images), WHITELIST (allowed set), BLACKLIST (blocked set)
-contract WorkloadRegistry is IWorkloadRegistry {
+contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     // ============================================================================
     // Errors
     // ============================================================================
@@ -25,6 +28,14 @@ contract WorkloadRegistry is IWorkloadRegistry {
     error InvalidPcrOrder();
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error DuplicateRequirementKey(bytes32 key);
+    error NotWhitelisted(bytes32 ownerFingerprint);
+
+    // ============================================================================
+    // Events
+    // ============================================================================
+
+    event WhitelistAdded(bytes32 indexed fingerprint);
+    event WhitelistRemoved(bytes32 indexed fingerprint);
 
     // ============================================================================
     // Storage
@@ -34,13 +45,24 @@ contract WorkloadRegistry is IWorkloadRegistry {
 
     mapping(bytes32 => WorkloadSpecStorage) private _workloads;
     mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageSet;
+    mapping(bytes32 => bool) private _whitelist;
 
     // ============================================================================
-    // Constructor
+    // Constructor & Initialization
     // ============================================================================
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(ISignatureVerifier _signatureVerifier) {
         signatureVerifier = _signatureVerifier;
+        _disableInitializers();
+    }
+
+    /// @notice Initializes the contract with the initial owner and paused state
+    /// @param initialOwner The address that will own the contract
+    function initialize(address initialOwner) external initializer {
+        __Ownable_init(initialOwner);
+        __Pausable_init();
+        _pause();
     }
 
     // ============================================================================
@@ -72,6 +94,9 @@ contract WorkloadRegistry is IWorkloadRegistry {
 
         // Compute owner fingerprint after duplicate check
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+
+        // Check whitelist if paused
+        _checkRegistrationAllowed(ownerFingerprint);
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
         bytes32 message = sha256(abi.encode(WORKLOAD_REGISTER_MSG, block.chainid, address(this), expireAt, spec));
@@ -175,6 +200,55 @@ contract WorkloadRegistry is IWorkloadRegistry {
         }
     }
 
+    // ============================================================================
+    // Admin Functions
+    // ============================================================================
+
+    /// @notice Adds fingerprints to the whitelist
+    /// @param fingerprints Array of fingerprints to add
+    function addToWhitelist(bytes32[] calldata fingerprints) external onlyOwner {
+        for (uint256 i = 0; i < fingerprints.length; i++) {
+            _whitelist[fingerprints[i]] = true;
+            emit WhitelistAdded(fingerprints[i]);
+        }
+    }
+
+    /// @notice Removes a fingerprint from the whitelist
+    /// @param fingerprint The fingerprint to remove
+    function removeFromWhitelist(bytes32 fingerprint) external onlyOwner {
+        _whitelist[fingerprint] = false;
+        emit WhitelistRemoved(fingerprint);
+    }
+
+    /// @notice Checks if a fingerprint is whitelisted
+    /// @param fingerprint The fingerprint to check
+    /// @return True if whitelisted
+    function isWhitelisted(bytes32 fingerprint) external view returns (bool) {
+        return _whitelist[fingerprint];
+    }
+
+    /// @notice Pauses the contract
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /// @notice Unpauses the contract
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    // ============================================================================
+    // Internal Functions
+    // ============================================================================
+
+    /// @dev Checks if registration is allowed based on pause state and whitelist
+    /// @param ownerFingerprint The owner's fingerprint
+    function _checkRegistrationAllowed(bytes32 ownerFingerprint) private view {
+        if (paused() && !_whitelist[ownerFingerprint]) {
+            revert NotWhitelisted(ownerFingerprint);
+        }
+    }
+
     function _validatePcrSpecsSorted(PcrSpec[] calldata pcrs) private pure {
         uint256 len = pcrs.length;
         uint256 prevIdx;
@@ -217,4 +291,19 @@ contract WorkloadRegistry is IWorkloadRegistry {
             keys[slot] = key;
         }
     }
+
+    // ============================================================================
+    // Internal Functions - UUPS
+    // ============================================================================
+
+    /// @dev Authorizes an upgrade to a new implementation
+    /// @param newImplementation Address of the new implementation
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    // ============================================================================
+    // Storage Gap
+    // ============================================================================
+
+    /// @dev Storage gap for future upgrades (3 existing mappings → 47-slot gap)
+    uint256[47] private __gap;
 }

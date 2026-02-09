@@ -86,65 +86,71 @@ abstract contract AkCollateralVerifier is TpmBase {
     function _parseAzureJwkAkPub(bytes memory jsonBytes) private pure returns (PublicIdentity memory) {
         // Convert bytes to string for parsing
         string memory json = string(jsonBytes);
+        bool ok = true;
 
         // Find "kid":"HCLAkPub" to identify the correct key
         uint256 kidPos = LibString.indexOf(json, '"kid":"HCLAkPub"');
-        if (kidPos == type(uint256).max) {
-            revert AzureJwkParsingFailed();
-        }
+        if (kidPos == type(uint256).max) ok = false;
 
         // Extract "kty" field (must be "RSA")
         uint256 ktyPos = LibString.indexOf(json, '"kty":"');
-        if (ktyPos == type(uint256).max) {
-            revert AzureJwkParsingFailed();
-        }
+        if (ktyPos == type(uint256).max) ok = false;
 
         // Check if kty is "RSA" (position + 7 chars for "kty":" = start of value)
-        string memory ktyValue = LibString.slice(json, ktyPos + 7, ktyPos + 10);
-        if (!LibString.eq(ktyValue, "RSA")) {
-            revert AzureJwkParsingFailed();
+        if (ok) {
+            string memory ktyValue = LibString.slice(json, ktyPos + 7, ktyPos + 10);
+            if (!LibString.eq(ktyValue, "RSA")) ok = false;
         }
 
         // Extract "n" field (RSA modulus, base64url encoded)
         uint256 nPos = LibString.indexOf(json, '"n":"');
-        if (nPos == type(uint256).max) {
-            revert AzureJwkParsingFailed();
-        }
+        if (nPos == type(uint256).max) ok = false;
 
         // Find the closing quote for "n" value
-        uint256 nStart = nPos + 5; // Skip '"n":"'
-        uint256 nEnd = LibString.indexOf(LibString.slice(json, nStart), '"');
-        if (nEnd == type(uint256).max) {
-            revert AzureJwkParsingFailed();
+        uint256 nStart;
+        uint256 nEnd;
+        string memory nBase64;
+        if (ok) {
+            nStart = nPos + 5; // Skip '"n":"'
+            nEnd = LibString.indexOf(LibString.slice(json, nStart), '"');
+            if (nEnd == type(uint256).max) {
+                ok = false;
+            } else {
+                nEnd += nStart;
+            }
         }
-        nEnd += nStart;
-
-        string memory nBase64 = LibString.slice(json, nStart, nEnd);
+        if (ok) {
+            nBase64 = LibString.slice(json, nStart, nEnd);
+        }
 
         // Extract "e" field (RSA exponent, base64url encoded)
         uint256 ePos = LibString.indexOf(json, '"e":"');
-        if (ePos == type(uint256).max) {
-            revert AzureJwkParsingFailed();
-        }
+        if (ePos == type(uint256).max) ok = false;
 
-        uint256 eStart = ePos + 5; // Skip '"e":"'
-        uint256 eEnd = LibString.indexOf(LibString.slice(json, eStart), '"');
-        if (eEnd == type(uint256).max) {
-            revert AzureJwkParsingFailed();
+        uint256 eStart;
+        uint256 eEnd;
+        string memory eBase64;
+        if (ok) {
+            eStart = ePos + 5; // Skip '"e":"'
+            eEnd = LibString.indexOf(LibString.slice(json, eStart), '"');
+            if (eEnd == type(uint256).max) {
+                ok = false;
+            } else {
+                eEnd += eStart;
+            }
         }
-        eEnd += eStart;
-
-        string memory eBase64 = LibString.slice(json, eStart, eEnd);
+        if (ok) {
+            eBase64 = LibString.slice(json, eStart, eEnd);
+        }
 
         // Decode base64url values (Solady Base64 handles base64url transparently)
-        bytes memory nBytes = Base64.decode(nBase64);
-        bytes memory eBytes = Base64.decode(eBase64);
+        bytes memory nBytes = ok ? Base64.decode(nBase64) : bytes("");
+        bytes memory eBytes = ok ? Base64.decode(eBase64) : bytes("");
 
         // Validate decoded values
-        if (nBytes.length == 0) {
-            revert AzureJwkParsingFailed();
-        }
-        if (eBytes.length == 0) {
+        if (nBytes.length == 0 || eBytes.length == 0) ok = false;
+
+        if (!ok) {
             revert AzureJwkParsingFailed();
         }
 

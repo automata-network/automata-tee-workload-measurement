@@ -60,6 +60,20 @@ struct TeeReport {
     bytes data;
 }
 
+/// @notice Result of TEE attestation report verification
+struct TeeVerificationResult {
+    /// @dev True if the TEE report signature and structure are valid
+    bool valid;
+    /// @dev Full report body extracted from the TEE attestation
+    ///      - For Intel TDX: TD10 (584 bytes) or TD15 (648 bytes) quote body
+    ///      - For AMD SEV-SNP: Full attestation report (1184 bytes)
+    ///      Use TeeVerifier.extractDcapReportData() or extractSnpReportData()
+    ///      to extract the 64-byte user data field from this report body.
+    bytes reportData;
+    /// @dev TEE technology type (Intel TDX or AMD SEV-SNP)
+    TEEType teeType;
+}
+
 /// @notice TPM report for platform binding verification
 struct TpmReport {
     /// @dev Verification backend (currently only Solidity supported; ZK support planned for event matching)
