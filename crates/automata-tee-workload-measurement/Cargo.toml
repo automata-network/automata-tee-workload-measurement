@@ -1,0 +1,13 @@
+[package]
+name = "automata-tee-workload-measurement"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+alloy.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
