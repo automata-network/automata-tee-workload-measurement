@@ -12,12 +12,14 @@ import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {TeeVerifier} from "../src/TeeVerifier.sol";
 
 /// @title DeployBase
 /// @notice Base deployment script with shared logic
 abstract contract DeployBase is Script, DeploymentConfig {
     // Deployed contract instances
     SignatureVerifier public signatureVerifier;
+    TeeVerifier public teeVerifier;
     BaseImageRegistry public baseImageRegistry;
     WorkloadRegistry public workloadRegistry;
     SessionRegistry public sessionRegistry;
@@ -37,13 +39,16 @@ abstract contract DeployBase is Script, DeploymentConfig {
         // Step 1: Deploy SignatureVerifier
         _deploySignatureVerifier();
 
-        // Step 2: Deploy BaseImageRegistry
+        // Step 2: Deploy TeeVerifier
+        _deployTeeVerifier();
+
+        // Step 3: Deploy BaseImageRegistry
         _deployBaseImageRegistry();
 
-        // Step 3: Deploy WorkloadRegistry
+        // Step 4: Deploy WorkloadRegistry
         _deployWorkloadRegistry();
 
-        // Step 4: Deploy SessionRegistry
+        // Step 5: Deploy SessionRegistry
         _deploySessionRegistry();
 
         // Write all addresses to JSON
@@ -60,6 +65,16 @@ abstract contract DeployBase is Script, DeploymentConfig {
         signatureVerifier = new SignatureVerifier(p256Verifier);
 
         console.log("  SignatureVerifier:", address(signatureVerifier));
+    }
+
+    function _deployTeeVerifier() internal {
+        console.log("Deploying TeeVerifier...");
+        console.log("  DCAP Attestation:", address(dcapAttestation));
+        console.log("  SNP Attestation:", address(snpAttestation));
+
+        teeVerifier = new TeeVerifier(dcapAttestation, snpAttestation);
+
+        console.log("  TeeVerifier:", address(teeVerifier));
     }
 
     function _deployBaseImageRegistry() internal {
@@ -80,13 +95,11 @@ abstract contract DeployBase is Script, DeploymentConfig {
 
     function _deploySessionRegistry() internal {
         console.log("Deploying SessionRegistry...");
-        console.log("  DCAP Attestation:", address(dcapAttestation));
-        console.log("  SNP Attestation:", address(snpAttestation));
+        console.log("  TEE Verifier:", address(teeVerifier));
         console.log("  TPM Attestation:", address(tpmAttestation));
 
         sessionRegistry = new SessionRegistry(
-            dcapAttestation,
-            snpAttestation,
+            teeVerifier,
             tpmAttestation,
             signatureVerifier,
             baseImageRegistry,
@@ -98,6 +111,7 @@ abstract contract DeployBase is Script, DeploymentConfig {
 
     function _writeDeploymentAddresses() internal {
         writeToJson("SignatureVerifier", address(signatureVerifier));
+        writeToJson("TeeVerifier", address(teeVerifier));
         writeToJson("BaseImageRegistry", address(baseImageRegistry));
         writeToJson("WorkloadRegistry", address(workloadRegistry));
         writeToJson("SessionRegistry", address(sessionRegistry));
