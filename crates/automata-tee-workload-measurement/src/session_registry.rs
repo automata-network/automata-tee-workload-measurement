@@ -80,8 +80,8 @@ impl SessionRegistry {
         // Get chain ID
         let chain_id = self.stub.provider().chain_id();
         let session_id = compute_session_id_from_parts(
-            &evidence.tpm_quote_report.data,
-            &evidence.tee_report.data,
+            &evidence.tpmQuoteReport.data,
+            &evidence.teeReport.data,
         )?;
         let workload_id = WorkloadRegistry::get_workload_id(&workload_ref);
         let base_image_id = BaseImageRegistry::get_image_id(&base_image_ref);
@@ -161,7 +161,7 @@ impl SessionRegistry {
         // Pre-compute newSessionId
         let new_session_id = compute_new_session_id(
             tee_report_bytes_hash,
-            &rotation_evidence.tpm_quote_report.data,
+            &rotation_evidence.tpmQuoteReport.data,
         )?;
 
         info!(
@@ -219,8 +219,8 @@ impl SessionRegistry {
         owner_signature: Bytes,
     ) -> Result<RegisterSessionResponse> {
         let session_id = compute_session_id_from_parts(
-            &evidence.tpm_quote_report.data,
-            &evidence.tee_report.data,
+            &evidence.tpmQuoteReport.data,
+            &evidence.teeReport.data,
         )?;
 
         info!(
@@ -285,7 +285,7 @@ impl SessionRegistry {
         // Pre-compute newSessionId
         let new_session_id = compute_new_session_id(
             tee_report_bytes_hash,
-            &rotation_evidence.tpm_quote_report.data,
+            &rotation_evidence.tpmQuoteReport.data,
         )?;
 
         info!(

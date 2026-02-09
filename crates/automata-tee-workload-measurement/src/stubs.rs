@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use alloy::{
     primitives::{B256, Bytes, keccak256},
     signers::{Signer, local::PrivateKeySigner},
@@ -50,7 +52,7 @@ pub enum AlgoId {
 /// Public identity for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicIdentity {
-    pub type_id: u8,
+    pub typeId: u8,
     pub key: Bytes,
 }
 
@@ -61,7 +63,7 @@ impl PublicIdentity {
         let public_key_bytes = encoded_point.as_bytes(); // 65 bytes: 0x04 || x || y
 
         PublicIdentity {
-            type_id: AlgoId::Es256K as _,
+            typeId: AlgoId::Es256K as _,
             key: public_key_bytes.to_vec().into(),
         }
     }
@@ -82,7 +84,7 @@ impl PublicIdentity {
 
         let mut encoded = vec![0u8; total_len];
         encoded[0..32].copy_from_slice(KEY_DOMAIN.as_slice());
-        encoded[63] = self.type_id as u8; // uint8 right-aligned in 32 bytes
+        encoded[63] = self.typeId as u8; // uint8 right-aligned in 32 bytes
         // offset to bytes data = 96 (3 * 32)
         encoded[95] = 96;
         // bytes length
@@ -97,7 +99,7 @@ impl PublicIdentity {
 impl From<PublicIdentity> for BaseImageRegistry::PublicIdentity {
     fn from(identity: PublicIdentity) -> Self {
         BaseImageRegistry::PublicIdentity {
-            typeId: identity.type_id as u8,
+            typeId: identity.typeId,
             key: identity.key,
         }
     }
@@ -106,7 +108,7 @@ impl From<PublicIdentity> for BaseImageRegistry::PublicIdentity {
 impl From<PublicIdentity> for WorkloadRegistry::PublicIdentity {
     fn from(identity: PublicIdentity) -> Self {
         WorkloadRegistry::PublicIdentity {
-            typeId: identity.type_id as u8,
+            typeId: identity.typeId,
             key: identity.key,
         }
     }
@@ -115,7 +117,7 @@ impl From<PublicIdentity> for WorkloadRegistry::PublicIdentity {
 impl From<PublicIdentity> for SessionRegistry::PublicIdentity {
     fn from(identity: PublicIdentity) -> Self {
         SessionRegistry::PublicIdentity {
-            typeId: identity.type_id as u8,
+            typeId: identity.typeId,
             key: identity.key,
         }
     }
@@ -161,12 +163,12 @@ where
 /// Attestation evidence for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationEvidence {
-    pub tee_report: TeeReport,
-    pub tpm_quote_report: TpmReport,
-    pub tpm_certify_report: TpmReport,
-    pub ak_pub_collateral: AkPubCollateral,
-    pub session_key_signature: Bytes,
-    pub session_key: PublicIdentity,
+    pub teeReport: TeeReport,
+    pub tpmQuoteReport: TpmReport,
+    pub tpmCertifyReport: TpmReport,
+    pub akPubCollateral: AkPubCollateral,
+    pub sessionKeySignature: Bytes,
+    pub sessionKey: PublicIdentity,
 }
 
 impl From<AttestationEvidence> for SessionRegistry::AttestationEvidence {
@@ -178,8 +180,8 @@ impl From<AttestationEvidence> for SessionRegistry::AttestationEvidence {
 /// TEE report data for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeeReport {
-    pub verification_backend_type: u8,
-    pub tee_type: u8,
+    pub verificationBackendType: u8,
+    pub teeType: u8,
     pub data: Bytes,
 }
 
@@ -192,8 +194,8 @@ impl From<TeeReport> for SessionRegistry::TeeReport {
 /// TPM report data for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TpmReport {
-    pub verification_backend_type: u8,
-    pub tpm_report_type: u8,
+    pub verificationBackendType: u8,
+    pub tpmReportType: u8,
     pub data: Bytes,
 }
 
@@ -206,7 +208,7 @@ impl From<TpmReport> for SessionRegistry::TpmReport {
 /// AK pub collateral data for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AkPubCollateral {
-    pub ak_pub_collateral_type: u8,
+    pub akPubCollateralType: u8,
     pub data: Bytes,
 }
 
@@ -219,13 +221,13 @@ impl From<AkPubCollateral> for SessionRegistry::AkPubCollateral {
 /// Session rotation evidence for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRotationEvidence {
-    pub tpm_quote_report: TpmReport,
-    pub tpm_certify_report: TpmReport,
-    pub session_key_signature: Bytes,
-    pub session_key: PublicIdentity,
-    pub rotation_signature: Bytes,
-    pub old_tpm_signing_key: PublicIdentity,
-    pub ak_pub: PublicIdentity,
+    pub tpmQuoteReport: TpmReport,
+    pub tpmCertifyReport: TpmReport,
+    pub sessionKeySignature: Bytes,
+    pub sessionKey: PublicIdentity,
+    pub rotationSignature: Bytes,
+    pub oldTpmSigningKey: PublicIdentity,
+    pub akPub: PublicIdentity,
 }
 
 impl From<SessionRotationEvidence> for SessionRegistry::SessionRotationEvidence {
