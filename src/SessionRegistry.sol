@@ -96,14 +96,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     /// @dev Owner nonce for replay protection
     mapping(bytes32 => uint256) private _ownerNonces;
 
-    /// @dev Owner session list
-    mapping(bytes32 => bytes32[]) private _ownerSessions;
-
     /// @dev Session fingerprint to session ID mapping
     mapping(bytes32 => bytes32) private _sessionFingerprintsToIds;
 
     /// @dev Storage gap for future upgrades (4 existing mappings → 46-slot gap)
-    uint256[46] private __gap;
+    uint256[47] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors
@@ -395,11 +392,6 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
             return false;
         }
         return block.timestamp > sessionStorage.session.expiresAt;
-    }
-
-    /// @inheritdoc ISessionRegistry
-    function getOwnerSessions(bytes32 ownerFingerprint) external view returns (bytes32[] memory) {
-        return _ownerSessions[ownerFingerprint];
     }
 
     /// @inheritdoc ISessionRegistry
@@ -871,8 +863,6 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         });
 
         _sessionFingerprintsToIds[params.sessionKeyFingerprint] = params.sessionId;
-
-        _ownerSessions[params.ownerFingerprint].push(params.sessionId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════

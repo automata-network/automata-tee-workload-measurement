@@ -116,11 +116,6 @@ interface ISessionRegistry {
     /// @return True if the session is expired
     function isSessionExpired(bytes32 sessionId) external view returns (bool);
 
-    /// @notice Get all session IDs for an owner
-    /// @param ownerFingerprint The owner fingerprint
-    /// @return Array of session IDs
-    function getOwnerSessions(bytes32 ownerFingerprint) external view returns (bytes32[] memory);
-
     /// @notice Get the current nonce for an owner (for replay protection)
     /// @param ownerFingerprint The owner fingerprint
     /// @return nonce The current nonce value
