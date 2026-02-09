@@ -10,6 +10,8 @@ import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
+import {TeeVerifier} from "../src/TeeVerifier.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {
     BaseImageSpec,
@@ -33,7 +35,13 @@ import {
     TpmReportType,
     AkPubCollateralType
 } from "../src/types/Evidence.sol";
-import {BASEIMAGE_DOMAIN, PLATFORM_PROFILE_DOMAIN, PLATFORM_VARIANT_DOMAIN, WORKLOAD_DOMAIN, ALGO_ID_ES256K} from "../src/types/Constants.sol";
+import {
+    BASEIMAGE_DOMAIN,
+    PLATFORM_PROFILE_DOMAIN,
+    PLATFORM_VARIANT_DOMAIN,
+    WORKLOAD_DOMAIN,
+    ALGO_ID_ES256K
+} from "../src/types/Constants.sol";
 
 contract SessionRegistryTest is Test {
     // Deployed contracts
@@ -44,6 +52,7 @@ contract SessionRegistryTest is Test {
     MockAutomataDcapAttestation public mockDcap;
     MockAutomataSnpAttestation public mockSnp;
     TpmAttestation public tpmAttestation;
+    TeeVerifier public teeVerifier;
 
     address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
     address constant owner = address(0x1234);
@@ -79,15 +88,20 @@ contract SessionRegistryTest is Test {
         // Deploy WorkloadRegistry
         workloadRegistry = new WorkloadRegistry(signatureVerifier);
 
-        // Deploy SessionRegistry
-        sessionRegistry = new SessionRegistry(
-            mockDcap,
-            mockSnp,
-            tpmAttestation,
-            signatureVerifier,
-            baseImageRegistry,
-            workloadRegistry
+        // Deploy TeeVerifier (wraps DCAP + SNP into single contract)
+        teeVerifier = new TeeVerifier(mockDcap, mockSnp);
+
+        // Deploy SessionRegistry implementation (5 args, not 6)
+        SessionRegistry impl = new SessionRegistry(
+            teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry
         );
+
+        // Deploy behind ERC1967 proxy and call initialize
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(SessionRegistry.initialize, (owner))
+        );
+        sessionRegistry = SessionRegistry(address(proxy));
 
         // Add GCP vTPM Root CA to TpmAttestation
         tpmAttestation.addCA(_gcpRootCa());
@@ -97,9 +111,7 @@ contract SessionRegistryTest is Test {
         // Mock SignatureVerifier.verify() to always return true for testing
         // This allows testing the flow without real signatures
         vm.mockCall(
-            address(signatureVerifier),
-            abi.encodeWithSelector(signatureVerifier.verify.selector),
-            abi.encode(true)
+            address(signatureVerifier), abi.encodeWithSelector(signatureVerifier.verify.selector), abi.encode(true)
         );
 
         console.log("=== Contracts Deployed ===");
@@ -121,9 +133,11 @@ contract SessionRegistryTest is Test {
         console.logBytes32(workloadId);
 
         // Step 3: Verify registrations
-        assertTrue(baseImageRegistry.isBaseImageActive(baseImageId), "BaseImage should be active");
-        assertTrue(workloadRegistry.isWorkloadActive(workloadId), "Workload should be active");
-        assertTrue(workloadRegistry.isBaseImageAllowed(workloadId, baseImageId), "BaseImage should be allowed for workload");
+        assertFalse(baseImageRegistry.isBaseImageRevoked(baseImageId), "BaseImage should not be revoked");
+        assertFalse(workloadRegistry.isWorkloadRevoked(workloadId), "Workload should not be revoked");
+        assertTrue(
+            workloadRegistry.isBaseImageAllowed(workloadId, baseImageId), "BaseImage should be allowed for workload"
+        );
 
         // Step 4: Register Session (placeholder - actual calldata to be provided)
         // _registerSession(baseImageId, workloadId);
@@ -131,11 +145,8 @@ contract SessionRegistryTest is Test {
 
     function _registerBaseImage() internal returns (bytes32 baseImageId) {
         // BaseImage spec
-        BaseImageSpec memory spec = BaseImageSpec({
-            name: "automata-linux",
-            version: "v0.0.6",
-            uri: "https://github.com"
-        });
+        BaseImageSpec memory spec =
+            BaseImageSpec({name: "automata-linux", version: "v0.0.6", uri: "https://github.com"});
 
         // Platform profiles
         PlatformProfile[] memory platformProfiles = new PlatformProfile[](2);
@@ -152,11 +163,7 @@ contract SessionRegistryTest is Test {
                 value: 0x4e93d92ff4e2ad9500a6fc01fef91a80e1033c510ab256548c2df61fd8beb4e3
             });
 
-            platformProfiles[0] = PlatformProfile({
-                name: "gcp-snp",
-                invariants: new PcrSpec[](0),
-                attributes: attrs1
-            });
+            platformProfiles[0] = PlatformProfile({name: "gcp-snp", invariants: new PcrSpec[](0), attributes: attrs1});
         }
 
         // Profile 2: gcp-tdx
@@ -171,11 +178,7 @@ contract SessionRegistryTest is Test {
                 value: 0x34bef19ef372626c712f3e728d74b5544a621e4ba1df121959d2b6c15b51a989
             });
 
-            platformProfiles[1] = PlatformProfile({
-                name: "gcp-tdx",
-                invariants: new PcrSpec[](0),
-                attributes: attrs2
-            });
+            platformProfiles[1] = PlatformProfile({name: "gcp-tdx", invariants: new PcrSpec[](0), attributes: attrs2});
         }
 
         // Measurement variants (parallel array with platformProfiles)
@@ -190,18 +193,14 @@ contract SessionRegistryTest is Test {
         measurementVariants[1][0] = _createC3Standard4Variant();
 
         uint64 expireAt = 1770547477;
-        bytes memory signature = hex"e51236c453cad477b48d11c448cdcab96fe6e94ed306fd02ee7d0251e6dc37264ba08f0ac5823adf62f0d7746fde131c52d7ba954886e98848cd11f37753d7c51b";
+        bytes memory signature =
+            hex"e51236c453cad477b48d11c448cdcab96fe6e94ed306fd02ee7d0251e6dc37264ba08f0ac5823adf62f0d7746fde131c52d7ba954886e98848cd11f37753d7c51b";
 
         // Warp to before expiration
         vm.warp(expireAt - 1000);
 
         baseImageId = baseImageRegistry.registerBaseImage(
-            spec,
-            platformProfiles,
-            measurementVariants,
-            expireAt,
-            ownerIdentity,
-            signature
+            spec, platformProfiles, measurementVariants, expireAt, ownerIdentity, signature
         );
     }
 
@@ -240,11 +239,7 @@ contract SessionRegistryTest is Test {
         matchData23[0] = 0x0000000000000000000000000000000000000000000000000000000000000000;
         pcrs[7] = PcrSpec({pcrIndex: 23, verifyType: PcrVerifyType.STATIC, matchData: matchData23});
 
-        return MeasurementVariant({
-            name: "n2d-standard-2",
-            overridePcrs: pcrs,
-            attributes: new Attribute[](0)
-        });
+        return MeasurementVariant({name: "n2d-standard-2", overridePcrs: pcrs, attributes: new Attribute[](0)});
     }
 
     function _createC3Standard4Variant() internal pure returns (MeasurementVariant memory) {
@@ -282,11 +277,7 @@ contract SessionRegistryTest is Test {
         matchData23[0] = 0x0000000000000000000000000000000000000000000000000000000000000000;
         pcrs[7] = PcrSpec({pcrIndex: 23, verifyType: PcrVerifyType.STATIC, matchData: matchData23});
 
-        return MeasurementVariant({
-            name: "c3-standard-4",
-            overridePcrs: pcrs,
-            attributes: new Attribute[](0)
-        });
+        return MeasurementVariant({name: "c3-standard-4", overridePcrs: pcrs, attributes: new Attribute[](0)});
     }
 
     function _registerWorkload(bytes32 baseImageId) internal returns (bytes32 workloadId) {
@@ -304,17 +295,13 @@ contract SessionRegistryTest is Test {
         });
 
         uint64 expireAt = 1770547589;
-        bytes memory signature = hex"4517531794e04ee1f950e7b1bd016ea460e1fe06e5c222469676642080f01d3b4b0f9090064717d49708001bf77958490bec3e3c18dc11f385932d9aca0a88311c";
+        bytes memory signature =
+            hex"4517531794e04ee1f950e7b1bd016ea460e1fe06e5c222469676642080f01d3b4b0f9090064717d49708001bf77958490bec3e3c18dc11f385932d9aca0a88311c";
 
         // Warp to before expiration
         vm.warp(expireAt - 1000);
 
-        workloadId = workloadRegistry.registerWorkload(
-            spec,
-            expireAt,
-            ownerIdentity,
-            signature
-        );
+        workloadId = workloadRegistry.registerWorkload(spec, expireAt, ownerIdentity, signature);
     }
 
     /// @notice Register session using raw calldata (decodes and calls)
@@ -337,11 +324,7 @@ contract SessionRegistryTest is Test {
             uint64 expireAt,
             PublicIdentity memory decodedOwnerIdentity,
             bytes memory ownerSignature
-        ) = abi.decode(
-            params,
-            (AttestationEvidence, bytes32, bytes32, bytes32, bytes32, uint64, PublicIdentity, bytes)
-        );
-
+        ) = abi.decode(params, (AttestationEvidence, bytes32, bytes32, bytes32, bytes32, uint64, PublicIdentity, bytes));
 
         // Warp to before expiration if needed
         vm.warp(1770567955);
@@ -411,7 +394,7 @@ contract SessionRegistryTest is Test {
     }
 
     function sessionCalldata() private view returns (bytes memory) {
-        string memory hexString = vm.readFile("test/session_register.hex");
+        string memory hexString = vm.readFile("test/fixtures/session_register.hex");
         return vm.parseBytes(hexString);
     }
 
