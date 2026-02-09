@@ -98,7 +98,7 @@ contract BaseImageRegistry is IBaseImageRegistry {
         }
 
         // Compute base image ID (simplified: name only)
-        baseImageId = keccak256(abi.encode(BASEIMAGE_DOMAIN, spec.name));
+        baseImageId = keccak256(abi.encode(BASEIMAGE_DOMAIN, spec.name, spec.version));
 
         // Check for duplicate
         if (_baseImages[baseImageId].exists) {
