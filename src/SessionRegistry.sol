@@ -700,11 +700,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     }
 
     /// @dev Verifies signature
-    function _requireSignature(
-        PublicIdentity calldata signer,
-        bytes32 message,
-        bytes calldata signature
-    ) private view {
+    function _requireSignature(PublicIdentity calldata signer, bytes32 message, bytes calldata signature) private view {
         if (!signatureVerifier.verify(signer, message, signature)) {
             revert InvalidSignature();
         }

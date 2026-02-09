@@ -14,7 +14,8 @@ import {
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
     BASEIMAGE_REGISTER_MSG,
-    BASEIMAGE_DEACTIVATE_MSG
+    BASEIMAGE_DEACTIVATE_MSG,
+    BASEIMAGE_UPDATE_MSG
 } from "./types/Constants.sol";
 import {
     IBaseImageRegistry,
@@ -240,6 +241,112 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         _baseImages[baseImageId].isRevoked = true;
 
         emit BaseImageDeactivated(baseImageId, ownerFingerprint);
+    }
+
+    /// @inheritdoc IBaseImageRegistry
+    function addPlatformVariants(
+        bytes32 baseImageId,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
+        uint64 expireAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external {
+        // Validate parallel array invariant
+        uint256 platformCount = platformProfiles.length;
+        if (platformCount != measurementVariants.length) {
+            revert ArrayLengthMismatch();
+        }
+
+        // Check signature expiration
+        if (block.timestamp > expireAt) {
+            revert SignatureExpired();
+        }
+
+        // Check exists and active
+        if (!_baseImages[baseImageId].exists) {
+            revert BaseImageNotFound(baseImageId);
+        }
+        if (_baseImages[baseImageId].isRevoked) {
+            revert BaseImageNotActive(baseImageId);
+        }
+
+        // Compute owner fingerprint and verify ownership
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        if (_baseImages[baseImageId].owner != ownerFingerprint) {
+            revert Unauthorized();
+        }
+
+        // Validate PCR ordering and attribute uniqueness for all profiles and variants
+        for (uint256 i = 0; i < platformCount; i++) {
+            PlatformProfile calldata profile = platformProfiles[i];
+            _validatePcrSpecsSorted(profile.invariants);
+            _validateUniqueAttributeKeys(profile.attributes);
+
+            MeasurementVariant[] calldata variants = measurementVariants[i];
+            for (uint256 j = 0; j < variants.length; j++) {
+                _validatePcrSpecsSorted(variants[j].overridePcrs);
+                _validateUniqueAttributeKeys(variants[j].attributes);
+            }
+        }
+
+        // Build and verify signature
+        bytes32 message = sha256(
+            abi.encode(
+                BASEIMAGE_UPDATE_MSG,
+                block.chainid,
+                address(this),
+                expireAt,
+                baseImageId,
+                platformProfiles,
+                measurementVariants
+            )
+        );
+
+        if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
+            revert InvalidSignature();
+        }
+
+        // Upsert platform profiles and variants
+        for (uint256 i = 0; i < platformCount; i++) {
+            PlatformProfile calldata profile = platformProfiles[i];
+
+            // Compute platform profile ID (deterministic from base image + profile name)
+            bytes32 platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name));
+
+            // Only push to tracking array if this is a new profile
+            if (!_platformProfiles[platformProfileId].exists) {
+                _baseImages[baseImageId].platformProfileIds.push(platformProfileId);
+            }
+
+            // Store/overwrite platform profile data
+            _platformProfiles[platformProfileId].exists = true;
+            _platformProfiles[platformProfileId].platformProfile = profile;
+
+            emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
+
+            // Upsert measurement variants for this profile
+            MeasurementVariant[] calldata variants = measurementVariants[i];
+            for (uint256 j = 0; j < variants.length; j++) {
+                MeasurementVariant calldata variant = variants[j];
+
+                // Compute variant ID (deterministic from profile + variant name)
+                bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
+
+                // Only push to tracking array if this is a new variant
+                if (!_variants[variantId].exists) {
+                    _platformProfiles[platformProfileId].variantIds.push(variantId);
+                }
+
+                // Store/overwrite variant data
+                _variants[variantId].exists = true;
+                _variants[variantId].measurementVariant = variant;
+
+                emit MeasurementVariantRegistered(platformProfileId, variantId, variant.name);
+            }
+        }
+
+        emit BaseImageUpdated(baseImageId, ownerFingerprint);
     }
 
     /// @inheritdoc IBaseImageRegistry
