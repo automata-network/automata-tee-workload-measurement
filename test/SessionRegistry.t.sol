@@ -92,15 +92,11 @@ contract SessionRegistryTest is Test {
         teeVerifier = new TeeVerifier(mockDcap, mockSnp);
 
         // Deploy SessionRegistry implementation (5 args, not 6)
-        SessionRegistry impl = new SessionRegistry(
-            teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry
-        );
+        SessionRegistry impl =
+            new SessionRegistry(teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry);
 
         // Deploy behind ERC1967 proxy and call initialize
-        ERC1967Proxy proxy = new ERC1967Proxy(
-            address(impl),
-            abi.encodeCall(SessionRegistry.initialize, (owner))
-        );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeCall(SessionRegistry.initialize, (owner)));
         sessionRegistry = SessionRegistry(address(proxy));
 
         // Add GCP vTPM Root CA to TpmAttestation
