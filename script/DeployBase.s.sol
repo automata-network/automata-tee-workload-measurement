@@ -98,13 +98,8 @@ abstract contract DeployBase is Script, DeploymentConfig {
         console.log("  TEE Verifier:", address(teeVerifier));
         console.log("  TPM Attestation:", address(tpmAttestation));
 
-        sessionRegistry = new SessionRegistry(
-            teeVerifier,
-            tpmAttestation,
-            signatureVerifier,
-            baseImageRegistry,
-            workloadRegistry
-        );
+        sessionRegistry =
+            new SessionRegistry(teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry);
 
         console.log("  SessionRegistry:", address(sessionRegistry));
     }
