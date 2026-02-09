@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use alloy::{
-    ext::NetworkProvider,
+    ext::{NetworkProvider, ProviderEx},
     primitives::{Address, U256},
     signers::local::PrivateKeySigner,
 };
@@ -61,6 +61,10 @@ impl WorkloadMeasurement {
             base_image_registry,
             workload_registry,
         })
+    }
+
+    pub async fn chain_id(&self) -> u64 {
+        self.provider.chain_id()
     }
 
     pub async fn session_nonce(&self, owner: &PublicIdentity) -> Result<U256> {
