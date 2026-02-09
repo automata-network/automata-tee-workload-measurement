@@ -133,10 +133,10 @@ contract TeeVerifier is ITeeVerifier {
         // Read quoteBodyType (uint16 BE) from bytes [2:4]
         uint16 quoteBodyType;
         assembly ("memory-safe") {
-            // Load word containing bytes [0:32], shift right to get uint16 at [2:4]
+            // Load word containing bytes [0:32]
             let word := mload(add(output, 0x20))
-            // Shift right 240 bits (30 bytes) to get the 2-byte value at offset 2
-            quoteBodyType := shr(240, word)
+            // Shift right 224 bits (28 bytes) to align bytes [2:4] to low position, mask to 16 bits
+            quoteBodyType := and(shr(224, word), 0xFFFF)
         }
 
         // Determine body size based on quote type
@@ -161,14 +161,12 @@ contract TeeVerifier is ITeeVerifier {
         assembly ("memory-safe") {
             let src := add(add(output, 0x20), DCAP_QUOTE_BODY_OFFSET)
             let dst := add(quoteBody, 0x20)
-            let remaining := bodySize
 
-            // Copy in 32-byte chunks
-            for {} gt(remaining, 0) {} {
-                mstore(dst, mload(src))
-                src := add(src, 0x20)
-                dst := add(dst, 0x20)
-                remaining := sub(remaining, 0x20)
+            // Copy in 32-byte chunks (ceiling division to handle non-aligned sizes)
+            let chunks := div(add(bodySize, 31), 32)
+            for { let i := 0 } lt(i, chunks) { i := add(i, 1) } {
+                let offset := mul(i, 32)
+                mstore(add(dst, offset), mload(add(src, offset)))
             }
         }
     }

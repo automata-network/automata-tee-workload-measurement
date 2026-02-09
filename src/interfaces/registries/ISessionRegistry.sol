@@ -142,4 +142,18 @@ interface ISessionRegistry {
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 newSessionId);
+
+    /// @notice Verify a signature was made by an active session's sessionKey
+    /// @dev Caller must provide the sessionKey (obtainable from AttestationKeysRevealed event)
+    /// @param sessionId The session to verify against
+    /// @param sessionKey The session's public key
+    /// @param message The message that was signed (typically a hash)
+    /// @param signature The signature to verify
+    /// @return valid True if signature is valid and session is active
+    function verifySessionSignature(
+        bytes32 sessionId,
+        PublicIdentity calldata sessionKey,
+        bytes32 message,
+        bytes calldata signature
+    ) external view returns (bool valid);
 }

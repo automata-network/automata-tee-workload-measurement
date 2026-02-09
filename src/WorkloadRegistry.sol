@@ -85,7 +85,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         _validateUniqueRequirementKeys(spec.requirements);
 
         // Compute workload ID (simplified: name only)
-        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name));
+        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version));
 
         // Check for duplicate
         if (_workloads[workloadId].exists) {

@@ -415,6 +415,28 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         return _ownerNonces[ownerFingerprint];
     }
 
+    /// @inheritdoc ISessionRegistry
+    function verifySessionSignature(
+        bytes32 sessionId,
+        PublicIdentity calldata sessionKey,
+        bytes32 message,
+        bytes calldata signature
+    ) external view returns (bool valid) {
+        CVMSession storage session = _sessions[sessionId];
+
+        // Check session exists and is active
+        if (session.sessionId == bytes32(0)) return false;
+        if (!session.isActive) return false;
+        if (block.timestamp > session.expiresAt) return false;
+
+        // Verify sessionKey matches stored fingerprint
+        bytes32 fingerprint = LibKey.computeKeyFingerprint(sessionKey);
+        if (fingerprint != session.sessionKeyFingerprint) return false;
+
+        // Verify signature
+        return signatureVerifier.verify(sessionKey, message, signature);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Internal Structs
     // ═══════════════════════════════════════════════════════════════════════════════════════
