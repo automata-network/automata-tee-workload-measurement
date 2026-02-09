@@ -140,10 +140,6 @@ struct WorkloadSpec {
 /// @notice Active CVM session state (cryptographic chain of trust)
 /// @dev Session binds hardware attestation (TEE + vTPM) to operational session key
 struct CVMSession {
-    // Identity
-    bytes32 sessionId; // Unique session identifier
-    bytes32 owner; // Session owner (PublicIdentity fingerprint)
-
     // Key Fingerprints (complete verification chain)
     bytes32 akPubKeyFingerprint; // Attestation Key (root of trust)
     bytes32 tpmSigningKeyFingerprint; // TPM Signing Key (extracted from quote)
@@ -158,5 +154,4 @@ struct CVMSession {
     // Lifecycle
     uint64 registeredAt; // Registration timestamp
     uint64 expiresAt; // Expiration timestamp
-    bool isActive; // Revocation flag
 }

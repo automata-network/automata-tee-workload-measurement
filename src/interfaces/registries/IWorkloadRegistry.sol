@@ -7,8 +7,8 @@ import {WorkloadSpec, PublicIdentity} from "../../types/Common.sol";
 struct WorkloadSpecStorage {
     /// @dev Existence flag to distinguish unregistered from registered workloads
     bool exists;
-    /// @dev Active status flag (soft delete)
-    bool isActive;
+    /// @dev Revoked status flag (soft delete)
+    bool isRevoked;
     /// @dev Workload owner fingerprint
     bytes32 owner;
     /// @dev The workload specification
@@ -74,10 +74,10 @@ interface IWorkloadRegistry {
     /// @return The owner's identity fingerprint (bytes32)
     function getWorkloadOwner(bytes32 workloadId) external view returns (bytes32);
 
-    /// @notice Check if a workload is active
+    /// @notice Check if a workload is revoked
     /// @param workloadId The workload identifier
-    /// @return True if the workload is active
-    function isWorkloadActive(bytes32 workloadId) external view returns (bool);
+    /// @return True if the workload is revoked
+    function isWorkloadRevoked(bytes32 workloadId) external view returns (bool);
 
     /// @notice Check if a base image is allowed for a workload
     /// @param workloadId The workload identifier

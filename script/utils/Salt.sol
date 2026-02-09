@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity >=0.8.0;
 
-bytes32 constant WORKLOAD_VERIFIER_PROXY_SALT = keccak256(bytes("WORKLOAD_VERIFIER_PROXY_SALT"));
-bytes32 constant WORKLOAD_VERIFIER_IMPL_SALT = keccak256(bytes("WORKLOAD_VERIFIER_IMPL_SALT"));
-bytes32 constant CVM_REGISTRY_PROXY_SALT = keccak256(bytes("CVM_REGISTRY_PROXY_SALT"));
-bytes32 constant CVM_REGISTRY_IMPL_SALT = keccak256(bytes("CVM_REGISTRY_IMPL_SALT"));
+bytes32 constant SIGNATURE_VERIFIER_SALT = keccak256(bytes("SIGNATURE_VERIFIER_SALT"));
+bytes32 constant TEE_VERIFIER_SALT = keccak256(bytes("TEE_VERIFIER_SALT"));
+
+// Implementation salts
+bytes32 constant BASE_IMAGE_REGISTRY_IMPL_SALT = keccak256(bytes("BASE_IMAGE_REGISTRY_IMPL_SALT"));
+bytes32 constant WORKLOAD_REGISTRY_IMPL_SALT = keccak256(bytes("WORKLOAD_REGISTRY_IMPL_SALT"));
+bytes32 constant KEY_RESOLVER_IMPL_SALT = keccak256(bytes("KEY_RESOLVER_IMPL_SALT"));
+bytes32 constant SESSION_REGISTRY_IMPL_SALT = keccak256(bytes("SESSION_REGISTRY_IMPL_SALT"));
+
+// Proxy salts
+bytes32 constant BASE_IMAGE_REGISTRY_PROXY_SALT = keccak256(bytes("BASE_IMAGE_REGISTRY_PROXY_SALT"));
+bytes32 constant WORKLOAD_REGISTRY_PROXY_SALT = keccak256(bytes("WORKLOAD_REGISTRY_PROXY_SALT"));
+bytes32 constant KEY_RESOLVER_PROXY_SALT = keccak256(bytes("KEY_RESOLVER_PROXY_SALT"));
+bytes32 constant SESSION_REGISTRY_PROXY_SALT = keccak256(bytes("SESSION_REGISTRY_PROXY_SALT"));

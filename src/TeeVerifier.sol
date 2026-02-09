@@ -1,29 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {TeeReport, TEEType, VerificationBackendType, ZkProof} from "../types/Evidence.sol";
-import {IDcapAttestation} from "../interfaces/external/IDcapAttestation.sol";
-import {ISnpAttestation, VerifierJournal, VerificationResult} from "../interfaces/external/ISnpAttestation.sol";
-
-/// @notice Result of TEE attestation report verification
-struct TeeVerificationResult {
-    /// @dev True if the TEE report signature and structure are valid
-    bool valid;
-    /// @dev Full report body extracted from the TEE attestation
-    ///      - For Intel TDX: TD10 (584 bytes) or TD15 (648 bytes) quote body
-    ///      - For AMD SEV-SNP: Full attestation report (1184 bytes)
-    ///      Use TeeVerifier._extractDcapReportData() or _extractSnpReportData()
-    ///      to extract the 64-byte user data field from this report body.
-    bytes reportData;
-    /// @dev TEE technology type (Intel TDX or AMD SEV-SNP)
-    TEEType teeType;
-}
+import {TeeReport, TEEType, VerificationBackendType, ZkProof, TeeVerificationResult} from "./types/Evidence.sol";
+import {IDcapAttestation} from "./interfaces/external/IDcapAttestation.sol";
+import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/external/ISnpAttestation.sol";
+import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
 
 /// @title TeeVerifier
-/// @notice Abstract base contract for verifying TEE attestation reports across multiple backends
+/// @notice Standalone contract for verifying TEE attestation reports across multiple backends
 /// @dev Dispatches verification to vendor-specific contracts (DCAP for Intel TDX, SNP for AMD SEV-SNP)
-///      and extracts reportData from the verified output. Designed to be inherited by SessionRegistry.
-abstract contract TeeVerifier {
+///      and extracts reportData from the verified output. Designed to be referenced externally.
+contract TeeVerifier is ITeeVerifier {
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // Version
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice Contract version
+    string public constant TEE_VERIFIER_VERSION = "1.0.0";
+
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -39,54 +33,51 @@ abstract contract TeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @dev Quote body type identifier for TD10 (TDX 1.0) format
-    uint16 internal constant QUOTE_BODY_TYPE_TD10 = 2;
+    uint16 private constant QUOTE_BODY_TYPE_TD10 = 2;
 
     /// @dev Quote body type identifier for TD15 (TDX 1.5) format
-    uint16 internal constant QUOTE_BODY_TYPE_TD15 = 3;
+    uint16 private constant QUOTE_BODY_TYPE_TD15 = 3;
 
     /// @dev Size of TD10 quote body in bytes
-    uint256 internal constant TD10_QUOTE_BODY_SIZE = 584;
+    uint256 private constant TD10_QUOTE_BODY_SIZE = 584;
 
     /// @dev Size of TD15 quote body in bytes
-    uint256 internal constant TD15_QUOTE_BODY_SIZE = 648;
+    uint256 private constant TD15_QUOTE_BODY_SIZE = 648;
 
     /// @dev Offset of quote body in DCAP output (2+2+1+6 byte header)
-    uint256 internal constant DCAP_QUOTE_BODY_OFFSET = 11;
+    uint256 private constant DCAP_QUOTE_BODY_OFFSET = 11;
 
     /// @dev Size of reportData field in bytes
-    uint256 internal constant REPORT_DATA_SIZE = 64;
+    uint256 private constant REPORT_DATA_SIZE = 64;
 
     /// @dev Offset of reportData within quote body
-    uint256 internal constant DCAP_REPORT_DATA_START = 520;
+    uint256 private constant DCAP_REPORT_DATA_START = 520;
 
     /// @dev Minimum valid quote body length (must contain reportData)
-    uint256 internal constant DCAP_MIN_OUTPUT_LEN = 584; // TD10_QUOTE_BODY_SIZE (520 + 64)
+    uint256 private constant DCAP_MIN_OUTPUT_LEN = 584; // TD10_QUOTE_BODY_SIZE (520 + 64)
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants - SNP Raw Report Layout
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @dev Offset of REPORT_DATA in AMD SEV-SNP raw report (per AMD spec)
-    uint256 internal constant SNP_REPORT_DATA_OFFSET = 0x50; // 80 decimal
+    uint256 private constant SNP_REPORT_DATA_OFFSET = 0x50; // 80 decimal
 
     /// @dev Minimum valid SNP report length (must contain REPORT_DATA)
-    uint256 internal constant SNP_MIN_REPORT_LEN = 144; // 80 + 64
+    uint256 private constant SNP_MIN_REPORT_LEN = 144; // 80 + 64
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice TEE type is not supported by this verifier
-    error UnsupportedTeeType(TEEType teeType);
+    error UnsupportedTeeType();
 
     /// @notice Verification backend type is not supported for this TEE type
-    error UnsupportedBackendType(VerificationBackendType backendType);
+    error UnsupportedBackendType();
 
-    /// @notice DCAP output is malformed or too short
-    error InvalidDcapOutput();
-
-    /// @notice SNP raw report is malformed or too short
-    error InvalidSnpReport();
+    /// @notice TEE Report is malformed or too short
+    error InvalidTeeReport();
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -100,16 +91,33 @@ abstract contract TeeVerifier {
         snpAttestation = _snpAttestation;
     }
 
+    function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32) {
+        if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
+            return keccak256(teeReport.data);
+        } else {
+            ZkProof memory zkProof = abi.decode(teeReport.data, (ZkProof));
+            bytes memory zkOutput = zkProof.output;
+            require(zkOutput.length >= 32, InvalidTeeReport());
+            // get the last 32 bytes of the output
+            bytes32 outputHash;
+            assembly ("memory-safe") {
+                let outputLen := mload(zkOutput)
+                outputHash := mload(add(zkOutput, add(0x20, sub(outputLen, 32))))
+            }
+            return outputHash;
+        }
+    }
+
     /// @notice Verifies a TEE attestation report
     /// @param teeReport The TEE attestation report to verify (contains backend type, TEE type, and data)
     /// @return result Verification result containing validity status, report data, and TEE type
-    function verifyTeeReport(TeeReport memory teeReport) internal returns (TeeVerificationResult memory result) {
+    function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerificationResult memory result) {
         if (teeReport.teeType == TEEType.IntelTDX) {
             return _verifyIntelTdx(teeReport);
         } else if (teeReport.teeType == TEEType.AmdSevSnp) {
             return _verifyAmdSevSnp(teeReport);
         } else {
-            revert UnsupportedTeeType(teeReport.teeType);
+            revert UnsupportedTeeType();
         }
     }
 
@@ -119,7 +127,7 @@ abstract contract TeeVerifier {
     function extractDcapQuoteBody(bytes memory output) private pure returns (bytes memory quoteBody) {
         // Validate minimum length to read quoteBodyType
         if (output.length < 4) {
-            revert InvalidDcapOutput();
+            revert InvalidTeeReport();
         }
 
         // Read quoteBodyType (uint16 BE) from bytes [2:4]
@@ -138,12 +146,12 @@ abstract contract TeeVerifier {
         } else if (quoteBodyType == QUOTE_BODY_TYPE_TD15) {
             bodySize = TD15_QUOTE_BODY_SIZE;
         } else {
-            revert InvalidDcapOutput();
+            revert InvalidTeeReport();
         }
 
         // Validate output length
         if (output.length < DCAP_QUOTE_BODY_OFFSET + bodySize) {
-            revert InvalidDcapOutput();
+            revert InvalidTeeReport();
         }
 
         // Allocate quote body buffer
@@ -164,12 +172,12 @@ abstract contract TeeVerifier {
     }
 
     /// @dev Extracts the 64-byte reportData from a DCAP quote body
-    /// @param quoteBody The TD10 or TD15 quote body (output of _extractDcapQuoteBody)
+    /// @param quoteBody The TD10 or TD15 quote body (output of extractDcapQuoteBody)
     /// @return reportData The extracted 64-byte reportData field at offset 520
-    function extractDcapReportData(bytes memory quoteBody) internal pure returns (bytes memory reportData) {
+    function extractDcapReportData(bytes memory quoteBody) external pure returns (bytes memory reportData) {
         // Validate minimum length to contain reportData
         if (quoteBody.length < DCAP_MIN_OUTPUT_LEN) {
-            revert InvalidDcapOutput();
+            revert InvalidTeeReport();
         }
 
         // Allocate reportData buffer
@@ -192,7 +200,7 @@ abstract contract TeeVerifier {
     function extractSnpAttestationReport(bytes memory rawReport) private pure returns (bytes memory attestationReport) {
         // Validate minimum length
         if (rawReport.length < SNP_MIN_REPORT_LEN) {
-            revert InvalidSnpReport();
+            revert InvalidTeeReport();
         }
 
         // rawReport IS the attestation report - return directly (no copy needed)
@@ -202,10 +210,10 @@ abstract contract TeeVerifier {
     /// @dev Extracts reportData from SNP raw report bytes
     /// @param rawReport The SNP raw report bytes from VerifierJournal
     /// @return reportData The extracted 64-byte REPORT_DATA field
-    function extractSnpReportData(bytes memory rawReport) internal pure returns (bytes memory reportData) {
+    function extractSnpReportData(bytes memory rawReport) external pure returns (bytes memory reportData) {
         // Validate minimum length to contain REPORT_DATA
         if (rawReport.length < SNP_MIN_REPORT_LEN) {
-            revert InvalidSnpReport();
+            revert InvalidTeeReport();
         }
 
         // Allocate reportData buffer
@@ -264,7 +272,7 @@ abstract contract TeeVerifier {
     function _verifyAmdSevSnp(TeeReport memory teeReport) private returns (TeeVerificationResult memory result) {
         // SNP does not support Solidity backend (no on-chain verifier exists)
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
-            revert UnsupportedBackendType(teeReport.verificationBackendType);
+            revert UnsupportedBackendType();
         }
 
         // ZK proof verification

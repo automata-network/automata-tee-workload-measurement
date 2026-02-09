@@ -6,7 +6,7 @@ import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity} from
 /// @dev implements mapping (bytes32 baseImageId => BaseImageSpecStorage)
 struct BaseImageSpecStorage {
     bool exists;
-    bool isActive;
+    bool isRevoked;
     bytes32 owner;
     BaseImageSpec spec;
     bytes32[] platformProfileIds;
@@ -54,6 +54,11 @@ interface IBaseImageRegistry {
     /// @param name Human-readable variant name (e.g., machine type)
     event MeasurementVariantRegistered(bytes32 indexed platformProfileId, bytes32 indexed variantId, string name);
 
+    /// @notice Emitted when platform variants are added/updated on an existing base image
+    /// @param baseImageId The base image identifier
+    /// @param owner The base image owner fingerprint
+    event BaseImageUpdated(bytes32 indexed baseImageId, bytes32 indexed owner);
+
     // ============================================================================
     // Functions
     // ============================================================================
@@ -84,6 +89,24 @@ interface IBaseImageRegistry {
     /// @param ownerSignature Signature over the deactivation request by ownerIdentity
     function deactivateBaseImage(
         bytes32 baseImageId,
+        uint64 expireAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external;
+
+    /// @notice Add or update platform profiles and measurement variants on an existing base image
+    /// @dev Additive/upsert semantics: new profiles/variants are added, existing ones (same name → same ID) are overwritten.
+    ///      Unmentioned profiles/variants remain untouched. Updates are blocked on revoked base images.
+    /// @param baseImageId The base image identifier to update
+    /// @param platformProfiles Platform-specific profiles to add/update
+    /// @param measurementVariants Machine-type-specific PCR overrides - measurementVariants[i].length corresponds to platformProfiles[i]
+    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
+    /// @param ownerIdentity The public key identity of the base image owner
+    /// @param ownerSignature Signature over the update data by ownerIdentity
+    function addPlatformVariants(
+        bytes32 baseImageId,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
         uint64 expireAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
@@ -131,10 +154,10 @@ interface IBaseImageRegistry {
     /// @return The owner's identity fingerprint (bytes32)
     function getBaseImageOwner(bytes32 baseImageId) external view returns (bytes32);
 
-    /// @notice Check if a base image is active
+    /// @notice Check if a base image is revoked
     /// @param baseImageId The base image identifier
-    /// @return True if the base image is active
-    function isBaseImageActive(bytes32 baseImageId) external view returns (bool);
+    /// @return True if the base image is revoked
+    function isBaseImageRevoked(bytes32 baseImageId) external view returns (bool);
 
     /// @notice Check if a measurement variant exists
     /// @param variantId The variant identifier

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.15;
 
-import {BytesUtils} from "@automata-network/automata-tpm-attestation/lib/BytesUtils.sol";
-import {Bytes48} from "@automata-network/automata-tpm-attestation/lib/LibBytes.sol";
+import {BytesUtils} from "./BytesUtils.sol";
+import {Bytes48} from "./LibBytes.sol";
 
 library Sha2Ext {
     using BytesUtils for bytes;
+
+    /// @notice SHA-2 padding length is invalid
+    error Sha2PaddingError();
 
     function sha2(bytes memory message, uint64[8] memory h) internal pure {
         uint64[80] memory k = [
@@ -92,7 +95,7 @@ library Sha2Ext {
         ];
 
         bytes memory padding = padMessage(message);
-        require(padding.length % 128 == 0, "PADDING_ERROR");
+        if (padding.length % 128 != 0) revert Sha2PaddingError();
         uint64[80] memory w;
         uint64[8] memory temp;
         uint64[16] memory blocks;

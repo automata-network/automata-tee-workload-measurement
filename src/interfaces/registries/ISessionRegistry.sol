@@ -4,6 +4,13 @@ pragma solidity ^0.8.27;
 import {CVMSession, PublicIdentity} from "../../types/Common.sol";
 import {AttestationEvidence, TpmReport, SessionRotationEvidence} from "../../types/Evidence.sol";
 
+struct CVMSessionStorage {
+    bool exists;
+    bool isRevoked;
+    bytes32 owner;
+    CVMSession session;
+}
+
 interface ISessionRegistry {
     // ============================================================================
     // Events
@@ -84,6 +91,8 @@ interface ISessionRegistry {
     /// @param sessionId The session identifier
     /// @return session The complete session data
     function getSession(bytes32 sessionId) external view returns (CVMSession memory session);
+
+    function getSessionId(bytes32 sessionFingerprint) external view returns (bytes32 sessionId);
 
     /// @notice Revoke a session (only by owner)
     /// @param sessionId The session identifier

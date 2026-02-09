@@ -5,12 +5,14 @@ import {PublicIdentity} from "./types/Common.sol";
 import {ALGO_ID_NULL} from "./types/Constants.sol";
 import {IKeyResolver} from "./interfaces/registries/IKeyResolver.sol";
 import {LibKey} from "./lib/LibKey.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title KeyResolver
 /// @notice Registry for CVM session key identities with fingerprint-based lookups
 /// @dev Stores PublicIdentity structs indexed by their domain-separated fingerprint
 ///      Fingerprints are computed as: keccak256(abi.encode(KEY_DOMAIN, typeId, key))
-contract KeyResolver is IKeyResolver {
+contract KeyResolver is IKeyResolver, OwnableUpgradeable, UUPSUpgradeable {
     // ============================================================================
     // Errors
     // ============================================================================
@@ -28,6 +30,23 @@ contract KeyResolver is IKeyResolver {
     /// @dev Maps fingerprint → PublicIdentity
     /// @dev Existence check: _identities[fp].typeId != ALG_ID_NULL (typeId is 1-indexed)
     mapping(bytes32 => PublicIdentity) private _identities;
+    /// @dev Storage gap for future upgrades (1 existing mapping → 49-slot gap)
+    uint256[49] private __gap;
+
+    // ============================================================================
+    // Constructor & Initialization
+    // ============================================================================
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initializes the contract with the initial owner
+    /// @param initialOwner The address that will own the contract
+    function initialize(address initialOwner) external initializer {
+        __Ownable_init(initialOwner);
+    }
 
     // ============================================================================
     // External Functions
@@ -61,14 +80,22 @@ contract KeyResolver is IKeyResolver {
 
     /// @inheritdoc IKeyResolver
     function getIdentity(bytes32 fingerprint) external view returns (PublicIdentity memory identity) {
+        identity = _identities[fingerprint];
         if (identity.typeId == ALGO_ID_NULL) {
             revert IdentityNotFound(fingerprint);
         }
-        identity = _identities[fingerprint];
     }
 
     /// @inheritdoc IKeyResolver
     function hasIdentity(bytes32 fingerprint) external view returns (bool) {
         return _identities[fingerprint].typeId != ALGO_ID_NULL;
     }
+
+    // ============================================================================
+    // Internal Functions - UUPS
+    // ============================================================================
+
+    /// @dev Authorizes an upgrade to a new implementation
+    /// @param newImplementation Address of the new implementation
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 }

@@ -29,6 +29,8 @@ bytes32 constant SESSION_NONCE_DOMAIN = keccak256("CVM_SESSION_REG_NONCE_V1");
 bytes32 constant BASEIMAGE_REGISTER_MSG = keccak256("CVM_MSG_BASEIMAGE_REGISTER_V1");
 /// @dev Message separator for base image deactivation message signatures
 bytes32 constant BASEIMAGE_DEACTIVATE_MSG = keccak256("CVM_MSG_BASEIMAGE_DEACTIVATE_V1");
+/// @dev Message separator for base image update message signatures
+bytes32 constant BASEIMAGE_UPDATE_MSG = keccak256("CVM_MSG_BASEIMAGE_UPDATE_V1");
 /// @dev Message separator for workload registration message signatures
 bytes32 constant WORKLOAD_REGISTER_MSG = keccak256("CVM_MSG_WORKLOAD_REGISTER_V1");
 /// @dev Message separator for workload deactivation message signatures

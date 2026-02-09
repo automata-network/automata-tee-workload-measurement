@@ -14,7 +14,7 @@ library BytesUtils {
     */
     function keccak(bytes memory self, uint256 offset, uint256 len) internal pure returns (bytes32 ret) {
         require(offset + len <= self.length);
-        assembly {
+        assembly ("memory-safe") {
             ret := keccak256(add(add(self, 32), offset), len)
         }
     }
@@ -60,14 +60,14 @@ library BytesUtils {
         uint256 selfptr;
         uint256 otherptr;
 
-        assembly {
+        assembly ("memory-safe") {
             selfptr := add(self, add(offset, 32))
             otherptr := add(other, add(otheroffset, 32))
         }
         for (uint256 idx = 0; idx < shortest; idx += 32) {
             uint256 a;
             uint256 b;
-            assembly {
+            assembly ("memory-safe") {
                 a := mload(selfptr)
                 b := mload(otherptr)
             }
@@ -164,7 +164,7 @@ library BytesUtils {
     */
     function readUint16(bytes memory self, uint256 idx) internal pure returns (uint16 ret) {
         require(idx + 2 <= self.length);
-        assembly {
+        assembly ("memory-safe") {
             ret := and(mload(add(add(self, 2), idx)), 0xFFFF)
         }
     }
@@ -177,7 +177,7 @@ library BytesUtils {
     */
     function readUint32(bytes memory self, uint256 idx) internal pure returns (uint32 ret) {
         require(idx + 4 <= self.length);
-        assembly {
+        assembly ("memory-safe") {
             ret := and(mload(add(add(self, 4), idx)), 0xFFFFFFFF)
         }
     }
@@ -190,7 +190,7 @@ library BytesUtils {
     */
     function readBytes32(bytes memory self, uint256 idx) internal pure returns (bytes32 ret) {
         require(idx + 32 <= self.length);
-        assembly {
+        assembly ("memory-safe") {
             ret := mload(add(add(self, 32), idx))
         }
     }
@@ -203,7 +203,7 @@ library BytesUtils {
     */
     function readBytes20(bytes memory self, uint256 idx) internal pure returns (bytes20 ret) {
         require(idx + 20 <= self.length);
-        assembly {
+        assembly ("memory-safe") {
             ret := and(
                 mload(add(add(self, 32), idx)),
                 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF000000000000000000000000
@@ -212,13 +212,13 @@ library BytesUtils {
     }
 
     function readBytes8(bytes memory b, uint256 index) internal pure returns (bytes8 result) {
-        require(b.length >= index + 8, "GREATER_OR_EQUAL_TO_8_LENGTH_REQUIRED");
+        require(b.length >= index + 8);
 
         // Arrays are prefixed by a 32 byte length field
         index += 32;
 
         // Read the bytes8 from array memory
-        assembly {
+        assembly ("memory-safe") {
             result := mload(add(b, index))
             // Solidity does not require us to clean the trailing bytes.
             // We do it anyway
@@ -237,7 +237,7 @@ library BytesUtils {
     function readBytesN(bytes memory self, uint256 idx, uint256 len) internal pure returns (bytes32 ret) {
         require(len <= 32);
         require(idx + len <= self.length);
-        assembly {
+        assembly ("memory-safe") {
             let mask := not(sub(exp(256, sub(32, len)), 1))
             ret := and(mload(add(add(self, 32), idx)), mask)
         }
@@ -246,7 +246,7 @@ library BytesUtils {
     function memcpy(uint256 dest, uint256 src, uint256 len) private pure {
         // Copy word-length chunks while possible
         for (; len >= 32; len -= 32) {
-            assembly {
+            assembly ("memory-safe") {
                 mstore(dest, mload(src))
             }
             dest += 32;
@@ -261,7 +261,7 @@ library BytesUtils {
             mask = 256 ** (32 - len) - 1;
         }
 
-        assembly {
+        assembly ("memory-safe") {
             let srcpart := and(mload(src), not(mask))
             let destpart := and(mload(dest), mask)
             mstore(dest, or(destpart, srcpart))

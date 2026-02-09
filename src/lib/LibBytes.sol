@@ -19,8 +19,11 @@ struct Bytes48 {
 library LibBytes {
     bytes16 private constant _SYMBOLS = "0123456789abcdef";
 
+    /// @notice Byte array length is invalid
+    error InvalidLength();
+
     function readBytes48(bytes memory input, uint256 offset) internal pure returns (Bytes48 memory output) {
-        assembly {
+        assembly ("memory-safe") {
             function store48(dest, src, off) {
                 mstore(dest, mload(add(add(src, 0x20), off)))
                 mstore(add(dest, 0x20), mload(add(add(src, 0x40), off)))
@@ -30,7 +33,7 @@ library LibBytes {
     }
 
     function readBytes64(bytes memory input, uint256 offset) internal pure returns (Bytes64 memory output) {
-        assembly {
+        assembly ("memory-safe") {
             function store64(dest, src, off) {
                 mstore(dest, mload(add(add(src, 0x20), off)))
                 mstore(add(dest, 0x20), mload(add(add(src, 0x40), off)))
@@ -40,30 +43,30 @@ library LibBytes {
     }
 
     function readBytes2(bytes memory input, uint256 offset) internal pure returns (bytes2 output) {
-        assembly {
+        assembly ("memory-safe") {
             output := mload(add(add(input, 0x20), offset))
         }
     }
 
     function readBytes4(bytes memory input, uint256 offset) internal pure returns (bytes4 output) {
-        assembly {
+        assembly ("memory-safe") {
             output := mload(add(add(input, 0x20), offset))
         }
     }
 
     function readBytes32(bytes memory input, uint256 offset) internal pure returns (bytes32 output) {
-        assembly {
+        assembly ("memory-safe") {
             output := mload(add(add(input, 0x20), offset))
         }
     }
 
     function toBytes48(bytes memory data) internal pure returns (Bytes48 memory) {
-        require(data.length == 48, "Invalid length");
+        if (data.length != 48) revert InvalidLength();
         return readBytes48(data, 0);
     }
 
     function toBytes64(bytes memory data) internal pure returns (Bytes64 memory) {
-        require(data.length == 64, "Invalid length");
+        if (data.length != 64) revert InvalidLength();
         return readBytes64(data, 0);
     }
 
