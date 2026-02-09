@@ -71,6 +71,9 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     mapping(bytes32 => MeasurementVariantStorage) private _variants;
     mapping(bytes32 => bool) private _whitelist;
 
+    /// @dev Storage gap for future upgrades (4 existing mappings → 46-slot gap)
+    uint256[46] private __gap;
+
     // ============================================================================
     // Constructor & Initialization
     // ============================================================================
@@ -126,7 +129,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             }
         }
 
-        // Compute base image ID (simplified: name only)
+        // Compute base image ID
         baseImageId = keccak256(abi.encode(BASEIMAGE_DOMAIN, spec.name, spec.version));
 
         // Check for duplicate
@@ -411,11 +414,4 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     /// @dev Authorizes an upgrade to a new implementation
     /// @param newImplementation Address of the new implementation
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-    // ============================================================================
-    // Storage Gap
-    // ============================================================================
-
-    /// @dev Storage gap for future upgrades (4 existing mappings → 46-slot gap)
-    uint256[46] private __gap;
 }

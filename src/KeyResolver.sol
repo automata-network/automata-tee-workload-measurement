@@ -30,6 +30,8 @@ contract KeyResolver is IKeyResolver, OwnableUpgradeable, UUPSUpgradeable {
     /// @dev Maps fingerprint → PublicIdentity
     /// @dev Existence check: _identities[fp].typeId != ALG_ID_NULL (typeId is 1-indexed)
     mapping(bytes32 => PublicIdentity) private _identities;
+    /// @dev Storage gap for future upgrades (1 existing mapping → 49-slot gap)
+    uint256[49] private __gap;
 
     // ============================================================================
     // Constructor & Initialization
@@ -96,11 +98,4 @@ contract KeyResolver is IKeyResolver, OwnableUpgradeable, UUPSUpgradeable {
     /// @dev Authorizes an upgrade to a new implementation
     /// @param newImplementation Address of the new implementation
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-    // ============================================================================
-    // Storage Gap
-    // ============================================================================
-
-    /// @dev Storage gap for future upgrades (1 existing mapping → 49-slot gap)
-    uint256[49] private __gap;
 }

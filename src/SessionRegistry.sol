@@ -102,10 +102,6 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     /// @dev Session fingerprint to session ID mapping
     mapping(bytes32 => bytes32) private _sessionFingerprintsToIds;
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Storage Gap
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
     /// @dev Storage gap for future upgrades (4 existing mappings → 46-slot gap)
     uint256[46] private __gap;
 
@@ -274,7 +270,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
         // Verify owner signature over session registration message
         bytes32 message = sha256(abi.encode(SESSION_REGISTER_MSG, block.chainid, address(this), expireAt, sessionId));
-        _requireOwnerSignature(ownerIdentity, ownerSignature, message);
+        _requireSignature(ownerIdentity, message, ownerSignature);
 
         // Create session with TTL handling (default: 30 days)
         uint64 expiresAt = policyCtx.workloadSpec.ttl == 0
@@ -344,7 +340,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
         // Verify signature
         bytes32 message = sha256(abi.encode(SESSION_REVOKE_MSG, block.chainid, address(this), expireAt, sessionId));
-        _requireOwnerSignature(ownerIdentity, ownerSignature, message);
+        _requireSignature(ownerIdentity, message, ownerSignature);
 
         // Revoke session
         sessionStorage.isRevoked = true;
@@ -389,11 +385,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
     /// @inheritdoc ISessionRegistry
     function isSessionActive(bytes32 sessionId) external view returns (bool) {
-        CVMSessionStorage storage sessionStorage = _sessions[sessionId];
-        if (!sessionStorage.exists) {
-            return false;
-        }
-        return sessionStorage.exists && !sessionStorage.isRevoked && block.timestamp <= sessionStorage.session.expiresAt;
+        return _isSessionActive(_sessions[sessionId]);
     }
 
     /// @inheritdoc ISessionRegistry
@@ -422,17 +414,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         bytes32 message,
         bytes calldata signature
     ) external view returns (bool valid) {
-        CVMSession storage session = _sessions[sessionId];
+        CVMSessionStorage storage sessionStorage = _sessions[sessionId];
 
         // Check session exists and is active
-        if (session.sessionId == bytes32(0)) return false;
-        if (!session.isActive) return false;
-        if (block.timestamp > session.expiresAt) return false;
+        if (!_isSessionActive(sessionStorage)) return false;
 
         // Verify sessionKey matches stored fingerprint
         bytes32 fingerprint = LibKey.computeKeyFingerprint(sessionKey);
-        if (fingerprint != session.sessionKeyFingerprint) return false;
-
+        if (fingerprint != sessionStorage.session.sessionKeyFingerprint) return false;
         // Verify signature
         return signatureVerifier.verify(sessionKey, message, signature);
     }
@@ -604,7 +593,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
         bytes32 message =
             sha256(abi.encode(SESSION_ROTATE_MSG, block.chainid, address(this), expireAt, oldSessionId, newSessionId));
-        _requireOwnerSignature(ownerIdentity, ownerSignature, message);
+        _requireSignature(ownerIdentity, message, ownerSignature);
 
         _sessions[oldSessionId].isRevoked = true;
 
@@ -638,10 +627,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     /// @param evidence The attestation evidence bundle
     /// @param ownerFingerprint Pre-computed owner fingerprint
     /// @return result Attestation verification results
-    function _verifyAttestation(
-        AttestationEvidence calldata evidence,
-        bytes32 ownerFingerprint
-    ) private returns (AttestationResult memory result) {
+    function _verifyAttestation(AttestationEvidence calldata evidence, bytes32 ownerFingerprint)
+        private
+        returns (AttestationResult memory result)
+    {
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 2: TEE Report Verification
         // ─────────────────────────────────────────────────────────────────────────────────
@@ -710,13 +699,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         }
     }
 
-    /// @dev Verifies owner signature
-    function _requireOwnerSignature(
-        PublicIdentity calldata ownerIdentity,
-        bytes calldata ownerSignature,
-        bytes32 message
+    /// @dev Verifies signature
+    function _requireSignature(
+        PublicIdentity calldata signer,
+        bytes32 message,
+        bytes calldata signature
     ) private view {
-        if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
+        if (!signatureVerifier.verify(signer, message, signature)) {
             revert InvalidSignature();
         }
     }
@@ -726,6 +715,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         if (block.timestamp > expireAt) {
             revert SignatureExpired();
         }
+    }
+
+    /// @dev Checks if a session exists and is active
+    function _isSessionActive(CVMSessionStorage storage sessionStorage) private view returns (bool) {
+        return sessionStorage.exists && !sessionStorage.isRevoked && block.timestamp <= sessionStorage.session.expiresAt;
     }
 
     /// @dev Looks up and validates policy components (workload, base image, variant)
@@ -781,7 +775,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         }
 
         // Increment nonce immediately after successful verification to prevent replay attacks
-        _ownerNonces[ownerFingerprint] += 1;
+        unchecked {
+            _ownerNonces[ownerFingerprint] = nonce + 1;
+        }
 
         TpmQuoteReport memory quoteReport = abi.decode(tpmQuoteReport.data, (TpmQuoteReport));
         return (quoteResult.pcrValues, keccak256(quoteReport.tpmSignature));
@@ -846,8 +842,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         bytes32 certifiedKeyFingerprint,
         bytes32 sessionKeyFingerprint,
         bytes32 teeReportBytesHash,
-        bytes memory rotationSignature,
-        PublicIdentity memory oldTpmSigningKey
+        bytes calldata rotationSignature,
+        PublicIdentity calldata oldTpmSigningKey
     ) private view {
         bytes32 rotationMessage = keccak256(
             abi.encode(
@@ -855,9 +851,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
             )
         );
 
-        if (!signatureVerifier.verify(oldTpmSigningKey, rotationMessage, rotationSignature)) {
-            revert InvalidSignature();
-        }
+        _requireSignature(oldTpmSigningKey, rotationMessage, rotationSignature);
     }
 
     /// @dev Creates a new session and updates related storage

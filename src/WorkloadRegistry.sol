@@ -46,6 +46,8 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     mapping(bytes32 => WorkloadSpecStorage) private _workloads;
     mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageSet;
     mapping(bytes32 => bool) private _whitelist;
+    /// @dev Storage gap for future upgrades (3 existing mappings → 47-slot gap)
+    uint256[47] private __gap;
 
     // ============================================================================
     // Constructor & Initialization
@@ -84,7 +86,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         _validatePcrSpecsSorted(spec.pcrs);
         _validateUniqueRequirementKeys(spec.requirements);
 
-        // Compute workload ID (simplified: name only)
+        // Compute workload ID
         workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version));
 
         // Check for duplicate
@@ -299,11 +301,4 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     /// @dev Authorizes an upgrade to a new implementation
     /// @param newImplementation Address of the new implementation
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-    // ============================================================================
-    // Storage Gap
-    // ============================================================================
-
-    /// @dev Storage gap for future upgrades (3 existing mappings → 47-slot gap)
-    uint256[47] private __gap;
 }
