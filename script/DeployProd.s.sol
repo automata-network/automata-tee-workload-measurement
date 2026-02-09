@@ -46,8 +46,8 @@ contract DeployProd is DeploymentConfig, P256Configuration {
         address dcapAddr = vm.envAddress("DCAP_ATTESTATION_ADDR");
         address snpAddr = vm.envAddress("SNP_ATTESTATION_ADDR");
         address tpmAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
+        // uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.envAddress("OWNER");
 
         console.log("=== Production Deployment ===");
         console.log("Deployer / Owner:", deployer);
@@ -66,7 +66,7 @@ contract DeployProd is DeploymentConfig, P256Configuration {
         address p256Verifier = simulateVerify();
         console.log("");
 
-        vm.startBroadcast(deployerPrivateKey);
+        vm.startBroadcast(deployer);
 
         // 1. SignatureVerifier (no proxy)
         SignatureVerifier signatureVerifier = new SignatureVerifier{salt: SIGNATURE_VERIFIER_SALT}(p256Verifier);
