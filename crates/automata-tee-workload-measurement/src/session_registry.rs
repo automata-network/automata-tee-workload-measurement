@@ -1,6 +1,6 @@
 //! SessionRegistry contract interaction.
 
-use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum};
+use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum, ProviderEx};
 use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
@@ -8,11 +8,13 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use tracing::info;
 
-use crate::stubs::SessionRegistry::{
-    AttestationEvidence, PublicIdentity as SessionPublicIdentity, SessionRegistryEvents,
-    SessionRegistryInstance, SessionRotationEvidence,
+use crate::base_image_registry::BaseImageRegistry;
+use crate::stubs::SessionRegistry::{SessionRegistryEvents, SessionRegistryInstance};
+use crate::stubs::{
+    AttestationEvidence, PublicIdentity, SessionRotationEvidence, TpmQuoteReport, sign_message,
 };
-use crate::stubs::{PublicIdentity, TpmQuoteReport, sign_message};
+use crate::types::{AppRef, RegisterSessionResponse, RotateSessionResponse};
+use crate::workload_registry::WorkloadRegistry;
 
 pub struct SessionRegistry {
     stub: SessionRegistryInstance<NetworkProvider>,
@@ -23,6 +25,16 @@ impl SessionRegistry {
         Self {
             stub: SessionRegistryInstance::new(contract, p),
         }
+    }
+
+    pub async fn workload_registry(&self) -> Result<WorkloadRegistry> {
+        let addr = self.stub.workloadRegistry().call().await?;
+        Ok(WorkloadRegistry::new(addr, self.stub.provider().clone()))
+    }
+
+    pub async fn base_image_registry(&self) -> Result<BaseImageRegistry> {
+        let addr = self.stub.baseImageRegistry().call().await?;
+        Ok(BaseImageRegistry::new(addr, self.stub.provider().clone()))
     }
 
     /// Query the nonce for a given owner fingerprint.
@@ -52,12 +64,12 @@ impl SessionRegistry {
         &self,
         signer: &PrivateKeySigner,
         evidence: AttestationEvidence,
-        workload_id: B256,
-        base_image_id: B256,
+        workload_ref: AppRef,
+        base_image_ref: AppRef,
         platform_profile_id: B256,
         variant_id: B256,
         expire_offset_secs: u64,
-    ) -> Result<B256> {
+    ) -> Result<RegisterSessionResponse> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
         // Calculate expiration timestamp
@@ -68,14 +80,13 @@ impl SessionRegistry {
         let expire_at = current_timestamp + expire_offset_secs;
 
         // Get chain ID
-        let chain_id = self
-            .stub
-            .provider()
-            .get_chain_id()
-            .await
-            .context("Failed to get chain ID")?;
-
-        let session_id = compute_session_id(&evidence)?;
+        let chain_id = self.stub.provider().chain_id();
+        let session_id = compute_session_id_from_parts(
+            &evidence.tpm_quote_report.data,
+            &evidence.tee_report.data,
+        )?;
+        let workload_id = WorkloadRegistry::get_workload_id(&workload_ref);
+        let base_image_id = BaseImageRegistry::get_image_id(&base_image_ref);
 
         info!(
             address = %self.stub.address(),
@@ -100,10 +111,8 @@ impl SessionRegistry {
         )
         .await?;
 
-        // Call the contract
-        let pending = self
-            .stub
-            .registerSession(
+        let response = self
+            .register_session_presigned(
                 evidence,
                 workload_id,
                 base_image_id,
@@ -113,24 +122,9 @@ impl SessionRegistry {
                 owner_identity.into(),
                 sig_bytes,
             )
-            .send_ex()
             .await?;
 
-        let tx_hash = pending.tx_hash();
-        info!(tx_hash = %tx_hash, "Transaction submitted");
-
-        let mut tx = PendingTxAccum::new(pending, |event, result: &mut B256| {
-            if let SessionRegistryEvents::SessionRegistered(msg) = event {
-                *result = msg.sessionId
-            }
-        });
-
-        let session_id = tx
-            .result()
-            .await
-            .context("Failed to get transaction receipt")?;
-
-        Ok(session_id)
+        Ok(response)
     }
 
     /// Rotate a session to a new session key.
@@ -148,7 +142,7 @@ impl SessionRegistry {
         tee_report_bytes_hash: B256,
         rotation_evidence: SessionRotationEvidence,
         expire_offset_secs: u64,
-    ) -> Result<B256> {
+    ) -> Result<RotateSessionResponse> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
         // Calculate expiration timestamp
@@ -167,8 +161,10 @@ impl SessionRegistry {
             .context("Failed to get chain ID")?;
 
         // Pre-compute newSessionId
-        let new_session_id =
-            compute_new_session_id(tee_report_bytes_hash, &rotation_evidence.tpmQuoteReport.data)?;
+        let new_session_id = compute_new_session_id(
+            tee_report_bytes_hash,
+            &rotation_evidence.tpm_quote_report.data,
+        )?;
 
         info!(
             address = %self.stub.address(),
@@ -193,35 +189,18 @@ impl SessionRegistry {
         )
         .await?;
 
-        // Call the contract
-        let pending = self
-            .stub
-            .rotateSession(
+        let response = self
+            .rotate_session_presigned(
                 old_session_id,
                 tee_report_bytes_hash,
                 rotation_evidence,
                 expire_at,
-                owner_identity.into(),
+                owner_identity,
                 sig_bytes,
             )
-            .send_ex()
             .await?;
 
-        let tx_hash = pending.tx_hash();
-        info!(tx_hash = %tx_hash, "Rotation transaction submitted");
-
-        let mut tx = PendingTxAccum::new(pending, |event, result: &mut B256| {
-            if let SessionRegistryEvents::SessionRotated(msg) = event {
-                *result = msg.newSessionId
-            }
-        });
-
-        let new_session_id = tx
-            .result()
-            .await
-            .context("Failed to get rotation transaction receipt")?;
-
-        Ok(new_session_id)
+        Ok(response)
     }
 
     /// Register a session with a pre-signed owner signature.
@@ -238,10 +217,13 @@ impl SessionRegistry {
         platform_profile_id: B256,
         variant_id: B256,
         expire_at: u64,
-        owner_identity: SessionPublicIdentity,
+        owner_identity: PublicIdentity,
         owner_signature: Bytes,
-    ) -> Result<(B256, B256)> {
-        let session_id = compute_session_id(&evidence)?;
+    ) -> Result<RegisterSessionResponse> {
+        let session_id = compute_session_id_from_parts(
+            &evidence.tpm_quote_report.data,
+            &evidence.tee_report.data,
+        )?;
 
         info!(
             address = %self.stub.address(),
@@ -256,13 +238,13 @@ impl SessionRegistry {
         let pending = self
             .stub
             .registerSession(
-                evidence,
+                evidence.into(),
                 workload_id,
                 base_image_id,
                 platform_profile_id,
                 variant_id,
                 expire_at,
-                owner_identity,
+                owner_identity.into(),
                 owner_signature,
             )
             .send_ex()
@@ -271,18 +253,20 @@ impl SessionRegistry {
         let tx_hash = B256::from(*pending.tx_hash());
         info!(tx_hash = %tx_hash, "Transaction submitted");
 
-        let mut tx = PendingTxAccum::new(pending, |event, result: &mut B256| {
+        let mut tx = PendingTxAccum::new(pending, |event, result: &mut RegisterSessionResponse| {
             if let SessionRegistryEvents::SessionRegistered(msg) = event {
-                *result = msg.sessionId
+                result.session_id = msg.sessionId
             }
         });
 
-        let session_id = tx
+        let mut response = tx
             .result()
             .await
             .context("Failed to get transaction receipt")?;
 
-        Ok((session_id, tx_hash))
+        response.tx_hash = tx.tx_hash();
+
+        Ok(response)
     }
 
     /// Rotate a session with a pre-signed owner signature.
@@ -297,12 +281,14 @@ impl SessionRegistry {
         tee_report_bytes_hash: B256,
         rotation_evidence: SessionRotationEvidence,
         expire_at: u64,
-        owner_identity: SessionPublicIdentity,
+        owner_identity: PublicIdentity,
         owner_signature: Bytes,
-    ) -> Result<(B256, B256)> {
+    ) -> Result<RotateSessionResponse> {
         // Pre-compute newSessionId
-        let new_session_id =
-            compute_new_session_id(tee_report_bytes_hash, &rotation_evidence.tpmQuoteReport.data)?;
+        let new_session_id = compute_new_session_id(
+            tee_report_bytes_hash,
+            &rotation_evidence.tpm_quote_report.data,
+        )?;
 
         info!(
             address = %self.stub.address(),
@@ -318,44 +304,31 @@ impl SessionRegistry {
             .rotateSession(
                 old_session_id,
                 tee_report_bytes_hash,
-                rotation_evidence,
+                rotation_evidence.into(),
                 expire_at,
-                owner_identity,
+                owner_identity.into(),
                 owner_signature,
             )
             .send_ex()
             .await?;
 
-        let tx_hash = B256::from(*pending.tx_hash());
-        info!(tx_hash = %tx_hash, "Rotation transaction submitted");
+        info!(tx_hash = %pending.tx_hash(), "Rotation transaction submitted");
 
-        let mut tx = PendingTxAccum::new(pending, |event, result: &mut B256| {
+        let mut tx = PendingTxAccum::new(pending, |event, result: &mut RotateSessionResponse| {
             if let SessionRegistryEvents::SessionRotated(msg) = event {
-                *result = msg.newSessionId
+                result.new_session_id = msg.newSessionId;
             }
         });
 
-        let new_session_id = tx
+        let mut response = tx
             .result()
             .await
             .context("Failed to get rotation transaction receipt")?;
 
-        Ok((new_session_id, tx_hash))
-    }
-}
+        response.tx_hash = tx.tx_hash();
 
-/// Pre-compute sessionId from attestation evidence.
-///
-/// This matches the contract's computation:
-/// ```solidity
-/// bytes32 constant SESSION_DOMAIN = keccak256("CVM_SESSION_V1");
-/// bytes32 teeReportBytesHash = keccak256(evidence.teeReport.data);
-/// TpmQuoteReport memory quoteReport = abi.decode(evidence.tpmQuoteReport.data, (TpmQuoteReport));
-/// bytes32 tpmSignatureHash = keccak256(quoteReport.tpmSignature);
-/// sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash));
-/// ```
-pub fn compute_session_id(evidence: &AttestationEvidence) -> Result<B256> {
-    compute_session_id_from_parts(&evidence.tpmQuoteReport.data, &evidence.teeReport.data)
+        Ok(response)
+    }
 }
 
 /// Compute sessionId from raw TPM quote report data and TEE report data.
@@ -389,7 +362,10 @@ pub fn compute_session_id_from_parts(
 /// bytes32 newTpmSignatureHash = keccak256(quoteReport.tpmSignature);
 /// newSessionId = keccak256(abi.encode(SESSION_DOMAIN, newTpmSignatureHash, teeReportBytesHash));
 /// ```
-pub fn compute_new_session_id(tee_report_bytes_hash: B256, tpm_quote_report_data: &Bytes) -> Result<B256> {
+pub fn compute_new_session_id(
+    tee_report_bytes_hash: B256,
+    tpm_quote_report_data: &Bytes,
+) -> Result<B256> {
     // Decode TpmQuoteReport and hash tpmSignature
     let quote_report = TpmQuoteReport::abi_decode(tpm_quote_report_data)
         .context("Failed to decode TpmQuoteReport for rotation")?;
@@ -398,7 +374,12 @@ pub fn compute_new_session_id(tee_report_bytes_hash: B256, tpm_quote_report_data
     // Compute newSessionId: keccak256(abi.encode(SESSION_DOMAIN, newTpmSignatureHash, teeReportBytesHash))
     let session_domain = keccak256(b"CVM_SESSION_V1");
     let new_session_id = keccak256(
-        (session_domain, new_tpm_signature_hash, tee_report_bytes_hash).abi_encode_params(),
+        (
+            session_domain,
+            new_tpm_signature_hash,
+            tee_report_bytes_hash,
+        )
+            .abi_encode_params(),
     );
 
     Ok(new_session_id)

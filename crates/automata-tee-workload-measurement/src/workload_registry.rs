@@ -4,7 +4,6 @@ use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum};
 use alloy::primitives::{Address, B256, U256, keccak256};
 use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use tracing::info;
 
@@ -12,6 +11,7 @@ use crate::stubs::WorkloadRegistry::{
     WorkloadRegistryEvents, WorkloadRegistryInstance, WorkloadSpec,
 };
 use crate::stubs::{PublicIdentity, sign_message};
+use crate::types::AppRef;
 
 pub struct WorkloadRegistry {
     stub: WorkloadRegistryInstance<NetworkProvider>,
@@ -24,9 +24,8 @@ impl WorkloadRegistry {
         }
     }
 
-    pub fn get_workload_id(name: &str, version: &str) -> B256 {
-        // Compute workloadId as keccak256(abi.encode(name, version))
-        keccak256((keccak256("CVM_WORKLOAD_V1"), name, version).abi_encode_params())
+    pub fn get_workload_id(app_ref: &AppRef) -> B256 {
+        app_ref.id("CVM_WORKLOAD_V1")
     }
 
     /// Register a workload to the WorkloadRegistry contract.
@@ -51,12 +50,14 @@ impl WorkloadRegistry {
             .as_secs();
         let expire_at = current_timestamp + expire_offset_secs;
 
+        let workload_id = Self::get_workload_id(&AppRef::new(&spec.name, &spec.version));
+
         info!(
             address = %self.stub.address(),
             expire_at = expire_at,
             workload_name = %spec.name,
             workload_version = %spec.version,
-            workload_id = %Self::get_workload_id(&spec.name, &spec.version),
+            workload_id = %workload_id,
             "Submitting registerWorkload transaction"
         );
 

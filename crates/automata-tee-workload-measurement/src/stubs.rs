@@ -1,9 +1,10 @@
 use alloy::{
-    primitives::{keccak256, B256, Bytes},
+    primitives::{B256, Bytes, keccak256},
     signers::{Signer, local::PrivateKeySigner},
     sol_types::SolValue,
 };
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
@@ -46,9 +47,10 @@ pub enum AlgoId {
     Es256K = 3,
 }
 
-#[derive(Clone, Debug)]
+/// Public identity for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicIdentity {
-    pub type_id: AlgoId,
+    pub type_id: u8,
     pub key: Bytes,
 }
 
@@ -59,7 +61,7 @@ impl PublicIdentity {
         let public_key_bytes = encoded_point.as_bytes(); // 65 bytes: 0x04 || x || y
 
         PublicIdentity {
-            type_id: AlgoId::Es256K,
+            type_id: AlgoId::Es256K as _,
             key: public_key_bytes.to_vec().into(),
         }
     }
@@ -154,4 +156,80 @@ where
     sig_bytes.push(if signature.v() { 28u8 } else { 27u8 });
 
     Ok(sig_bytes.into())
+}
+
+/// Attestation evidence for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationEvidence {
+    pub tee_report: TeeReport,
+    pub tpm_quote_report: TpmReport,
+    pub tpm_certify_report: TpmReport,
+    pub ak_pub_collateral: AkPubCollateral,
+    pub session_key_signature: Bytes,
+    pub session_key: PublicIdentity,
+}
+
+impl From<AttestationEvidence> for SessionRegistry::AttestationEvidence {
+    fn from(data: AttestationEvidence) -> Self {
+        unsafe { std::mem::transmute(data) }
+    }
+}
+
+/// TEE report data for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeeReport {
+    pub verification_backend_type: u8,
+    pub tee_type: u8,
+    pub data: Bytes,
+}
+
+impl From<TeeReport> for SessionRegistry::TeeReport {
+    fn from(data: TeeReport) -> Self {
+        unsafe { std::mem::transmute(data) }
+    }
+}
+
+/// TPM report data for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TpmReport {
+    pub verification_backend_type: u8,
+    pub tpm_report_type: u8,
+    pub data: Bytes,
+}
+
+impl From<TpmReport> for SessionRegistry::TpmReport {
+    fn from(data: TpmReport) -> Self {
+        unsafe { std::mem::transmute(data) }
+    }
+}
+
+/// AK pub collateral data for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AkPubCollateral {
+    pub ak_pub_collateral_type: u8,
+    pub data: Bytes,
+}
+
+impl From<AkPubCollateral> for SessionRegistry::AkPubCollateral {
+    fn from(data: AkPubCollateral) -> Self {
+        unsafe { std::mem::transmute(data) }
+    }
+}
+
+/// Session rotation evidence for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRotationEvidence {
+    pub tpm_quote_report: TpmReport,
+    pub tpm_certify_report: TpmReport,
+    pub session_key_signature: Bytes,
+    pub session_key: PublicIdentity,
+    pub rotation_signature: Bytes,
+    pub old_tpm_signing_key: PublicIdentity,
+    pub ak_pub: PublicIdentity,
+}
+
+impl From<SessionRotationEvidence> for SessionRegistry::SessionRotationEvidence {
+    fn from(data: SessionRotationEvidence) -> Self {
+        unsafe { std::mem::transmute(data) }
+    }
 }

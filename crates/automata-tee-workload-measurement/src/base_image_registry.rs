@@ -13,6 +13,7 @@ use crate::stubs::BaseImageRegistry::{
     PlatformProfile,
 };
 use crate::stubs::{PublicIdentity, sign_message};
+use crate::types::AppRef;
 
 pub struct BaseImageRegistry {
     stub: BaseImageRegistryInstance<NetworkProvider>,
@@ -32,8 +33,8 @@ impl BaseImageRegistry {
         }
     }
 
-    pub fn get_image_id(name: &str, version: &str) -> B256 {
-        keccak256((keccak256("CVM_BASEIMAGE_V1"), name, version).abi_encode_params())
+    pub fn get_image_id(app_ref: &AppRef) -> B256 {
+        app_ref.id("CVM_BASEIMAGE_V1")
     }
 
     pub fn get_platform_profile_id(image_id: B256, profile_name: &str) -> B256 {
@@ -67,7 +68,7 @@ impl BaseImageRegistry {
         measurement_variants: Vec<Vec<MeasurementVariant>>,
         expire_offset_secs: u64,
     ) -> Result<BaseImageResult> {
-        let image_id = Self::get_image_id(&spec.name, &spec.version);
+        let image_id = Self::get_image_id(&AppRef::new(&spec.name, &spec.version));
         for item in &platform_profiles {
             let profile_id = Self::get_platform_profile_id(image_id, &item.name);
             for variant in measurement_variants.iter().flatten() {

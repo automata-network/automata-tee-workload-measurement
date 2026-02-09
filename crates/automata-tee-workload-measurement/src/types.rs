@@ -1,0 +1,112 @@
+use alloy::{
+    primitives::{B256, Bytes, keccak256},
+    sol_types::SolValue,
+};
+use anyhow::ensure;
+use serde::{Deserialize, Serialize};
+
+use crate::stubs::{AttestationEvidence, PublicIdentity, SessionRotationEvidence};
+
+#[derive(Clone, Debug)]
+pub struct AppRef {
+    pub name: String,
+    pub version: String,
+}
+
+impl AppRef {
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            version: version.into(),
+        }
+    }
+
+    pub fn id(&self, domain: &str) -> B256 {
+        // Compute workloadId as keccak256(abi.encode(name, version))
+        keccak256((keccak256(domain), self.name.clone(), self.version.clone()).abi_encode_params())
+    }
+}
+
+impl std::str::FromStr for AppRef {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.splitn(2, ':').collect();
+        ensure!(
+            parts.len() == 2,
+            "Expected format 'name:version', got '{}'",
+            s
+        );
+        ensure!(
+            parts[1].starts_with("v") || parts[1] == "latest",
+            "Version should start with 'v', got '{}'",
+            parts[1]
+        );
+        Ok(AppRef {
+            name: parts[0].to_string(),
+            version: parts[1].to_string(),
+        })
+    }
+}
+
+impl std::fmt::Display for AppRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.name, self.version)
+    }
+}
+
+/// Request for registerSession
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterSessionRequest {
+    /// Attestation evidence from CVM agent
+    pub evidence: AttestationEvidence,
+    /// Workload ID (bytes32 hex)
+    pub workload_id: B256,
+    /// Base image ID (bytes32 hex)
+    pub base_image_id: B256,
+    /// Platform profile ID (bytes32 hex)
+    pub platform_profile_id: B256,
+    /// Measurement variant ID (bytes32 hex)
+    pub variant_id: B256,
+    /// Signature expiration timestamp (unix seconds)
+    pub expire_at: u64,
+    /// Owner's public identity
+    pub owner_identity: PublicIdentity,
+    /// Owner's signature over the registration message (pre-signed)
+    pub owner_signature: Bytes,
+}
+
+/// Response from registerSession
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterSessionResponse {
+    /// The registered session ID
+    pub session_id: B256,
+    /// Transaction hash
+    pub tx_hash: B256,
+}
+
+/// Request for rotateSession
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RotateSessionRequest {
+    /// Old session ID to rotate from
+    pub old_session_id: B256,
+    /// Hash of the original TEE report data (keccak256)
+    pub tee_report_bytes_hash: B256,
+    /// Rotation evidence from CVM agent
+    pub rotation_evidence: SessionRotationEvidence,
+    /// Signature expiration timestamp (unix seconds)
+    pub expire_at: u64,
+    /// Owner's public identity
+    pub owner_identity: PublicIdentity,
+    /// Owner's signature over the rotation message (pre-signed)
+    pub owner_signature: Bytes,
+}
+
+/// Response from rotateSession
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct RotateSessionResponse {
+    /// The new session ID after rotation
+    pub new_session_id: B256,
+    /// Transaction hash
+    pub tx_hash: B256,
+}
