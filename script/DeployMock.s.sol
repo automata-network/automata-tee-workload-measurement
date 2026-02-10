@@ -1,150 +1,55 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import "forge-std/Script.sol";
-import {DeployBase} from "./DeployBase.s.sol";
-
-import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
+import {Script, console} from "forge-std/Script.sol";
+import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
 import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
+import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
+import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
+import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
+import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
+import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {SessionRegistry} from "../src/SessionRegistry.sol";
 
-/// @title DeployMock
-/// @notice Deploys all contracts with mock Automata attestation for local testing
-/// @dev Usage:
-///      anvil
-///      forge script script/DeployMock.s.sol:DeployMock --rpc-url http://127.0.0.1:8545 --broadcast
-///
-///      For Osaka/Prague EVM with native P256 precompile:
-///      anvil --hardfork prague
-///      forge script script/DeployMock.s.sol:DeployMock --rpc-url http://127.0.0.1:8545 --broadcast
-contract DeployMock is DeployBase {
-    /// @dev EIP-7212 P256 precompile address (Osaka/Prague+)
-    address constant P256_PRECOMPILE = 0x0000000000000000000000000000000000000100;
+contract DeployMock is Script, DeploymentConfig {
+    // uint256 privateKey = vm.envUint("PRIVATE_KEY");
+    // address deployer = vm.addr(privateKey);
 
-    /// @dev Fallback P256 verifier address (deterministic CREATE2 deployment for pre-Osaka chains)
-    address constant P256_VERIFIER_FALLBACK = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
+    function run() public {
+        vm.startBroadcast();
 
-    // Mock contract instances (for reference after deployment)
-    MockAutomataDcapAttestation public mockDcap;
-    MockAutomataSnpAttestation public mockSnp;
-    TpmAttestation public mockTpm;
+        console.log("=== Mock Deployment ===");
 
-    function run() external {
-        uint256 deployerPrivateKey =
-            vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
-        address deployer = vm.addr(deployerPrivateKey);
+        MockAutomataDcapAttestation dcapAttestation = new MockAutomataDcapAttestation();
+        console.log("MockAutomataDcapAttestation deployed at:", address(dcapAttestation));
 
-        console.log("=== Mock Deployment Mode ===");
-        console.log("Deployer:", deployer);
+        MockAutomataSnpAttestation snpAttestation = new MockAutomataSnpAttestation();
+        console.log("MockAutomataSnpAttestation deployed at:", address(snpAttestation));
+
+        TeeVerifier teeVerifier = new TeeVerifier(
+            dcapAttestation,
+            snpAttestation
+        );
+        console.log("TeeVerifier deployed at:", address(teeVerifier));
+        writeToJson("TeeVerifierMock", address(teeVerifier));
+
+        address signatureVerifierAddr = readContractAddress("SignatureVerifier");
+        address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
+        address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
+        address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
+        SessionRegistry sessionRegistry = new SessionRegistry(
+            ITeeVerifier(address(teeVerifier)),
+            ITpmAttestation(tpmAttestationAddr),
+            ISignatureVerifier(signatureVerifierAddr),
+            IBaseImageRegistry(baseImageRegistryAddr),
+            IWorkloadRegistry(workloadRegistryAddr)
+        );
+        console.log("SessionRegistry deployed at:", address(sessionRegistry));
+        writeToJson("SessionRegistryMock", address(sessionRegistry));
+
         console.log("");
-
-        vm.startBroadcast(deployerPrivateKey);
-
-        // Resolve P256 verifier (precompile if available, otherwise deploy contract)
-        p256Verifier = _resolveP256Verifier();
-
-        // Deploy mock Automata contracts
-        _deployMockAutomataContracts(deployer);
-
-        // Set external dependencies
-        dcapAttestation = mockDcap;
-        snpAttestation = mockSnp;
-        tpmAttestation = mockTpm;
-
-        // Deploy main contracts
-        _deployAll();
-
-        // Write mock contract addresses
-        _writeMockAddresses();
-
+        console.log("=== Deployment Complete ===");
         vm.stopBroadcast();
-    }
-
-    /// @dev Determines the P256 verifier address based on EVM support
-    ///      - If EIP-7212 precompile is available (Osaka/Prague+), use it
-    ///      - Otherwise, deploy a fallback contract implementation
-    /// @return addr The P256 verifier address to use
-    function _resolveP256Verifier() internal returns (address addr) {
-        // Check if EIP-7212 precompile is available by testing a known valid signature
-        // Test vector from EIP-7212
-        if (_isP256PrecompileAvailable()) {
-            console.log("EIP-7212 P256 precompile detected (Osaka/Prague+)");
-            console.log("  P256 Verifier (precompile):", P256_PRECOMPILE);
-            return P256_PRECOMPILE;
-        }
-
-        // Fallback: deploy contract-based P256 verifier
-        console.log("EIP-7212 precompile not available, deploying fallback verifier...");
-        _deployP256VerifierContract();
-        return P256_VERIFIER_FALLBACK;
-    }
-
-    /// @dev Check if EIP-7212 P256 precompile is functional
-    ///      Uses a test call with known valid signature parameters
-    function _isP256PrecompileAvailable() internal view returns (bool) {
-        // Test vector: try to verify a known valid P256 signature
-        // Input format: hash (32) || r (32) || s (32) || x (32) || y (32) = 160 bytes
-        bytes memory testInput =
-            hex"4cee90eb86eaa050036147a12d49004b6b9c72bd725d39d4785011fe190f0b4da73bd4903f0ce3b639bbbf6e8e80d16931ff4bcf5993d58468e8fb19086e8cac36dbcd03009df8c59286b162af3bd7fcc0450c9aa81be5d10d312af6c66b1d604aebd3099c618202fcfe16ae7770b0c49ab5eadf74b754204a3bb6060e44eff37618b065f9832de4ca6ca971a7a1adc826d0f7c00181a5fb2ddf79ae00b4e10e";
-
-        (bool success, bytes memory result) = P256_PRECOMPILE.staticcall(testInput);
-
-        // Precompile returns 32 bytes with value 1 for valid signature
-        if (success && result.length == 32) {
-            uint256 valid = abi.decode(result, (uint256));
-            return valid == 1;
-        }
-
-        return false;
-    }
-
-    function _deployP256VerifierContract() internal {
-        // Check if already deployed
-        if (P256_VERIFIER_FALLBACK.code.length > 0) {
-            console.log("  P256 Verifier already deployed at:", P256_VERIFIER_FALLBACK);
-            return;
-        }
-
-        // Deterministic deployment via CREATE2 factory (0x4e59b44847b379578588920cA78FbF26c0B4956C)
-        bytes memory txdata =
-            hex"00000000000000000000000000000000000000000000000000000000000000006080806040523461001657610dd1908161001c8239f35b600080fdfe60e06040523461001a57610012366100c7565b602081519101f35b600080fd5b6040810190811067ffffffffffffffff82111761003b57604052565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b60e0810190811067ffffffffffffffff82111761003b57604052565b90601f7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0910116810190811067ffffffffffffffff82111761003b57604052565b60a08103610193578060201161001a57600060409180831161018f578060601161018f578060801161018f5760a01161018c57815182810181811067ffffffffffffffff82111761015f579061013291845260603581526080356020820152833560203584356101ab565b15610156575060ff6001915b5191166020820152602081526101538161001f565b90565b60ff909161013e565b6024837f4e487b710000000000000000000000000000000000000000000000000000000081526041600452fd5b80fd5b5080fd5b5060405160006020820152602081526101538161001f565b909283158015610393575b801561038b575b8015610361575b6103585780519060206101dc818301938451906103bd565b1561034d57604051948186019082825282604088015282606088015260808701527fffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63254f60a08701527fffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551958660c082015260c081526102588161006a565b600080928192519060055afa903d15610345573d9167ffffffffffffffff831161031857604051926102b1857fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0601f8401160185610086565b83523d828585013e5b156102eb57828280518101031261018c5750015190516102e693929185908181890994099151906104eb565b061490565b807f4e487b7100000000000000000000000000000000000000000000000000000000602492526001600452fd5b6024827f4e487b710000000000000000000000000000000000000000000000000000000081526041600452fd5b6060916102ba565b505050505050600090565b50505050600090565b507fffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc6325518310156101c4565b5082156101bd565b507fffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc6325518410156101b6565b7fffffffff00000001000000000000000000000000ffffffffffffffffffffffff90818110801590610466575b8015610455575b61044d577f5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b8282818080957fffffffff00000001000000000000000000000000fffffffffffffffffffffffc0991818180090908089180091490565b505050600090565b50801580156103f1575082156103f1565b50818310156103ea565b7f800000000000000000000000000000000000000000000000000000000000000081146104bc577fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0190565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052601160045260246000fd5b909192608052600091600160a05260a05193600092811580610718575b61034d57610516838261073d565b95909460ff60c05260005b600060c05112156106ef575b60a05181036106a1575050507f4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5957f6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2969594939291965b600060c05112156105c7575050505050507fffffffff00000001000000000000000000000000ffffffffffffffffffffffff91506105c260a051610ca2565b900990565b956105d9929394959660a05191610a98565b9097929181928960a0528192819a6105f66080518960c051610722565b61060160c051610470565b60c0528061061b5750505050505b96959493929196610583565b969b5061067b96939550919350916001810361068857507f4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5937f6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c29693610952565b979297919060a05261060f565b6002036106985786938a93610952565b88938893610952565b600281036106ba57505050829581959493929196610583565b9197917ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd0161060f575095508495849661060f565b506106ff6080518560c051610722565b8061070b60c051610470565b60c052156105215761052d565b5060805115610508565b91906002600192841c831b16921c1681018091116104bc5790565b8015806107ab575b6107635761075f91610756916107b3565b92919091610c42565b9091565b50507f6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296907f4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f590565b508115610745565b919082158061094a575b1561080f57507f6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c29691507f4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5906001908190565b7fb01cbd1c01e58065711814b583f061e9d431cca994cea1313449bf97c840ae0a917fffffffff00000001000000000000000000000000ffffffffffffffffffffffff808481600186090894817f94e82e0c1ed3bdb90743191a9c5bbf0d88fc827fd214cc5f0b5ec6ba27673d6981600184090893841561091b575050808084800993840994818460010994828088600109957f6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c29609918784038481116104bc5784908180867fffffffff00000001000000000000000000000000fffffffffffffffffffffffd0991818580090808978885038581116104bc578580949281930994080908935b93929190565b9350935050921560001461093b5761093291610b6d565b91939092610915565b50506000806000926000610915565b5080156107bd565b91949592939095811580610a90575b15610991575050831580610989575b61097a5793929190565b50600093508392508291508190565b508215610970565b85919294951580610a88575b610a78577fffffffff00000001000000000000000000000000ffffffffffffffffffffffff968703918783116104bc5787838189850908938689038981116104bc5789908184840908928315610a5d575050818880959493928180848196099b8c9485099b8c920999099609918784038481116104bc5784908180867fffffffff00000001000000000000000000000000fffffffffffffffffffffffd0991818580090808978885038581116104bc578580949281930994080908929190565b965096505050509093501560001461093b5761093291610b6d565b9550509150915091906001908190565b50851561099d565b508015610961565b939092821580610b65575b61097a577fffffffff00000001000000000000000000000000ffffffffffffffffffffffff908185600209948280878009809709948380888a0998818080808680097fffffffff00000001000000000000000000000000fffffffffffffffffffffffc099280096003090884808a7fffffffff00000001000000000000000000000000fffffffffffffffffffffffd09818380090898898603918683116104bc57888703908782116104bc578780969481809681950994089009089609930990565b508015610aa3565b919091801580610c3a575b610c2d577fffffffff00000001000000000000000000000000ffffffffffffffffffffffff90818460020991808084800980940991817fffffffff00000001000000000000000000000000fffffffffffffffffffffffc81808088860994800960030908958280837fffffffff00000001000000000000000000000000fffffffffffffffffffffffd09818980090896878403918483116104bc57858503928584116104bc5785809492819309940890090892565b5060009150819081908190565b508215610b78565b909392821580610c9a575b610c8d57610c5a90610ca2565b9182917fffffffff00000001000000000000000000000000ffffffffffffffffffffffff80809581940980099009930990565b5050509050600090600090565b508015610c4d565b604051906020918281019183835283604083015283606083015260808201527fffffffff00000001000000000000000000000000fffffffffffffffffffffffd60a08201527fffffffff00000001000000000000000000000000ffffffffffffffffffffffff60c082015260c08152610d1a8161006a565b600080928192519060055afa903d15610d93573d9167ffffffffffffffff83116103185760405192610d73857fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0601f8401160185610086565b83523d828585013e5b156102eb57828280518101031261018c5750015190565b606091610d7c56fea2646970667358221220fa55558b04ced380e93d0a46be01bb895ff30f015c50c516e898c341cd0a230264736f6c63430008150033";
-
-        (bool success,) = address(0x4e59b44847b379578588920cA78FbF26c0B4956C).call(txdata);
-        require(success, "Failed to deploy P256 Verifier");
-
-        require(P256_VERIFIER_FALLBACK.code.length > 0, "P256 Verifier not deployed correctly");
-        console.log("  P256 Verifier (contract):", P256_VERIFIER_FALLBACK);
-    }
-
-    function _deployMockAutomataContracts(address owner) internal {
-        console.log("Deploying Mock Automata Contracts...");
-
-        // Deploy mock DCAP attestation
-        mockDcap = new MockAutomataDcapAttestation();
-        console.log("  MockDcapAttestation:", address(mockDcap));
-
-        // Deploy mock SNP attestation
-        mockSnp = new MockAutomataSnpAttestation();
-        console.log("  MockSnpAttestation:", address(mockSnp));
-
-        // Deploy real TPM attestation (it works without external dependencies)
-        // Uses p256Verifier which was resolved earlier (precompile or fallback contract)
-        mockTpm = new TpmAttestation(owner, p256Verifier);
-
-        // Add GCP vTPM Root CA to TpmAttestation
-        mockTpm.addCA(_gcpRootCa());
-        console.log("  TpmAttestation:", address(mockTpm));
-    }
-
-    function _writeMockAddresses() internal {
-        writeToJson("MockDcapAttestation", address(mockDcap));
-        writeToJson("MockSnpAttestation", address(mockSnp));
-        writeToJson("TpmAttestation", address(mockTpm));
-        writeToJson("P256Verifier", p256Verifier);
-    }
-
-    /// @notice GCP vTPM Root CA certificate (EK/AK CA Root)
-    function _gcpRootCa() private pure returns (bytes memory) {
-        return hex"30820601308203e9a003020102021400a65da4f9e328f38035c3a73d4f72432bdf15dc300d06092a864886f70d01010b0500307e310b3009060355040613025553311330110603550408130a43616c69666f726e6961311630140603550407130d4d6f756e7461696e205669657731133011060355040a130a476f6f676c65204c4c4331153013060355040b130c476f6f676c6520436c6f7564311630140603550403130d454b2f414b20434120526f6f743020170d3232303730383030343033345a180f32313232303730383035353732335a307e310b3009060355040613025553311330110603550408130a43616c69666f726e6961311630140603550407130d4d6f756e7461696e205669657731133011060355040a130a476f6f676c65204c4c4331153013060355040b130c476f6f676c6520436c6f7564311630140603550403130d454b2f414b20434120526f6f7430820222300d06092a864886f70d01010105000382020f003082020a02820201009d25f550a8c8964b4a897c2b284da5b4bba419ee89c13aa6daddb71016211d939cbc52831345891eddaeda1fc48d2bb9c7a8088a6c6bd34720aaf3dec33f37f13c98534788902ec957f7a4fa660e92c9650d6a7bcc87929192b372a3dece58616b4479c0957f336ce0cb4abc67c0f96281e3d03a3688bc47d4751a89cb20deb04975f790fd626d19f434681daa07e045ee470b790a0218d9eac713f046f548695a0721b31395a81939cd6f289f932c7da146715d526caafdaaeb5d56ddaa5b3f17207aff33e495d051baeb43b11b3b44ad2b50ec291b0a2ee0fe60bc63ac1450e14788379587a7a1b4be06223a9b479ba60a67141e98efe454c2d1cec9b50181fb78d3857a470120a4634aaa64e66e2e774e2aba6e9fd21063de213f3def83bc86d584b87d22d02e9c848640f03d7581207c0fea5a2afea54ecb577a61a4b78686e965f06ff362642117785e8346ee211ef469abf34fc88b010af154c35164910633020dfedabc6224f7fb711921c4aaaba1801a38ae570dcd22c5c2dfe0ae489190e466c3a78f4b73a5563c7796785bf04941a0c4a5eae6bd7e3d1b286202ba4b886179c817117e5ced1b5ae9370594415bd172bd7e9cb576bf3d2de146c54069743bcac4344b326dc541e9fcae647f3d245e11c26c6aa6d43ffabb3dcee4d117c5f4c6fa01f3d97e7aa0a58250f88152afd1234525b5c0f70bd37ce84cfe3b0203010001a3753073300e0603551d0f0101ff04040302010630100603551d250409300706056781050801300f0603551d130101ff040530030101ff301d0603551d0e0416041449e74a5b5629f59d79b7a6303c03b28fe714dd4c301f0603551d2304183016801449e74a5b5629f59d79b7a6303c03b28fe714dd4c300d06092a864886f70d01010b0500038202010095f1d1bce077089a0b4e5d581bf02f8c6a1992934cca9e57e637b5202090ebc6f6f7a127f6121495c618ffe9ee10f48f5230c0de2cf027c0c07d5e11120a50ceaa21e97851dd38327c75e327a0c2ee9bb3120b73175fb01d2854a41a1edc72ae2f85a1077aefc24d9212cb9d06ef76a3d06e06370327f196e4646da43fc7ef51c013cac8f63278d674b416f9248da5f4825b27b4c5545e2c1cb5af0623440e1368a3b09070938d6e406b7460e8f6486944c0d002e43053079919efee97f71184ebf73e3374c003438da17d7cacd7e27fde1c0b1fe63d83acf2952400d440438693441be906baf2193f11d5a85306431e4501b7b5db0b1d14fc7c908550035de562d6b22f37d34e72fd6b8ccfcfe014a7343cbf85f8cb9b0ac2753833d346c707f774254b8cc4320e610c0224b3e7c3a1127642244eaa8ec602a6d373b49329f19cafdfa96bade76bb7f7a32d6c64f58f77107cb71e73de582188f3f792d431ff22bfd45c1fd61831247172ff651c686b8e5d14514cfc849e9a59a7cd8a8a0b3d68f1d6b5a566dbf2eb5d7d9fbd3f6233f9340a8bcd023f2bced1f1b14128034c499d238934fa5ef4f45d8ec4e3effbb75eeea140b34d89d047808dc77268bbd381cc31dff7c99e36e0e3ab4b7db2969794d687901c5acb13a8585f8fedb4c1136e611220a776ad382cb4fa2d4af92e0794e58db2983d1fa5abb8506afd7a5381";
     }
 }

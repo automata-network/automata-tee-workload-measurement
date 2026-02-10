@@ -8,22 +8,22 @@ import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import "forge-std/console.sol";
 
 contract DeploySignatureVerifier is DeploymentConfig, P256Configuration {
-    function run() public override {
-        // Detect P256 verifier address BEFORE starting broadcast
-        // simulateVerify() uses FFI (cast call) which cannot run inside broadcast
+    function _deploySignatureVerifier(address p256Verifier) internal returns (address) {
+        SignatureVerifier signatureVerifier = new SignatureVerifier{salt: SIGNATURE_VERIFIER_SALT}(p256Verifier);
+        console.log("SignatureVerifier deployed at:", address(signatureVerifier));
+        writeToJson("SignatureVerifier", address(signatureVerifier));
+        return address(signatureVerifier);
+    }
+
+    function deploySignatureVerifier() public virtual {
         address p256Verifier = simulateVerify();
 
-        // Start broadcast with OWNER from environment
         vm.startBroadcast(vm.envAddress("OWNER"));
-
-        // Deploy SignatureVerifier with CREATE2
-        SignatureVerifier signatureVerifier = new SignatureVerifier{salt: SIGNATURE_VERIFIER_SALT}(p256Verifier);
-
-        console.log("SignatureVerifier deployed at:", address(signatureVerifier));
-
+        _deploySignatureVerifier(p256Verifier);
         vm.stopBroadcast();
+    }
 
-        // Persist deployment address to JSON
-        writeToJson("SignatureVerifier", address(signatureVerifier));
+    function run() public virtual override {
+        deploySignatureVerifier();
     }
 }

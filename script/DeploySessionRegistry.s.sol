@@ -10,33 +10,23 @@ import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistr
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "forge-std/console.sol";
 
 contract DeploySessionRegistry is DeploymentConfig {
-    function run() public {
-        // Read previously deployed contract addresses from JSON
+    function _deploySessionRegistryImpl() internal returns (address) {
         address teeVerifierAddr = readContractAddress("TeeVerifier");
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
+        address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
 
         console.log("Using TeeVerifier at:", teeVerifierAddr);
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
-
-        // Read attestation contract addresses from environment
-        address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
-
         console.log("Using TPM attestation at:", tpmAttestationAddr);
 
-        // Get owner address from environment
-        address owner = vm.envAddress("OWNER");
-
-        // Start broadcast
-        vm.startBroadcast(owner);
-
-        // Deploy implementation
         SessionRegistry impl = new SessionRegistry{salt: SESSION_REGISTRY_IMPL_SALT}(
             ITeeVerifier(teeVerifierAddr),
             ITpmAttestation(tpmAttestationAddr),
@@ -45,15 +35,52 @@ contract DeploySessionRegistry is DeploymentConfig {
             IWorkloadRegistry(workloadRegistryAddr)
         );
         console.log("SessionRegistry implementation deployed at:", address(impl));
+        writeToJson("SessionRegistryImpl", address(impl));
+        return address(impl);
+    }
 
-        // Deploy proxy with initialize call
+    function _deploySessionRegistryProxy(address impl) internal returns (address) {
+        if (impl == address(0)) {
+            impl = _deploySessionRegistryImpl();
+        }
+
+        address owner = vm.envAddress("OWNER");
         bytes memory initData = abi.encodeCall(SessionRegistry.initialize, (owner));
-        ERC1967Proxy proxy = new ERC1967Proxy{salt: SESSION_REGISTRY_PROXY_SALT}(address(impl), initData);
+        ERC1967Proxy proxy = new ERC1967Proxy{salt: SESSION_REGISTRY_PROXY_SALT}(impl, initData);
         console.log("SessionRegistry proxy deployed at:", address(proxy));
-
-        vm.stopBroadcast();
-
-        // Persist PROXY address to JSON (this is the canonical address)
         writeToJson("SessionRegistry", address(proxy));
+        return address(proxy);
+    }
+
+    function _upgradeSessionRegistry(address impl, bytes memory data) internal {
+        if (impl == address(0)) {
+            impl = _deploySessionRegistryImpl();
+        }
+
+        address proxy = readContractAddress("SessionRegistry");
+        UUPSUpgradeable(proxy).upgradeToAndCall(impl, data);
+        writeToJson("SessionRegistryImpl", impl);
+    }
+
+    function deploySessionRegistryImpl() public virtual {
+        vm.startBroadcast(vm.envAddress("OWNER"));
+        _deploySessionRegistryImpl();
+        vm.stopBroadcast();
+    }
+
+    function deploySessionRegistryProxy(address impl) public virtual {
+        vm.startBroadcast(vm.envAddress("OWNER"));
+        _deploySessionRegistryProxy(impl);
+        vm.stopBroadcast();
+    }
+
+    function upgradeSessionRegistry(address impl, bytes memory data) public virtual {
+        vm.startBroadcast(vm.envAddress("OWNER"));
+        _upgradeSessionRegistry(impl, data);
+        vm.stopBroadcast();
+    }
+
+    function run() public virtual {
+        deploySessionRegistryProxy(address(0));
     }
 }
