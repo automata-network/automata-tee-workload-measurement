@@ -82,6 +82,10 @@ impl WorkloadMeasurement {
         self.provider.chain_id()
     }
 
+    pub fn provider(&self) -> &NetworkProvider {
+        &self.provider
+    }
+
     pub async fn session_nonce(&self, owner: &PublicIdentity) -> Result<U256> {
         Ok(self.session_registry.get_nonce(owner.fingerprint()).await?)
     }

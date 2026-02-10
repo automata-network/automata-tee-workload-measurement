@@ -5,7 +5,7 @@ use alloy::primitives::{Address, B256, U256, keccak256};
 use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::stubs::WorkloadRegistry::{
     WorkloadRegistryEvents, WorkloadRegistryInstance, WorkloadSpec,
@@ -82,6 +82,11 @@ impl WorkloadRegistry {
             signer,
         )
         .await?;
+
+        debug!("spec: {:?}", spec);
+        debug!("expire_at: {}", expire_at);
+        debug!("owner_identity: {:?}", owner_identity);
+        debug!("sig_bytes: {:?}", sig_bytes);
 
         // Call the contract
         let pending = self

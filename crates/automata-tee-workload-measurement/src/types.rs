@@ -3,7 +3,7 @@ use alloy::{
     sol_types::SolValue,
 };
 use anyhow::ensure;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use crate::stubs::{AttestationEvidence, PublicIdentity, SessionRotationEvidence};
 
@@ -27,6 +27,25 @@ impl AppRef {
     }
 }
 
+impl Serialize for AppRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for AppRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(de::Error::custom)
+    }
+}
+
 impl std::str::FromStr for AppRef {
     type Err = anyhow::Error;
 
@@ -36,11 +55,6 @@ impl std::str::FromStr for AppRef {
             parts.len() == 2,
             "Expected format 'name:version', got '{}'",
             s
-        );
-        ensure!(
-            parts[1].starts_with("v") || parts[1] == "latest",
-            "Version should start with 'v', got '{}'",
-            parts[1]
         );
         Ok(AppRef {
             name: parts[0].to_string(),

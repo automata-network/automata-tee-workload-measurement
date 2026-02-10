@@ -6,7 +6,7 @@ use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::stubs::BaseImageRegistry::{
     BaseImageRegistryEvents, BaseImageRegistryInstance, BaseImageSpec, MeasurementVariant,
@@ -15,6 +15,7 @@ use crate::stubs::BaseImageRegistry::{
 use crate::stubs::{PublicIdentity, sign_message};
 use crate::types::AppRef;
 
+#[derive(Debug, Clone)]
 pub struct BaseImageRegistry {
     stub: BaseImageRegistryInstance<NetworkProvider>,
 }
@@ -122,19 +123,24 @@ impl BaseImageRegistry {
         )
         .await?;
 
+        debug!("spec: {:?}", spec);
+        debug!("platform_profiles: {:?}", platform_profiles);
+        debug!("measurement_variants: {:?}", measurement_variants);
+        debug!("expire_at: {}", expire_at);
+        debug!("owner_identity: {:?}", owner_identity);
+        debug!("sig_bytes: {:?}", sig_bytes);
+
         // Call the contract
-        let pending = self
-            .stub
-            .registerBaseImage(
-                spec,
-                platform_profiles,
-                measurement_variants,
-                expire_at,
-                owner_identity.into(),
-                sig_bytes,
-            )
-            .send_ex()
-            .await?;
+        let call = self.stub.registerBaseImage(
+            spec,
+            platform_profiles,
+            measurement_variants,
+            expire_at,
+            owner_identity.into(),
+            sig_bytes,
+        );
+
+        let pending = call.send_ex().await?;
 
         let tx_hash = pending.tx_hash();
 
