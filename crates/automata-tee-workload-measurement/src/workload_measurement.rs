@@ -66,6 +66,18 @@ impl WorkloadMeasurement {
         })
     }
 
+    pub fn base_image_registry(&self) -> &BaseImageRegistry {
+        &self.base_image_registry
+    }
+
+    pub fn workload_registry(&self) -> &WorkloadRegistry {
+        &self.workload_registry
+    }
+
+    pub fn session_registry(&self) -> &SessionRegistry {
+        &self.session_registry
+    }
+
     pub async fn chain_id(&self) -> u64 {
         self.provider.chain_id()
     }
