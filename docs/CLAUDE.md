@@ -4,251 +4,267 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This repository implements on-chain verification of Confidential VM (CVM) workloads using TEE (Trusted Execution Environment) attestation. The system verifies the integrity and measurement of workloads running on Intel TDX or AMD SEV-SNP hardware, hosted on Azure or Google Cloud Platform.
+This is a **hybrid Solidity + Rust project** for onchain verification and management of Confidential VM (CVM) workloads. It provides cryptographic attestation of TEE (Trusted Execution Environment) measurements to prove workload integrity for Intel TDX and AMD SEV-SNP CVMs on Azure and Google Cloud Platform.
 
-## Key Architecture Components
+**Key Components:**
+1. **Solidity Contracts** (`src/`) - EVM smart contracts for onchain attestation verification
+2. **Rust SDK** (`crates/`) - Client library bindings to interact with the contracts
+3. **Foundry Scripts** (`script/`) - Deployment and configuration automation
 
-### Core Contract Structure
-- **`WorkloadVerifier.sol`**: Main entry point for workload attestation verification
-  - Integrates TEE attestation (Intel TDX, AMD SEV-SNP)
-  - TPM quote verification for workload measurements
-  - Supports both cloud providers (Azure, GCP)
+## Development Commands
 
-### Verification Flow
-1. Application submits TEE attestation report + workload collateral to `WorkloadVerifier`
-2. TEE report verified via DCAP (Intel TDX) or ZK proofs (AMD SEV-SNP)
-3. TPM quote and signature verified against Attestation Key
-4. PCR measurements validated against provided values
-5. Report ID binding between TEE and TPM verified
-6. Final measurement hash generated for workload integrity
+### Solidity Development (Foundry)
 
-### Dependencies
-- **DCAP Attestation**: Intel TDX verification (onchain, ~5M gas)
-- **SEV-SNP Attestation**: AMD verification via ZK proofs (RiscZero Groth16, ~240k gas)
-- **TPM Attestation**: TPM quote verification with PCR measurement validation
-- **P256 Verifier**: ECDSA verification for GCP (daimo-p256 contract)
-
-## Common Development Commands
-
-### Building
 ```bash
-# Compile all contracts with size output
-forge build --sizes
+# Build all contracts
+forge build
 
-# Clean build
-forge clean && forge build
-```
-
-### Testing
-```bash
 # Run all tests
 forge test
 
-# Run specific test file
-forge test --match-path test/CvmAzureTest.t.sol
+# Run specific test
+forge test --match-contract SessionRegistryTest
 
-# Run specific test function
-forge test --match-test testVerifyAzureTdx
+# Run test with verbosity (for debugging)
+forge test --match-test test_registerSession -vvvv
 
-# Run tests with verbosity (shows logs)
-forge test -vv  # Basic logs
-forge test -vvv # Detailed logs
-forge test -vvvv # Traces for all tests
+# Format contracts
+forge fmt
 
-# Run tests with gas reporting
+# Generate gas report
 forge test --gas-report
+
+# Check for compilation issues without running tests
+forge build --force
+```
+
+### Rust Development
+
+```bash
+# Build Rust crates
+cargo build
+
+# Run Rust tests
+cargo test
+
+# Format Rust code
+cargo fmt
+
+# Check for issues
+cargo clippy
 ```
 
 ### Deployment
+
+Deployment scripts are located in `script/`. The project uses Foundry's scripting system with environment-based configuration.
+
+**Setup:**
+1. Copy `.env.example` to `.env` and configure:
+   - `DCAP_ATTESTATION_ADDR` - Intel TDX DCAP attestation verifier
+   - `SNP_ATTESTATION_ADDR` - AMD SEV-SNP attestation verifier
+   - `TPM_ATTESTATION_ADDR` - TPM quote verifier
+   - `P256_VERIFIER` - P256 signature verifier (precompile or contract)
+   - `RPC_URL` - Target network RPC endpoint
+   - `OWNER` - Deployer/owner address
+
+**Deploy to testnet:**
 ```bash
-# Deploy contracts (uses script/Deploy.s.sol)
-forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
+# Deploy all production contracts (TeeVerifier, SignatureVerifier, registries)
+forge script script/DeployProd.s.sol:DeployProd --rpc-url $RPC_URL --broadcast --verify
 
-# Deploy CVM specific contracts
-forge script script/cvm/DeployCVM.s.sol --rpc-url <RPC_URL> --broadcast
+# Deploy mock contracts for testing
+forge script script/DeployMock.s.sol:DeployMock --rpc-url $RPC_URL --broadcast
 ```
 
-### Code Quality
+**Configuration scripts:**
 ```bash
-# Format Solidity files
-forge fmt
+# Whitelist management (when registry is paused)
+forge script script/Config.s.sol --sig "updateBaseImageWhitelist(bytes32,bool)" <fingerprint> true --rpc-url $RPC_URL --broadcast
 
-# Check formatting without making changes
-forge fmt --check
-
-# Generate coverage report
-forge coverage
-
-# Run static analysis with Slither (if installed)
-slither .
+# Enable/disable whitelist enforcement
+forge script script/Config.s.sol --sig "enableBaseImageRegistryWhitelist(bool)" true --rpc-url $RPC_URL --broadcast
 ```
 
-## Project Structure Insights
+Deployment addresses are saved to `deployment/<chain-id>.json`.
 
-### Contract Organization
-- `/src/interfaces/`: Public interfaces for external integration
-  - `IWorkloadVerifier.sol`: Main verification interface
-  - `ITeeVerifier.sol`: TEE-specific verification interfaces
-- `/src/lib/`: Core libraries and data structures
-  - `LibTEE.sol`: TEE types and enums (TEEType, CloudType, TeeReportType)
-  - `LibWorkload.sol`: Workload measurement structures
-- `/src/mock/`: Mock contracts for testing
-- `/src/usecases/`: Example implementation patterns
+## Architecture
 
-### Testing Approach
-- Tests use `forge-std` Test framework
-- `TestSetup.sol` provides common test infrastructure
-- Tests are organized by cloud provider (CvmAzureTest, CvmGcpTest)
-- Mock attestation supported for development/testing
+### Three-Tier Registry System
 
-### Gas Optimization Considerations
-- Contract uses `via_ir` optimizer for better gas efficiency
-- Different verification paths have vastly different gas costs:
-  - Azure TDX: ~5M gas (onchain DCAP)
-  - GCP with secp256r1: ~330k per signature (3450 gas with RIP 7212)
-  - ZK proofs for AMD SEV-SNP: ~240k gas
+The system uses a **hierarchical registry architecture** to enforce workload integrity policies:
 
-### Critical Implementation Details
-
-1. **Report ID Binding**: Essential for TEE-TPM binding verification
-   - Azure TDX: AK hash in report data
-   - GCP TDX: UUID in rtmr3 (expensive sha384 computation)
-
-2. **Certificate Chain Handling**:
-   - GCP requires full AK certificate chain
-   - Azure uses varDataJson for AK extraction
-   - Intermediate certificates cached for gas optimization
-
-3. **PCR Measurement Validation**:
-   - Supports both deterministic PCR values and event logs
-   - PCR selection bitmap must match quote
-   - Hash chain verification for measurement integrity
-
-4. **Cloud-Specific Differences**:
-   - Azure: RSA signatures, AK hash in TEE report
-   - GCP: secp256r1 signatures, certificate chain verification
-
-## Integration Guidelines
-
-When integrating `WorkloadVerifier`:
-1. Deploy or connect to existing verifier contract
-2. Prepare TEE attestation report and workload collateral
-3. Call appropriate verification method based on needs:
-   - `verifyAttestation()`: Returns TEE verified data, TEE output, and measurement
-4. Validate returned measurement against golden measurement
-
-## CVM Registry Use Case
-
-The `CVMRegistry.sol` contract provides a production-ready implementation for managing Confidential VM workload identities and their attestation lifecycle. This contract demonstrates how to build a trust registry on top of the WorkloadVerifier.
-
-### Key Features
-- **Identity Management**: Maps CVM workload identity (TPM-generated public key) to attestation configuration
-- **TPM2_Certify Key Certification**: CVM identity key certified by TPM Attestation Key, guaranteeing owner cannot read private key
-- **Attestation Lifecycle**: Supports initial registration, refresh, and key rotation
-- **TTL Management**: Single configurable time-to-live (30 days default)
-- **AK Binding**: One-to-one binding between Attestation Key and CVM identity
-- **Replay Protection**: Built-in for TEE reports and TPM quotes (apps must implement own message replay protection)
-
-### Core Workflows
-
-#### 1. Registration (`registerCvm`)
-- No signature required (bootstrap via attestation and TPM2_Certify binding)
-- Verifies TEE report and TPM quote through WorkloadVerifier
-- Verifies CVM identity key is certified by AK via TPM2_Certify
-- Checks AK is not already bound to another identity
-- Stores configuration with expiration timestamp, measurement hash, and AK binding
-
-#### 2. Refresh (`refreshCvm`)
-- Extends CVM validity with fresh TEE and TPM attestations
-- No signature required
-- Verifies AK binding matches registered identity
-- Updates expiration timestamp and measurement hash
-- Does NOT support identity rotation (use rotateCvmIdentityKey instead)
-
-#### 3. Key Rotation (`rotateCvmIdentityKey`)
-- Rotates identity key while TEE report is still valid
-- New key must be certified by same AK via TPM2_Certify
-- Revokes old identity and updates AK binding
-- Saves gas by reusing existing attestation data
-
-### Implementation Details
-
-#### CVMIdentity Structure
-```solidity
-struct CVMIdentity {
-    bytes tpmtPublic;           // TPM public key in TPMT_PUBLIC format
-    SignatureAlgorithm sigAlgo; // Signature scheme and hash algorithm
-}
+```
+SessionRegistry (orchestrator)
+├── BaseImageRegistry (OS/platform)
+│   ├── BaseImage (Ubuntu 24.04, NixOS, etc.)
+│   ├── PlatformProfile (GCP TDX, Azure SNP, etc.)
+│   └── MeasurementVariant (machine-type overrides)
+├── WorkloadRegistry (application)
+│   └── WorkloadSpec (container PCRs 20-23)
+├── TeeVerifier (TEE attestation)
+└── SignatureVerifier (owner authentication)
 ```
 
-#### Identity Hash Computation
-Public key is extracted from `tpmtPublic`, then:
-```solidity
-keccak256(abi.encodePacked(
-    sigAlgo.scheme,
-    pubkey.params,
-    sigAlgo.hashAlgo,
-    pubkey.data
-))
+**Key Principles:**
+- **Separation of Concerns**: BaseImage (privileged), Workload (unprivileged), Session (runtime)
+- **Immutable Verifiers**: TeeVerifier is stateless and can be reused across registries
+- **Upgradeable Registries**: BaseImage/Workload/Session use UUPS proxies for policy updates
+- **Whitelist Mode**: Registries can operate in permissioned mode during initial rollout
+
+### Verification Flow (9-Step Attestation)
+
+When a CVM registers a session via `SessionRegistry.registerSession()`, the system performs:
+
+1. **TEE Attestation** - Verify Intel TDX quote or AMD SNP report via vendor-specific contracts
+2. **AK Collateral** - Verify TPM Attestation Key (AK) is legitimate (EK cert chain or GCP vTPM UUID)
+3. **TEE-AK Binding** - Ensure TEE and TPM measurements are cryptographically linked
+4. **TPM Quote** - Verify TPM quote signature using AK, extract PCR values
+5. **TPM Certify** - Verify TPM signing key is certified by AK (guarantees key is TPM-resident)
+6. **Session Key Delegation** - Verify session key is authorized by TPM signing key
+7. **Base Image PCRs** - Match PCRs 0-14 against BaseImage + PlatformProfile + Variant policies
+8. **Workload PCRs** - Match PCRs 20-23 against WorkloadSpec policies
+9. **Owner Authorization** - Verify owner signature over the entire registration request
+
+**PCR Verification Types:**
+- `STATIC` - Exact PCR value match (fixed measurement)
+- `DYNAMIC_SUBSET` - PCR events must be subset of allowed events (any order)
+- `DYNAMIC_SUBSEQUENCE` - PCR events must contain required sequence (ordered)
+
+### Contract Inheritance Hierarchy
+
+**SessionRegistry** (the main orchestrator):
+```
+SessionRegistry
+├── TpmVerifier (TPM quote + TPM2_Certify verification logic)
+├── AkCollateralVerifier (AK certificate chain validation)
+├── OwnableUpgradeable (admin control)
+└── UUPSUpgradeable (upgradeability pattern)
 ```
 
-#### TPM2_Certify Certification
-```solidity
-struct CVMIdentityCertification {
-    bytes certInfo;           // TPMS_ATTEST from TPM2_Certify
-    bytes akCertificationSig; // AK signature over certInfo
-}
+**BaseImageRegistry / WorkloadRegistry**:
 ```
-The contract verifies:
-- AK signature over certInfo is valid
-- Certified key name matches provided tpmtPublic
-- AK used for certification matches verified AK from TEE attestation
-
-#### Message Domain Separation (for Apps using CVMSignature)
+{BaseImage|Workload}Registry
+├── OwnableUpgradeable (admin control)
+├── PausableUpgradeable (whitelist enforcement)
+└── UUPSUpgradeable (upgradeability pattern)
 ```
-abi.encodePacked(bytes(prefix), block.chainid, address(this), userData)
-```
-Default prefix:
-- `CVM_WORKLOAD_USER_MESSAGE` (apps can define custom prefixes)
 
-### Security Considerations
-- **TPM2_Certify Chain of Trust**: TEE → AK → CVM Identity Key ensures private key cannot be read by CVM owner
-- **AK Binding**: One-to-one mapping between AK and CVM identity prevents AK reuse across identities
-- **Replay Protection**: TEE reports and TPM quotes cannot be reused (hash-based tracking)
-- **Identity Revocation**: Rotated identities are marked as revoked to prevent re-registration
-- **Measurement Normalization**: Zeros TDX rtmr3 for stability across reboots
-- **Immutable WorkloadVerifier**: Reference fixed at deployment prevents verification bypass
-- **App-Level Replay Protection**: Applications MUST implement their own nonce/timestamp-based replay protection for signed messages
+**TeeVerifier** (stateless dispatcher):
+- Dispatches to `IDcapAttestation` (Intel TDX via DCAP) or `ISnpAttestation` (AMD SEV-SNP)
+- Supports onchain Solidity verification and ZK proof backends (RiscZero, SP1)
 
-## Known Limitations & Considerations
+### Key Data Structures
 
-- X.509 Key Usage and Basic Constraints not validated (medium priority fix needed)
-- Full certificate chain required on every call (gas inefficient but secure)
-- Manual ASN.1 parsing is fragile to structure variations
+**PublicIdentity** - Generic public key representation:
+- `typeId` - Algorithm ID (ES256K, RSA-2048, P256, etc.)
+- `key` - DER/SPKI/raw bytes encoding
 
-## Acknowledged Design Decisions
+**PcrSpec** - PCR measurement policy:
+- `pcrIndex` - PCR slot (0-23)
+- `verifyType` - Verification strategy (STATIC, DYNAMIC_SUBSET, DYNAMIC_SUBSEQUENCE)
+- `matchData` - Expected values or event hashes
 
-### ECDSA Signature Format (Issue #2)
-**Decision**: The system explicitly requires ECDSA signatures to be exactly 64 bytes in `r || s` format (32 bytes each).
+**CVMSession** - Registered CVM identity:
+- `sessionKeyFingerprint` - Current operational key
+- `baseImageId / workloadId` - Policy identifiers
+- `expiresAt` - Session TTL (default 30 days)
+- `nonce` - Replay protection counter
 
-**Justification**: This is an intentional design choice to:
-- Standardize the signature format across all integrations
-- Avoid the complexity and gas costs of DER encoding/decoding on-chain
-- Ensure predictable behavior and gas consumption
+### Code Organization
 
-**Impact**: Callers must ensure signatures are provided in this exact format. Any DER-encoded signatures must be converted to raw `r || s` format before submission.
+**Solidity (`src/`)**:
+- `SessionRegistry.sol` - Main orchestrator (9-step verification)
+- `BaseImageRegistry.sol` - OS/platform policy management
+- `WorkloadRegistry.sol` - Application policy management
+- `TeeVerifier.sol` - TEE attestation dispatcher
+- `SignatureVerifier.sol` - ECDSA/RSA signature verification
+- `KeyResolver.sol` - Future: ENS-style key resolution (not yet integrated)
+- `bases/` - Base contracts for verification logic (TpmVerifier, AkCollateralVerifier)
+- `interfaces/` - Contract interfaces and storage structs
+- `types/` - Common data structures (Common.sol, Evidence.sol, Constants.sol)
+- `lib/` - Utility libraries (LibKey, LibBytes, Sha2Ext, Asn1Decode, BytesUtils)
+- `mock/` - Mock contracts for testing (MockAutomataDcapAttestation, etc.)
 
-### Compressed P-256 Keys Not Supported (Issue #4)
-**Decision**: The system explicitly rejects compressed P-256 public keys and only accepts uncompressed keys.
+**Rust (`crates/automata-tee-workload-measurement/`)**:
+- `session_registry.rs` - SessionRegistry contract bindings
+- `base_image_registry.rs` - BaseImageRegistry bindings
+- `workload_registry.rs` - WorkloadRegistry bindings
+- `relay.rs` - Transaction relay utilities
+- `stubs.rs` - Mock implementations for testing
+- `types.rs` - Rust type definitions matching Solidity structs
+- `workload_measurement.rs` - High-level API wrappers
 
-**Format Requirements**:
-- P-256 public keys must be exactly 64 bytes consisting of `x || y` coordinates (32 bytes each)
-- The 0x04 uncompressed point prefix is NOT included in the 64-byte requirement
-- Compressed keys (33 bytes with 0x02 or 0x03 prefix) are not supported
+**Scripts (`script/`)**:
+- `DeployProd.s.sol` - Production deployment
+- `DeployMock.s.sol` - Mock deployment for testing
+- `Deploy{Contract}.s.sol` - Individual contract deployment scripts
+- `Config.s.sol` - Whitelist and configuration management
+- `utils/` - Shared deployment utilities (DeploymentConfig, etc.)
+- `cvm/generate-init-data.sh` - CVM initialization script
 
-**Justification**: 
-- Converting compressed keys to uncompressed format on-chain would be computationally expensive
-- The decompression operation requires complex elliptic curve point arithmetic
-- Gas costs for such operations would significantly impact the economic viability of verification
+**Tests (`test/`)**:
+- `SessionRegistry.t.sol` - Main integration tests
+- `fixtures/` - Test data (TPM quotes, certificates, etc.)
+- `benchmark/` - Gas benchmarking tests
+- `utils/` - Test utilities
 
-**Impact**: TPMs and certificate issuers must be configured to use uncompressed P-256 public keys. The system expects the raw x and y coordinates without the uncompressed point indicator prefix.
+### External Dependencies
+
+**Solidity Libraries:**
+- `@openzeppelin/contracts-upgradeable` - Proxy pattern, access control
+- `@automata-network/automata-tpm-attestation` - TPM verification primitives
+- `@solady` - Gas-optimized utilities
+
+**Verification Backends:**
+- DCAP Attestation (`IDcapAttestation`) - Intel TDX quote verification
+- SNP Attestation (`ISnpAttestation`) - AMD SEV-SNP report verification
+- TPM Attestation (`ITpmAttestation`) - TPM quote and certificate verification
+- P256 Verifier - ECDSA P256 signature verification (RIP-7212 precompile)
+
+## Common Workflows
+
+### Adding a New Base Image
+
+1. Register owner public key in `BaseImageRegistry` whitelist (if paused)
+2. Create `BaseImageSpec` with PCR policies for boot components (PCR 0-14)
+3. Register platform profiles (GCP, Azure, AWS) with TEE-specific attributes
+4. Register measurement variants for different machine types
+5. Call `BaseImageRegistry.registerBaseImage()` with owner signature
+
+### Adding a New Workload
+
+1. Register owner public key in `WorkloadRegistry` whitelist (if paused)
+2. Create `WorkloadSpec` with PCR policies for application (PCR 20-23)
+3. Define access control (ANY, WHITELIST, BLACKLIST) for base images
+4. Call `WorkloadRegistry.registerWorkload()` with owner signature
+
+### Registering a CVM Session
+
+1. Boot CVM with TPM, generate TEE attestation and TPM quote
+2. Collect evidence: TEE report, TPM quote, AK collateral, TPM2_Certify proofs
+3. Sign registration message with owner key
+4. Call `SessionRegistry.registerSession()` - performs 9-step verification
+5. Store returned `sessionId` - use for session key verification downstream
+
+### Rotating Session Keys
+
+Use `SessionRegistry.rotateSession()` when:
+- Session is still valid (not expired)
+- Want to rotate to new session key without full TEE re-attestation
+- Need fresh TPM2_Certify proof for new key
+
+Use `registerSession()` again when:
+- Session has expired (past TTL)
+- Need full TEE + TPM re-attestation
+- Workload or base image policies changed
+
+## Important Notes
+
+- **Solc Version**: Fixed at `0.8.27` with `via_ir = true` optimizer
+- **EVM Version**: `prague` (latest opcodes)
+- **Proxy Pattern**: All registries use UUPS (Universal Upgradeable Proxy Standard)
+- **Storage Gaps**: All upgradeable contracts reserve storage slots (`__gap`) for future fields
+- **P256 Verifier**: Depends on RIP-7212 precompile at `0x0000000000000000000000000000000000000100` or fallback contract
+- **FFI Enabled**: `foundry.toml` has `ffi = true` for test data generation scripts
+- **Gas Optimization**: Complex verification logic benefits from `via_ir` compilation
+- **Immutable References**: TeeVerifier, SignatureVerifier, registry dependencies are immutable in SessionRegistry

@@ -27,10 +27,7 @@ contract DeployMock is Script, DeploymentConfig {
         MockAutomataSnpAttestation snpAttestation = new MockAutomataSnpAttestation();
         console.log("MockAutomataSnpAttestation deployed at:", address(snpAttestation));
 
-        TeeVerifier teeVerifier = new TeeVerifier(
-            dcapAttestation,
-            snpAttestation
-        );
+        TeeVerifier teeVerifier = new TeeVerifier(dcapAttestation, snpAttestation);
         console.log("TeeVerifier deployed at:", address(teeVerifier));
         writeToJson("TeeVerifierMock", address(teeVerifier));
 
