@@ -1,5 +1,5 @@
 use alloy::{
-    primitives::{B256, Bytes, keccak256},
+    primitives::{Address, B256, Bytes, keccak256},
     signers::{Signer, local::PrivateKeySigner},
     sol_types::SolValue,
 };
@@ -48,7 +48,7 @@ pub enum AlgoId {
 }
 
 /// Public identity for JSON serialization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicIdentity {
     pub type_id: u8,
@@ -65,6 +65,31 @@ impl PublicIdentity {
             type_id: AlgoId::Es256K as _,
             key: public_key_bytes.to_vec().into(),
         }
+    }
+
+    pub fn is_secp256k1(&self) -> bool {
+        self.type_id == AlgoId::Es256K as u8
+    }
+
+    pub fn is_secp256r1(&self) -> bool {
+        self.type_id == AlgoId::Es256 as u8
+    }
+
+    pub fn is_rsa(&self) -> bool {
+        self.type_id == AlgoId::Rs256 as u8
+    }
+
+    pub fn secp256k1_address(&self) -> Option<Address> {
+        if !self.is_secp256k1() {
+            return None;
+        }
+        // Ethereum address = last 20 bytes of keccak256(uncompressed_pubkey[1..])
+        let pubkey_bytes = &self.key;
+        if pubkey_bytes.len() != 65 || pubkey_bytes[0] != 0x04 {
+            return None; // Invalid uncompressed key format
+        }
+        let hash = keccak256(&pubkey_bytes[1..]); // Skip the 0x04 prefix
+        Some(Address::from_slice(&hash[12..])) // Take the last 20 bytes
     }
 
     /// Compute key fingerprint as defined in LibKey.sol:
