@@ -8,11 +8,10 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
-use crate::stubs::BaseImageRegistry::{
-    BaseImageRegistryEvents, BaseImageRegistryInstance, BaseImageSpec, MeasurementVariant,
-    PlatformProfile,
+use crate::stubs::BaseImageRegistry::{BaseImageRegistryEvents, BaseImageRegistryInstance};
+use crate::stubs::{
+    BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity, sign_message,
 };
-use crate::stubs::{PublicIdentity, sign_message};
 use crate::types::AppRef;
 
 #[derive(Debug, Clone)]
@@ -25,6 +24,29 @@ pub struct BaseImageResult {
     pub base_image_id: B256,
     pub platform_profile_ids: Vec<B256>,
     pub variant_id: Vec<Vec<B256>>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct BaseImageInfo {
+    pub spec: BaseImageSpec,
+    pub profile: PlatformProfile,
+    pub variant: Option<MeasurementVariant>,
+}
+
+/// Full hierarchy of a base image: all profiles and their variants.
+#[derive(Debug, Clone)]
+pub struct BaseImageHierarchy {
+    pub base_image_id: B256,
+    pub spec: BaseImageSpec,
+    pub profiles: Vec<ProfileWithVariants>,
+}
+
+/// A platform profile together with its measurement variants.
+#[derive(Debug, Clone)]
+pub struct ProfileWithVariants {
+    pub profile_id: B256,
+    pub profile: PlatformProfile,
+    pub variants: Vec<(B256, MeasurementVariant)>,
 }
 
 impl BaseImageRegistry {
@@ -53,6 +75,74 @@ impl BaseImageRegistry {
             )
                 .abi_encode_params(),
         )
+    }
+
+    /// Get the complete hierarchy for a base image: spec + all profiles + all variants.
+    ///
+    /// Since `platformProfileIds` and `variantIds` are private arrays in the contract,
+    /// we read them via `eth_getStorageAt` by computing their storage slots directly.
+    ///
+    /// Storage layout (OZ upgradeable contracts use namespaced storage, so our
+    /// mappings start at slot 0):
+    ///
+    /// ```text
+    /// slot 0: mapping(bytes32 => BaseImageSpecStorage) _baseImages
+    ///   base = keccak256(key ++ slot)
+    ///   base+5: platformProfileIds.length
+    ///   keccak256(base+5)+i: platformProfileIds[i]
+    ///
+    /// slot 1: mapping(bytes32 => PlatformProfileStorage) _platformProfiles
+    ///   base = keccak256(key ++ slot)
+    ///   base+4: variantIds.length
+    ///   keccak256(base+4)+i: variantIds[i]
+    /// ```
+    pub async fn get_hierarchy(&self, base_image_id: B256) -> Result<BaseImageHierarchy> {
+        let provider = self.stub.provider();
+        let addr = *self.stub.address();
+
+        // 1. Fetch spec via public getter
+        let spec = self.stub.getBaseImage(base_image_id).call().await?;
+
+        // 2. Read platformProfileIds from storage
+        let profile_ids = read_bytes32_array(
+            provider,
+            addr,
+            mapping_struct_slot(base_image_id, U256::from(0)),
+            5, // platformProfileIds offset in BaseImageSpecStorage
+        )
+        .await?;
+
+        // 3. For each profile, read variantIds and fetch data
+        let mut profiles = Vec::with_capacity(profile_ids.len());
+        for profile_id in &profile_ids {
+            let profile = self.stub.getPlatformProfile(*profile_id).call().await?;
+
+            let variant_ids = read_bytes32_array(
+                provider,
+                addr,
+                mapping_struct_slot(*profile_id, U256::from(1)),
+                4, // variantIds offset in PlatformProfileStorage
+            )
+            .await?;
+
+            let mut variants = Vec::with_capacity(variant_ids.len());
+            for variant_id in &variant_ids {
+                let variant = self.stub.getMeasurementVariant(*variant_id).call().await?;
+                variants.push((*variant_id, variant));
+            }
+
+            profiles.push(ProfileWithVariants {
+                profile_id: *profile_id,
+                profile,
+                variants,
+            });
+        }
+
+        Ok(BaseImageHierarchy {
+            base_image_id,
+            spec,
+            profiles,
+        })
     }
 
     /// Register a base image to the BaseImageRegistry contract.
@@ -172,4 +262,75 @@ impl BaseImageRegistry {
             .await
             .context("Failed to get transaction receipt")?)
     }
+}
+
+// ============================================================================
+// Storage layout helpers for reading private arrays via eth_getStorageAt
+// ============================================================================
+
+/// Compute the base storage slot for `mapping[key]` where the mapping is at `slot`.
+///
+/// Solidity storage: `keccak256(abi.encode(key, slot))`
+fn mapping_struct_slot(key: B256, slot: U256) -> U256 {
+    let mut buf = [0u8; 64];
+    buf[..32].copy_from_slice(key.as_slice());
+    slot.to_be_bytes::<32>()
+        .iter()
+        .enumerate()
+        .for_each(|(i, &b)| buf[32 + i] = b);
+    U256::from_be_bytes(keccak256(buf).0)
+}
+
+/// Read a `bytes32[]` dynamic array from contract storage.
+///
+/// - `struct_base`: base slot of the struct within the mapping
+/// - `array_offset`: field offset of the `bytes32[]` within the struct
+///
+/// The array length is at slot `struct_base + array_offset`.
+/// Element `i` is at slot `keccak256(struct_base + array_offset) + i`.
+async fn read_bytes32_array(
+    provider: &NetworkProvider,
+    addr: Address,
+    struct_base: U256,
+    array_offset: u64,
+) -> Result<Vec<B256>> {
+    let length_slot = struct_base + U256::from(array_offset);
+
+    // Read array length
+    let length_raw = provider
+        .get_storage_at(addr, length_slot)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to read array length from storage at slot: {}",
+                length_slot
+            )
+        })?;
+    let length = length_raw.to::<u64>();
+
+    if length == 0 {
+        return Ok(vec![]);
+    }
+
+    // Compute data start slot: keccak256(length_slot)
+    let mut slot_bytes = [0u8; 32];
+    length_slot
+        .to_be_bytes::<32>()
+        .iter()
+        .enumerate()
+        .for_each(|(i, &b)| slot_bytes[i] = b);
+    let data_start = U256::from_be_bytes(keccak256(slot_bytes).0);
+
+    // Read each element
+    let mut result = Vec::with_capacity(length as usize);
+    for i in 0..length {
+        let element_slot = data_start + U256::from(i);
+        let value = provider
+            .get_storage_at(addr, element_slot)
+            .await
+            .context("Failed to read array element from storage")?;
+        result.push(B256::from(value));
+    }
+
+    Ok(result)
 }

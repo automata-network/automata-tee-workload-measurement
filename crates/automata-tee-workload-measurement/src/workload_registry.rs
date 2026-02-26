@@ -28,6 +28,11 @@ impl WorkloadRegistry {
         app_ref.id("CVM_WORKLOAD_V1")
     }
 
+    pub async fn get_workload_spec(&self, workload_id: B256) -> Result<WorkloadSpec> {
+        let spec = self.stub.getWorkload(workload_id).call_ex().await?;
+        Ok(spec)
+    }
+
     /// Register a workload to the WorkloadRegistry contract.
     ///
     /// This function:

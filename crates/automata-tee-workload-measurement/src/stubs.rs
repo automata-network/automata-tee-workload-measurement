@@ -16,6 +16,7 @@ alloy::contract! {
     SessionRegistry => "./contract_artifacts/SessionRegistry.sol/SessionRegistry.json",
     BaseImageRegistry => "./contract_artifacts/BaseImageRegistry.sol/BaseImageRegistry.json",
     TpmAttestation => "./contract_artifacts/TpmAttestation.sol/TpmAttestation.json",
+    TpmVerifier => "./contract_artifacts/TpmVerifier.sol/TpmVerifier.json",
 }
 
 // Define TpmQuoteReport for ABI decoding (not exported in SessionRegistry ABI)
@@ -264,3 +265,7 @@ impl From<SessionRotationEvidence> for SessionRegistry::SessionRotationEvidence 
         unsafe { std::mem::transmute(data) }
     }
 }
+
+pub type BaseImageSpec = BaseImageRegistry::BaseImageSpec;
+pub type PlatformProfile = BaseImageRegistry::PlatformProfile;
+pub type MeasurementVariant = BaseImageRegistry::MeasurementVariant;
