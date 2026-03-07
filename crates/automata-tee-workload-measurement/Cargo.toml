@@ -2,6 +2,10 @@
 name = "automata-tee-workload-measurement"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Automata TEE workload measurement and attestation utilities"
+repository = "https://github.com/automata-network/automata-tee-workload-measurement"
 
 [dependencies]
 alloy.workspace = true
