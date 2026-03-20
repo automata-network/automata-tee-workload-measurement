@@ -2,16 +2,18 @@
 
 use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum, ProviderEx};
 use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
-use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::base_image_registry::BaseImageRegistry;
-use crate::stubs::SessionRegistry::{SessionRegistryEvents, SessionRegistryInstance};
+use crate::stubs::SessionRegistry::{
+    CVMSession, SessionRegistryEvents, SessionRegistryInstance,
+};
 use crate::stubs::{
-    AttestationEvidence, PublicIdentity, SessionRotationEvidence, TpmQuoteReport, sign_message,
+    AttestationEvidence, PublicIdentity, SessionRotationEvidence, TpmQuoteReport, expire_at,
+    sign_message,
 };
 use crate::types::{AppRef, RegisterSessionResponse, RotateSessionResponse};
 use crate::workload_registry::WorkloadRegistry;
@@ -70,12 +72,7 @@ impl SessionRegistry {
     ) -> Result<RegisterSessionResponse> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        // Calculate expiration timestamp
-        let current_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let expire_at = current_timestamp + expire_offset_secs;
+        let expire_at = expire_at(expire_offset_secs);
 
         // Get chain ID
         let chain_id = self.stub.provider().chain_id();
@@ -143,20 +140,10 @@ impl SessionRegistry {
     ) -> Result<RotateSessionResponse> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        // Calculate expiration timestamp
-        let current_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let expire_at = current_timestamp + expire_offset_secs;
+        let expire_at = expire_at(expire_offset_secs);
 
         // Get chain ID
-        let chain_id = self
-            .stub
-            .provider()
-            .get_chain_id()
-            .await
-            .context("Failed to get chain ID")?;
+        let chain_id = self.stub.provider().chain_id();
 
         // Pre-compute newSessionId
         let new_session_id = compute_new_session_id(
@@ -248,7 +235,7 @@ impl SessionRegistry {
             .send_ex()
             .await?;
 
-        let tx_hash = B256::from(*pending.tx_hash());
+        let tx_hash = pending.tx_hash();
         info!(tx_hash = %tx_hash, "Transaction submitted");
 
         let mut tx = PendingTxAccum::new(pending, |event, result: &mut RegisterSessionResponse| {
@@ -326,6 +313,114 @@ impl SessionRegistry {
         response.tx_hash = tx.tx_hash();
 
         Ok(response)
+    }
+
+    /// Revoke a session in the SessionRegistry contract.
+    pub async fn revoke_session(
+        &self,
+        signer: &PrivateKeySigner,
+        session_id: B256,
+        expire_offset_secs: u64,
+    ) -> Result<B256> {
+        let owner_identity = PublicIdentity::secp256k1(signer);
+
+        let expire_at = expire_at(expire_offset_secs);
+
+        let chain_id = self.stub.provider().chain_id();
+
+        let sig_bytes = sign_message(
+            &(
+                keccak256(b"CVM_MSG_SESSION_REVOKE_V1"),
+                U256::from(chain_id),
+                *self.stub.address(),
+                U256::from(expire_at),
+                session_id,
+            ),
+            signer,
+        )
+        .await?;
+
+        info!(
+            address = %self.stub.address(),
+            session_id = %session_id,
+            expire_at = expire_at,
+            "Submitting revokeSession transaction"
+        );
+
+        let pending = self
+            .stub
+            .revokeSession(session_id, expire_at, owner_identity.into(), sig_bytes)
+            .send_ex()
+            .await?;
+
+        let tx_hash = pending.tx_hash();
+        info!(tx_hash = %tx_hash, "Revocation transaction submitted");
+
+        let mut tx = PendingTxAccum::new(pending, move |event, found: &mut bool| {
+            if let SessionRegistryEvents::SessionRevoked(msg) = event {
+                if msg.sessionId == session_id {
+                    *found = true;
+                }
+            }
+        });
+
+        let found = tx
+            .result()
+            .await
+            .context("Failed to get revocation receipt")?;
+
+        anyhow::ensure!(
+            found,
+            "No SessionRevoked event with expected sessionId {session_id}"
+        );
+
+        Ok(tx.tx_hash())
+    }
+
+    /// Get the full session data.
+    pub async fn get_session(&self, session_id: B256) -> Result<CVMSession> {
+        let session = self.stub.getSession(session_id).call_ex().await?;
+        Ok(session)
+    }
+
+    /// Get session ID by session fingerprint.
+    pub async fn get_session_id(&self, session_fingerprint: B256) -> Result<B256> {
+        let session_id = self
+            .stub
+            .getSessionId(session_fingerprint)
+            .call_ex()
+            .await?;
+        Ok(session_id)
+    }
+
+    /// Get the owner fingerprint of a session.
+    pub async fn get_session_owner(&self, session_id: B256) -> Result<B256> {
+        let owner = self
+            .stub
+            .getSessionOwner(session_id)
+            .call_ex()
+            .await?;
+        Ok(owner)
+    }
+
+    /// Check if a session is active (exists, not revoked, not expired).
+    pub async fn is_session_active(&self, session_id: B256) -> Result<bool> {
+        let active = self
+            .stub
+            .isSessionActive(session_id)
+            .call_ex()
+            .await?;
+        Ok(active)
+    }
+
+    /// Check if a session has expired.
+    pub async fn is_session_expired(&self, session_id: B256) -> Result<bool> {
+        let expired = self
+            .stub
+            .isSessionExpired(session_id)
+            .call_ex()
+            .await?;
+        Ok(expired)
     }
 }
 

@@ -185,6 +185,15 @@ where
     Ok(sig_bytes.into())
 }
 
+/// Compute expiration timestamp as `now + offset_secs`.
+pub fn expire_at(offset_secs: u64) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + offset_secs
+}
+
 /// Attestation evidence for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

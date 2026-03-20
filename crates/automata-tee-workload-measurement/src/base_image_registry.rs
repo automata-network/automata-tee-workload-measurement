@@ -1,6 +1,6 @@
 //! BaseImageRegistry contract interaction.
 
-use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum};
+use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum, ProviderEx};
 use alloy::primitives::{Address, B256, U256, keccak256};
 use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
@@ -10,7 +10,7 @@ use tracing::{debug, info};
 
 use crate::stubs::BaseImageRegistry::{BaseImageRegistryEvents, BaseImageRegistryInstance};
 use crate::stubs::{
-    BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity, sign_message,
+    BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity, expire_at, sign_message,
 };
 use crate::types::AppRef;
 
@@ -176,12 +176,7 @@ impl BaseImageRegistry {
         }
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        // Calculate expiration timestamp
-        let current_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let expire_at = current_timestamp + expire_offset_secs;
+        let expire_at = expire_at(expire_offset_secs);
 
         info!(
             address = %self.stub.address(),
@@ -190,12 +185,7 @@ impl BaseImageRegistry {
         );
 
         // Get chain ID
-        let chain_id = self
-            .stub
-            .provider()
-            .get_chain_id()
-            .await
-            .context("Failed to get chain ID")?;
+        let chain_id = self.stub.provider().chain_id();
 
         // Build and sign the message
         // Message: sha256(abi.encode(domain, chainId, contractAddr, expireAt, spec, profiles, variants))
@@ -261,6 +251,217 @@ impl BaseImageRegistry {
             .result()
             .await
             .context("Failed to get transaction receipt")?)
+    }
+
+    /// Deactivate a base image in the BaseImageRegistry contract.
+    pub async fn deactivate_base_image(
+        &self,
+        signer: &PrivateKeySigner,
+        base_image_id: B256,
+        expire_offset_secs: u64,
+    ) -> Result<B256> {
+        let owner_identity = PublicIdentity::secp256k1(signer);
+
+        let expire_at = expire_at(expire_offset_secs);
+
+        let chain_id = self.stub.provider().chain_id();
+
+        let sig_bytes = sign_message(
+            &(
+                keccak256(b"CVM_MSG_BASEIMAGE_DEACTIVATE_V1"),
+                U256::from(chain_id),
+                *self.stub.address(),
+                U256::from(expire_at),
+                base_image_id,
+            ),
+            signer,
+        )
+        .await?;
+
+        info!(
+            address = %self.stub.address(),
+            base_image_id = %base_image_id,
+            expire_at = expire_at,
+            "Submitting deactivateBaseImage transaction"
+        );
+
+        let pending = self
+            .stub
+            .deactivateBaseImage(base_image_id, expire_at, owner_identity.into(), sig_bytes)
+            .send_ex()
+            .await?;
+
+        let tx_hash = pending.tx_hash();
+        info!(tx_hash = %tx_hash, "Deactivation transaction submitted");
+
+        let mut tx = PendingTxAccum::new(pending, move |event, found: &mut bool| {
+            if let BaseImageRegistryEvents::BaseImageDeactivated(msg) = event {
+                if msg.baseImageId == base_image_id {
+                    *found = true;
+                }
+            }
+        });
+
+        let found = tx
+            .result()
+            .await
+            .context("Failed to get deactivation receipt")?;
+
+        anyhow::ensure!(
+            found,
+            "No BaseImageDeactivated event with expected baseImageId {base_image_id}"
+        );
+
+        Ok(tx.tx_hash())
+    }
+
+    /// Add platform variants to an existing base image.
+    pub async fn add_platform_variants(
+        &self,
+        signer: &PrivateKeySigner,
+        base_image_id: B256,
+        platform_profiles: Vec<PlatformProfile>,
+        measurement_variants: Vec<Vec<MeasurementVariant>>,
+        expire_offset_secs: u64,
+    ) -> Result<BaseImageResult> {
+        let owner_identity = PublicIdentity::secp256k1(signer);
+
+        let expire_at = expire_at(expire_offset_secs);
+
+        let chain_id = self.stub.provider().chain_id();
+
+        // Message: sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainId, contractAddr, expireAt, baseImageId, profiles, variants))
+        let sig_bytes = sign_message(
+            &(
+                keccak256(b"CVM_MSG_BASEIMAGE_UPDATE_V1"),
+                U256::from(chain_id),
+                *self.stub.address(),
+                U256::from(expire_at),
+                base_image_id,
+                platform_profiles.clone(),
+                measurement_variants.clone(),
+            ),
+            signer,
+        )
+        .await?;
+
+        info!(
+            address = %self.stub.address(),
+            base_image_id = %base_image_id,
+            expire_at = expire_at,
+            "Submitting addPlatformVariants transaction"
+        );
+
+        let pending = self
+            .stub
+            .addPlatformVariants(
+                base_image_id,
+                platform_profiles,
+                measurement_variants,
+                expire_at,
+                owner_identity.into(),
+                sig_bytes,
+            )
+            .send_ex()
+            .await?;
+
+        let tx_hash = pending.tx_hash();
+        info!(tx_hash = %tx_hash, "Transaction submitted");
+
+        let mut tx =
+            PendingTxAccum::new(pending, |event, result: &mut BaseImageResult| match event {
+                BaseImageRegistryEvents::BaseImageUpdated(msg) => {
+                    result.base_image_id = msg.baseImageId;
+                }
+                BaseImageRegistryEvents::PlatformProfileRegistered(msg) => {
+                    result.platform_profile_ids.push(msg.platformProfileId);
+                    result.variant_id.push(vec![]);
+                }
+                BaseImageRegistryEvents::MeasurementVariantRegistered(msg) => {
+                    if let Some(idx) = result
+                        .platform_profile_ids
+                        .iter()
+                        .position(|id| id == &msg.platformProfileId)
+                    {
+                        result.variant_id[idx].push(msg.variantId);
+                    }
+                }
+                _ => {}
+            });
+
+        Ok(tx
+            .result()
+            .await
+            .context("Failed to get transaction receipt")?)
+    }
+
+    /// Get the combined variant info (base image + platform profile + measurement variant).
+    pub async fn get_variant(
+        &self,
+        base_image_id: B256,
+        platform_profile_id: B256,
+        variant_id: B256,
+    ) -> Result<BaseImageInfo> {
+        let result = self
+            .stub
+            .getVariant(base_image_id, platform_profile_id, variant_id)
+            .call_ex()
+            .await?;
+        Ok(BaseImageInfo {
+            spec: result.baseImage,
+            profile: result.platformProfile,
+            variant: Some(result.variant),
+        })
+    }
+
+    /// Get the owner fingerprint of a base image.
+    pub async fn get_base_image_owner(&self, base_image_id: B256) -> Result<B256> {
+        let owner = self.stub.getBaseImageOwner(base_image_id).call_ex().await?;
+        Ok(owner)
+    }
+
+    /// Check if a base image has been revoked.
+    pub async fn is_base_image_revoked(&self, base_image_id: B256) -> Result<bool> {
+        let revoked = self
+            .stub
+            .isBaseImageRevoked(base_image_id)
+            .call_ex()
+            .await?;
+        Ok(revoked)
+    }
+
+    /// Check if a measurement variant exists.
+    pub async fn has_variant(&self, variant_id: B256) -> Result<bool> {
+        let exists = self.stub.hasVariant(variant_id).call_ex().await?;
+        Ok(exists)
+    }
+
+    /// Add fingerprints to the whitelist (onlyOwner).
+    pub async fn add_to_whitelist(&self, fingerprints: Vec<B256>) -> Result<B256> {
+        let mut pending = self.stub.addToWhitelist(fingerprints).send_ex().await?;
+        let tx_hash = pending.tx_hash();
+        pending
+            .get_receipt()
+            .await
+            .context("Failed to get whitelist add receipt")?;
+        Ok(tx_hash)
+    }
+
+    /// Remove a fingerprint from the whitelist (onlyOwner).
+    pub async fn remove_from_whitelist(&self, fingerprint: B256) -> Result<B256> {
+        let mut pending = self.stub.removeFromWhitelist(fingerprint).send_ex().await?;
+        let tx_hash = pending.tx_hash();
+        pending
+            .get_receipt()
+            .await
+            .context("Failed to get whitelist remove receipt")?;
+        Ok(tx_hash)
+    }
+
+    /// Check if a fingerprint is whitelisted.
+    pub async fn is_whitelisted(&self, fingerprint: B256) -> Result<bool> {
+        let whitelisted = self.stub.isWhitelisted(fingerprint).call_ex().await?;
+        Ok(whitelisted)
     }
 }
 
