@@ -118,7 +118,7 @@ struct WorkloadSpec {
     string name;
     /// @dev Semantic version (e.g., "2.1.0")
     string version;
-    /// @dev Time-to-live in seconds (0 = no expiration)
+    /// @dev Time-to-live in seconds (0 means using the default TTL of 30 days in SessionRegistry)
     uint64 ttl;
     /// @dev Access control mode for base images:
     ///      - ANY: No restrictions (baseImageIds ignored)

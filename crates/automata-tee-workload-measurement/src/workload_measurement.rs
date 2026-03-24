@@ -90,6 +90,26 @@ impl WorkloadMeasurement {
         Ok(self.session_registry.get_nonce(owner.fingerprint()).await?)
     }
 
+    pub async fn session_ttl(&self, workload_id: B256) -> Result<u64> {
+        let spec = self
+            .workload_registry
+            .get_workload_spec(workload_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to get session TTL for workload ID: {:?}",
+                    workload_id
+                )
+            })?;
+
+        let ttl = if spec.ttl == 0 {
+            30 * 86400 // default to 30 days if not set
+        } else {
+            spec.ttl
+        };
+        Ok(ttl)
+    }
+
     pub async fn register_session(
         &self,
         req: RegisterSessionRequest,
