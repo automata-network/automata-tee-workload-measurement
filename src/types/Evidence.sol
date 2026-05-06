@@ -103,7 +103,7 @@ struct TpmCertifyReport {
     bytes tpm2bAttest;
     /// @dev TPMT_SIGNATURE structure over tpm2bAttest
     bytes tpmSignature;
-    /// @dev TPM2B_PUBLIC structure of the certified key
+    /// @dev TPMT_PUBLIC structure of the certified key (attributes at offset 4)
     bytes tpmtPublic;
 }
 
@@ -127,7 +127,8 @@ struct AttestationEvidence {
     TpmReport tpmCertifyReport;
     /// @dev Attestation Key public key collateral
     AkPubCollateral akPubCollateral;
-    /// @dev Delegation signature: tpmSigningKey signs sessionKey fingerprint
+    /// @dev Delegation signature by tpmSigningKey over keccak256(abi.encode(
+    ///      DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint))
     bytes sessionKeySignature;
     /// @dev Session public key (operational key for application use)
     PublicIdentity sessionKey;
