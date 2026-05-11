@@ -125,6 +125,7 @@ Actions:
   - Check base image not revoked (revert BaseImageNotActive)
   - Check workload allows base image (revert BaseImageNotAllowed)
   - Fetch platform profile + variant via baseImageRegistry.getVariant()
+    NOTE: getVariant() checks existence only; it does NOT prove platformProfileId belongs to baseImageId or variantId belongs to platformProfileId
   - Fetch workload spec via workloadRegistry.getWorkload()
 Output: PolicyContext { platformProfile, variant, workloadSpec }
 ```
@@ -204,6 +205,7 @@ Actions:
     (overrides replace invariants at matching pcrIndex using bitmask approach)
   - Evaluate merged PCR specs against measured values (_evaluatePcrSpecs)
   - Evaluate workload PCR specs against measured values (_evaluatePcrSpecs)
+    NOTE: SessionRegistry does not enforce a hard platform-vs-workload PCR index split; it evaluates whatever sorted specs the registries provide
   - For each PCR spec:
     STATIC: pcrValue.value == matchData[0]
     DYNAMIC_SUBSET: each pcrValue.eventLogHashes[i] must be in matchData set
@@ -393,6 +395,10 @@ This binds the session key to a specific base image, workload, and session.
 - GCP PCR15 binding check is skipped (expectedPcr15 = bytes32(0))
 - Old session's `expiresAt` is preserved (NOT recomputed from TTL)
 - Rotation authorization: old TPM signing key must sign rotation message
+- Owner `expireAt` and owner signature are checked late in `_finalizeRotation`, after TPM quote verification has already consumed the owner's nonce
+
+### Policy Lookup Caveat
+`_lookupPolicy()` relies on `baseImageRegistry.getVariant(baseImageId, platformProfileId, variantId)`, and that BaseImageRegistry helper only verifies that each ID exists. It does not enforce base-image/profile/variant lineage consistency.
 
 ### Internal Helpers
 - `_requireNotExpired(expireAt)` -- reverts `SignatureExpired` if expired

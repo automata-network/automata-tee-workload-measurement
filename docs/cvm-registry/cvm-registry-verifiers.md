@@ -136,16 +136,17 @@ function verify(
 3. Call `RSA.pkcs1Sha256(hash, signature, e, n)`
 
 #### ES256 (typeId = 2)
-1. Extract x, y coordinates from 65-byte SEC1 uncompressed point (`identity.key`)
-   - `x = bytes32(key[1:33])`, `y = bytes32(key[33:65])`
-2. Parse DER-encoded signature to extract r, s via ASN.1 decoding
-3. Call external P256Verifier: `staticcall(p256Verifier, abi.encode(hash, r, s, x, y))`
-4. Result: first 32 bytes of return value == 1
+1. Validate `key.length == 65 && key[0] == 0x04` (SEC1 uncompressed point; `src/SignatureVerifier.sol:85`)
+2. Extract x, y coordinates: `x = bytes32(key[1:33])`, `y = bytes32(key[33:65])`
+3. Parse DER-encoded signature to extract r, s via ASN.1 decoding
+4. Call external P256Verifier: `staticcall(p256Verifier, abi.encode(hash, r, s, x, y))`
+5. Result: first 32 bytes of return value == 1
 
 #### ES256K (typeId = 3)
-1. Derive expected address from public key: `address(uint160(uint256(keccak256(key[1:65]))))`
-2. Call `ECDSA.tryRecoverCalldata(hash, signature)` to recover signer address (uses calldata variant)
-3. Compare recovered address with expected address and check no error
+1. Validate `key.length == 65 && key[0] == 0x04` (SEC1 uncompressed point; `src/SignatureVerifier.sol:119`)
+2. Derive expected address from public key: `address(uint160(uint256(keccak256(key[1:65]))))`
+3. Call `ECDSA.tryRecoverCalldata(hash, signature)` to recover signer address (calldata variant)
+4. Compare recovered address with expected address and check no error
 
 ---
 

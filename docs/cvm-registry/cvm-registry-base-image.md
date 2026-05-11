@@ -138,7 +138,7 @@ function addPlatformVariants(
 | `getBaseImage(baseImageId)` | `BaseImageSpec` | Reverts if not found |
 | `getPlatformProfile(platformProfileId)` | `PlatformProfile` | Reverts if not found |
 | `getMeasurementVariant(variantId)` | `MeasurementVariant` | Reverts if not found |
-| `getVariant(baseImageId, platformProfileId, variantId)` | `(BaseImageSpec, PlatformProfile, MeasurementVariant)` | All three in one call |
+| `getVariant(baseImageId, platformProfileId, variantId)` | `(BaseImageSpec, PlatformProfile, MeasurementVariant)` | All three in one call; checks existence only, not parent-child linkage |
 | `getBaseImageOwner(baseImageId)` | `bytes32` | Owner fingerprint |
 | `isBaseImageRevoked(baseImageId)` | `bool` | Revocation status |
 | `hasVariant(variantId)` | `bool` | Existence check |
@@ -157,19 +157,21 @@ function addPlatformVariants(
 
 | Error | Condition |
 |---|---|
-| `BaseImageAlreadyExists` | Duplicate registration attempt |
-| `BaseImageNotFound` | ID doesn't exist |
-| `BaseImageNotActive` | Image is revoked |
-| `PlatformProfileNotFound` | Profile ID doesn't exist |
-| `MeasurementVariantNotFound` | Variant ID doesn't exist |
-| `ArrayLengthMismatch` | `platformProfiles.length != measurementVariants.length` |
-| `InvalidSignature` | Signature verification failed |
-| `Unauthorized` | Signer != owner |
-| `SignatureExpired` | `block.timestamp > expireAt` |
-| `InvalidPcrOrder` | PCR specs not sorted ascending by index |
-| `PcrIndexOutOfRange` | PCR index > 23 |
-| `DuplicateAttributeKey` | Repeated key in attributes array |
-| `NotWhitelisted` | Owner fingerprint not in whitelist |
+| `BaseImageAlreadyExists(bytes32 baseImageId)` | Duplicate registration attempt |
+| `BaseImageNotFound(bytes32 baseImageId)` | ID doesn't exist |
+| `BaseImageNotActive(bytes32 baseImageId)` | Image is revoked |
+| `PlatformProfileNotFound(bytes32 platformProfileId)` | Profile ID doesn't exist |
+| `MeasurementVariantNotFound(bytes32 variantId)` | Variant ID doesn't exist |
+| `MeasurementVariantAlreadyExists(bytes32 variantId)` | `addPlatformVariants` is append-only; can't re-register a variantId |
+| `ArrayLengthMismatch()` | `platformProfiles.length != measurementVariants.length` |
+| `InvalidSignature()` | Signature verification failed |
+| `Unauthorized()` | Signer != owner |
+| `SignatureExpired()` | `block.timestamp > expireAt` |
+| `InvalidPcrOrder()` | PCR specs not sorted ascending by index |
+| `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
+| `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
+| `DuplicateAttributeKey(bytes32 key)` | Repeated key in attributes array |
+| `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not in whitelist |
 
 ## Events
 
@@ -185,7 +187,7 @@ function addPlatformVariants(
 
 ## Validation Rules
 
-1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex` (enforced by `_validatePcrSpecsSorted`)
+1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24` (enforced by `_validatePcrSpecsSorted`)
 2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateUniqueAttributeKeys`, uses in-memory hash table)
 3. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
 4. **Signature expiry**: `block.timestamp <= expireAt`
@@ -199,5 +201,9 @@ Contract starts **paused** (`_pause()` called in `initialize`). Owner must eithe
 ## Internal Helpers
 
 - `_checkRegistrationAllowed(ownerFingerprint)` -- Reverts NotWhitelisted if paused AND not whitelisted
-- `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order and index range (< 24)
+- `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order and index range (< 24); also reverts `EmptyMatchData` for `DYNAMIC_*` specs with zero-length `matchData`
 - `_validateUniqueAttributeKeys(Attribute[])` -- Hash-table-based uniqueness check for attribute keys
+
+## Implementation Nuance
+
+`getVariant(baseImageId, platformProfileId, variantId)` does **not** verify hierarchy membership. It only checks that the base image, platform profile, and variant IDs each exist somewhere in storage. Callers that need lineage consistency must enforce it themselves.

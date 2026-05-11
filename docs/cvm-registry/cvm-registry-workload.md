@@ -45,7 +45,7 @@ struct WorkloadSpecStorage {
 struct WorkloadSpec {
     string name;
     string version;
-    uint64 ttl;                          // session time-to-live in seconds
+    uint64 ttl;                          // session TTL in seconds (0 ⇒ SessionRegistry default of 30 days)
     AccessMode baseImageMode;            // ANY | WHITELIST | BLACKLIST
     bytes32[] baseImageIds;              // list for whitelist/blacklist
     AttributeRequirement[] requirements; // constraints on platform attributes
@@ -84,6 +84,7 @@ function registerWorkload(
 ```
 
 - Registers workload with full policy specification
+- `spec.ttl` is consumed later by `SessionRegistry`; `ttl == 0` means "use `DEFAULT_CVM_TTL` (30 days)" (`src/SessionRegistry.sol:273-274`)
 - Computes owner fingerprint, verifies signature over `sha256(abi.encode(WORKLOAD_REGISTER_MSG, chainid, address(this), expireAt, spec))`
 - Registration allowed when: unpaused OR owner is whitelisted (uses `_checkRegistrationAllowed`, NOT `whenNotPaused`)
 - Populates `_baseImageSet` mapping for efficient `isBaseImageAllowed` lookups
@@ -139,16 +140,17 @@ Logic:
 
 | Error | Condition |
 |---|---|
-| `WorkloadAlreadyExists` | Duplicate registration |
-| `WorkloadNotFound` | ID doesn't exist |
-| `WorkloadNotActive` | Workload is revoked |
-| `InvalidSignature` | Signature verification failed |
-| `Unauthorized` | Signer != owner |
-| `SignatureExpired` | `block.timestamp > expireAt` |
-| `InvalidPcrOrder` | PCR specs not sorted ascending |
-| `PcrIndexOutOfRange` | PCR index > 23 |
-| `DuplicateRequirementKey` | Repeated key in requirements array |
-| `NotWhitelisted` | Owner fingerprint not whitelisted |
+| `WorkloadAlreadyExists(bytes32 workloadId)` | Duplicate registration |
+| `WorkloadNotFound(bytes32 workloadId)` | ID doesn't exist |
+| `WorkloadNotActive(bytes32 workloadId)` | Workload is revoked |
+| `InvalidSignature()` | Signature verification failed |
+| `Unauthorized()` | Signer != owner |
+| `SignatureExpired()` | `block.timestamp > expireAt` |
+| `InvalidPcrOrder()` | PCR specs not sorted ascending |
+| `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
+| `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
+| `DuplicateRequirementKey(bytes32 key)` | Repeated key in requirements array |
+| `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not whitelisted |
 
 ## Events
 
@@ -161,7 +163,7 @@ Logic:
 
 ## Validation Rules
 
-1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex` (< 24)
+1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24`
 2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateUniqueRequirementKeys`)
 3. **Signature expiry**: `block.timestamp <= expireAt`
 4. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.

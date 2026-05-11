@@ -247,7 +247,7 @@ All are `bytes32 constant = keccak256("...")`:
 | Name | String | Purpose |
 |---|---|---|
 | `KEY_DOMAIN` | `"KEY_RESOLVER_V1"` | Key fingerprint computation |
-| `SESSION_DOMAIN` | `"CVM_SESSION_V1"` | Session signature verification |
+| `SESSION_DOMAIN` | `"CVM_SESSION_V1"` | Session ID computation (`_computeSessionId` in `src/SessionRegistry.sol:687`) |
 | `DELEGATION_DOMAIN` | `"CVM_SESSION_KEY_DELEGATION"` | TPM→session key delegation |
 | `ROTATION_DOMAIN` | `"CVM_SESSION_KEY_ROTATION"` | Session key rotation |
 | `BASEIMAGE_DOMAIN` | `"CVM_BASEIMAGE_V1"` | Base image ID computation |
