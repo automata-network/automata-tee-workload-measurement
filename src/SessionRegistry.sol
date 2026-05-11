@@ -983,13 +983,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         // Extract actual RTMR3 (48 bytes) from quote body at offset 472
         Bytes48 memory actualRtmr3 = LibBytes.readBytes48(quoteBody, DCAP_RTMR3_OFFSET);
 
-        // Compute expected RTMR3 = sha384( bytes48(0) || sha384(UUID) )
-        Bytes48 memory uuidHash = Sha2Ext.sha384(uuidBytes);
+        // Expected RTMR3 = sha384( bytes48(0) || (bytes32(0) || UUID) ).
+        // The extend value is the 16-byte UUID left-padded with 32 zero
+        // bytes to fill the SHA-384 register width — no intermediate hash.
         Bytes48 memory expectedRtmr3 = Sha2Ext.sha384(
             abi.encodePacked(
-                new bytes(48), // 48 zero bytes
-                uuidHash.first,
-                uuidHash.second // 48-byte inner hash
+                new bytes(48), // previous RTMR3 (reset value: 48 zero bytes)
+                new bytes(32), // UUID zero-pad to 48 bytes
+                uuidBytes
             )
         );
 
@@ -997,9 +998,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
             revert TEEAKBindingFailed();
         }
 
-        // ── PCR15 Computation (unchanged) ────────────────────────────────────
-        bytes32 innerPcr = sha256(uuidBytes);
-        expectedPcr15 = sha256(abi.encodePacked(bytes32(0), innerPcr));
+        // ── PCR15 Computation ────────────────────────────────────────────────
+        // Expected PCR15 = sha256( bytes32(0) || (bytes16(0) || UUID) ).
+        // Same zero-pad convention in the SHA-256 bank.
+        expectedPcr15 = sha256(abi.encodePacked(bytes32(0), bytes16(0), uuidBytes));
 
         return expectedPcr15;
     }

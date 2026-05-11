@@ -352,7 +352,7 @@ Returns a `TeeVerificationResult` containing the validated report body and extra
 Verifies the Attestation Key (AK) and its binding to the TEE instance:
 
 - **Azure**: AK public key extracted from JSON collateral. Binding verified by checking that `reportData[0:32] == sha256(akCollateral)`.
-- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(zeros || sha384(UUID))`, where UUID is from `reportData[520:536]`. Also computes `expectedPcr15 = sha256(0x00 || sha256(UUID))`.
+- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. Also computes `expectedPcr15 = sha256(bytes32(0) || bytes16(0) || UUID)`. The 16-byte UUID is left-padded with zeros to fill each bank's register width (no intermediate hash).
 - **GCP (SNP)**: AK from X.509 chain. Binding via `report_id` at SNP report offset `0x140`. Computes `expectedPcr15 = sha256(0x00 || report_id)`.
 
 ### Step 4: TPM Quote Verification
