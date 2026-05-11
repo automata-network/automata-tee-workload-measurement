@@ -1,7 +1,7 @@
 # BaseImageRegistry -- Detailed Analysis
 
-**File**: `src/BaseImageRegistry.sol` (525 lines)
-**Interface**: `src/interfaces/IBaseImageRegistry.sol`
+**File**: `src/BaseImageRegistry.sol` (544 lines)
+**Interface**: `src/interfaces/registries/IBaseImageRegistry.sol`
 **Role**: Manages OS/platform measurement policies (PCR 0-19)
 
 ## Inheritance

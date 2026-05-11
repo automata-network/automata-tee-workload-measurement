@@ -1,6 +1,6 @@
 # KeyResolver -- Detailed Analysis
 
-**File**: `src/KeyResolver.sol` (102 lines)
+**File**: `src/KeyResolver.sol` (101 lines)
 **Interface**: `src/interfaces/registries/IKeyResolver.sol`
 **Role**: Global public key fingerprint directory
 
@@ -12,6 +12,8 @@ OwnableUpgradeable
 UUPSUpgradeable
 ```
 
+Note: KeyResolver is NOT `PausableUpgradeable` -- no pause/unpause functionality.
+
 ## Storage
 
 | Variable | Type | Purpose |
@@ -22,10 +24,10 @@ UUPSUpgradeable
 ## Fingerprint Computation
 
 ```
-fingerprint = keccak256(KEY_DOMAIN || typeId || key)
+fingerprint = keccak256(abi.encode(KEY_DOMAIN, identity.typeId, identity.key))
 ```
 
-Where `KEY_DOMAIN = keccak256("KEY_RESOLVER_V1")`.
+Where `KEY_DOMAIN = keccak256("KEY_RESOLVER_V1")`. Computed by `LibKey.computeKeyFingerprint` (`src/lib/LibKey.sol:30`). Note: this is `abi.encode` (32-byte padded per field), not `abi.encodePacked` / concatenation — the two produce different hashes.
 
 Existence check: `_identities[fingerprint].typeId != ALGO_ID_NULL` (typeId 0 = not registered).
 
@@ -37,8 +39,9 @@ function registerIdentity(PublicIdentity calldata identity) external returns (by
 ```
 - Computes fingerprint from identity
 - Validates identity is not null (`typeId != ALGO_ID_NULL && key.length > 0`)
-- **Idempotent**: if already registered, returns fingerprint without error
+- **Idempotent**: if already registered, returns fingerprint without error (no event re-emission)
 - Stores `PublicIdentity` at fingerprint key
+- Emits `IdentityRegistered(fingerprint, typeId)` on new registrations only
 - Returns fingerprint
 
 ### `getIdentity`

@@ -1,7 +1,7 @@
 # WorkloadRegistry -- Detailed Analysis
 
-**File**: `src/WorkloadRegistry.sol` (305 lines)
-**Interface**: `src/interfaces/IWorkloadRegistry.sol`
+**File**: `src/WorkloadRegistry.sol` (312 lines)
+**Interface**: `src/interfaces/registries/IWorkloadRegistry.sol`
 **Role**: Manages application measurement policies (PCR 20-23)
 
 ## Inheritance

@@ -290,7 +290,8 @@ Key identity conversions and fingerprinting.
 
 ```solidity
 function computeKeyFingerprint(PublicIdentity memory identity) → bytes32
-// Returns: keccak256(KEY_DOMAIN || typeId || key)
+// Returns: keccak256(abi.encode(KEY_DOMAIN, identity.typeId, identity.key))
+//   (abi.encode pads each field to 32 bytes; this is NOT abi.encodePacked / concat.)
 
 function certPubkeyToPublicIdentity(CertPubkey memory certPubkey) → PublicIdentity
 // Maps TPM algorithm constants to our algo IDs:
