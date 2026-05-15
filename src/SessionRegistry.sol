@@ -940,8 +940,18 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         AttestationEvidence calldata evidence
     ) private view returns (bytes32 expectedPcr15) {
         if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureAkPubJson) {
-            // Azure binding: reportData[0:32] == sha256(akCollateral.data)
-            bytes memory reportData = teeVerifier.extractDcapReportData(teeResult.reportData);
+            // Azure binding: reportData[0:32] == sha256(akCollateral.data).
+            // Extraction is TEE-type-specific: TDX REPORT_DATA lives at a
+            // different offset than SNP REPORT_DATA. Dispatching on teeType
+            // here is what enables Azure-SNP CVMs to bind, not just Azure-TDX.
+            bytes memory reportData;
+            if (teeResult.teeType == TEEType.IntelTDX) {
+                reportData = teeVerifier.extractDcapReportData(teeResult.reportData);
+            } else if (teeResult.teeType == TEEType.AmdSevSnp) {
+                reportData = teeVerifier.extractSnpReportData(teeResult.reportData);
+            } else {
+                revert TEEAKBindingFailed();
+            }
 
             bytes32 reportDataHash;
             bytes32 reportDataPadding;

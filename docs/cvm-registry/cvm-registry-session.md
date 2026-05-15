@@ -147,7 +147,10 @@ Actions:
   - Revert AKCollateralVerificationFailed if !result.valid
   - Platform-specific binding:
     Azure (AzureAkPubJson):
-      - Extract reportData via teeVerifier.extractDcapReportData(teeResult.reportData)
+      - Dispatch on teeResult.teeType:
+          IntelTDX  -> reportData = teeVerifier.extractDcapReportData(teeResult.reportData)
+          AmdSevSnp -> reportData = teeVerifier.extractSnpReportData(teeResult.reportData)
+          other     -> revert TEEAKBindingFailed
       - Verify reportData[0:32] == akResult.bindingHash AND reportData[32:64] == bytes32(0)
       - Return expectedPcr15 = bytes32(0)
     GCP (GcpCertChain) + TDX:
