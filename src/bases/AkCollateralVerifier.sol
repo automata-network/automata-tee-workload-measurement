@@ -85,16 +85,33 @@ abstract contract AkCollateralVerifier is TpmBase {
     /// @return certPubkey The extracted RSA public key as CertPubkey
     function _parseAzureJwkAkPub(bytes memory jsonBytes) private pure returns (PublicIdentity memory) {
         // Convert bytes to string for parsing
-        string memory json = string(jsonBytes);
+        string memory fullJson = string(jsonBytes);
         bool ok = true;
 
-        // Find "kid":"HCLAkPub" to identify the correct key
-        uint256 kidPos = LibString.indexOf(json, '"kid":"HCLAkPub"');
+        // Locate the JWK object containing "kid":"HCLAkPub" and scope all field
+        // lookups to that object. JWKs do not nest objects in their parameter
+        // values, so the enclosing object runs from the nearest preceding `{`
+        // to the next `}` after the kid marker.
+        uint256 kidPos = LibString.indexOf(fullJson, '"kid":"HCLAkPub"');
         if (kidPos == type(uint256).max) ok = false;
 
-        // Extract "kty" field (must be "RSA")
-        uint256 ktyPos = LibString.indexOf(json, '"kty":"');
-        if (ktyPos == type(uint256).max) ok = false;
+        string memory json;
+        if (ok) {
+            uint256 objStart = LibString.lastIndexOf(fullJson, "{", kidPos);
+            uint256 objEnd = LibString.indexOf(fullJson, "}", kidPos);
+            if (objStart == type(uint256).max || objEnd == type(uint256).max) {
+                ok = false;
+            } else {
+                json = LibString.slice(fullJson, objStart, objEnd + 1);
+            }
+        }
+
+        // Extract "kty" field (must be "RSA") within the scoped JWK object
+        uint256 ktyPos;
+        if (ok) {
+            ktyPos = LibString.indexOf(json, '"kty":"');
+            if (ktyPos == type(uint256).max) ok = false;
+        }
 
         // Check if kty is "RSA" (position + 7 chars for "kty":" = start of value)
         if (ok) {
@@ -103,8 +120,11 @@ abstract contract AkCollateralVerifier is TpmBase {
         }
 
         // Extract "n" field (RSA modulus, base64url encoded)
-        uint256 nPos = LibString.indexOf(json, '"n":"');
-        if (nPos == type(uint256).max) ok = false;
+        uint256 nPos;
+        if (ok) {
+            nPos = LibString.indexOf(json, '"n":"');
+            if (nPos == type(uint256).max) ok = false;
+        }
 
         // Find the closing quote for "n" value
         uint256 nStart;
@@ -124,8 +144,11 @@ abstract contract AkCollateralVerifier is TpmBase {
         }
 
         // Extract "e" field (RSA exponent, base64url encoded)
-        uint256 ePos = LibString.indexOf(json, '"e":"');
-        if (ePos == type(uint256).max) ok = false;
+        uint256 ePos;
+        if (ok) {
+            ePos = LibString.indexOf(json, '"e":"');
+            if (ePos == type(uint256).max) ok = false;
+        }
 
         uint256 eStart;
         uint256 eEnd;

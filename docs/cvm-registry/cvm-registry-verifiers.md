@@ -160,11 +160,13 @@ function verify(
 
 ```solidity
 // Required TPMA_OBJECT attribute bits
-uint32 constant TPMA_OBJECT_REQUIRED_SET = 0x40032;
-// fixedTPM (0x2) | fixedParent (0x10) | sensitiveDataOrigin (0x20) | sign (0x40000)
+uint32 constant TPMA_OBJECT_REQUIRED_SET = 0x40072;
+// fixedTPM (0x2) | fixedParent (0x10) | sensitiveDataOrigin (0x20) | userWithAuth (0x40) | sign (0x40000)
 
 // Forbidden TPMA_OBJECT bits (must be clear)
-uint32 constant TPMA_OBJECT_REQUIRED_CLEAR = 0xFFFBFB09;
+// Allowed bits (may be 0 or 1): {1,4,5,6,10,18} = 0x00040472
+// stClear (bit 2) and adminWithPolicy (bit 7) are explicitly forbidden.
+uint32 constant TPMA_OBJECT_REQUIRED_CLEAR = 0xFFFBFB8D;
 ```
 
 ### Functions
