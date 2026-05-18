@@ -743,9 +743,17 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         }
     }
 
-    /// @dev Checks if a session exists and is active
+    /// @dev Checks if a session exists and is active.
+    /// @dev Cascades through the underlying workload + baseimage revocation flags: revoking either
+    ///      flips every dependent session inactive on the next read (fail-closed). Without this,
+    ///      live sessions on a compromised baseimage/workload would keep producing valid signatures
+    ///      until their own expiresAt or explicit per-session revoke.
     function _isSessionActive(CVMSessionStorage storage sessionStorage) private view returns (bool) {
-        return sessionStorage.exists && !sessionStorage.isRevoked && block.timestamp <= sessionStorage.session.expiresAt;
+        if (!sessionStorage.exists || sessionStorage.isRevoked) return false;
+        if (block.timestamp > sessionStorage.session.expiresAt) return false;
+        if (workloadRegistry.isWorkloadRevoked(sessionStorage.session.workloadId)) return false;
+        if (baseImageRegistry.isBaseImageRevoked(sessionStorage.session.baseImageId)) return false;
+        return true;
     }
 
     /// @dev Looks up and validates policy components (workload, base image, variant)

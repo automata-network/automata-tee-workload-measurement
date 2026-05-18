@@ -316,7 +316,7 @@ Rotation steps:
 | `getSession(sessionId)` | `CVMSession` | Reverts if not found |
 | `getSessionId(sessionFingerprint)` | `bytes32` | Lookup by session key fingerprint |
 | `getSessionOwner(sessionId)` | `bytes32` | Owner fingerprint |
-| `isSessionActive(sessionId)` | `bool` | exists && !revoked && block.timestamp <= expiresAt |
+| `isSessionActive(sessionId)` | `bool` | exists && !revoked && block.timestamp <= expiresAt && !workloadRegistry.isWorkloadRevoked(workloadId) && !baseImageRegistry.isBaseImageRevoked(baseImageId). **Cascades**: revoking the underlying workload or base image flips every dependent session inactive on the next read. |
 | `isSessionExpired(sessionId)` | `bool` | `block.timestamp > expiresAt` (false if not exists) |
 | `getNonce(ownerFingerprint)` | `uint256` | Current nonce for replay protection |
 
@@ -330,7 +330,7 @@ function verifySessionSignature(
 ) external view returns (bool valid)
 ```
 
-- Checks session is active
+- Checks session is active (cascades through workload/base-image revocation — see `isSessionActive` above)
 - Verifies sessionKey fingerprint matches stored `sessionKeyFingerprint`
 - Calls `signatureVerifier.verify(sessionKey, message, signature)` directly
 - NOTE: Does NOT wrap message with SESSION_DOMAIN. Message is passed as-is to verifier.
@@ -415,7 +415,7 @@ This binds the session key to a specific base image, workload, and session.
 - `_requireNotExpired(expireAt)` -- reverts `SignatureExpired` if expired
 - `_requireFingerprint(identity, expected)` -- reverts `Unauthorized` if mismatch
 - `_requireSignature(signer, message, signature)` -- reverts `InvalidSignature` if invalid
-- `_isSessionActive(storage)` -- exists && !revoked && block.timestamp <= expiresAt
+- `_isSessionActive(storage)` -- exists && !revoked && block.timestamp <= expiresAt && !workloadRegistry.isWorkloadRevoked(session.workloadId) && !baseImageRegistry.isBaseImageRevoked(session.baseImageId) (fail-closed cascade)
 - `_createSession(params)` -- stores session + updates fingerprint->ID mapping
 - `_computeSessionId(tpmSignatureHash, teeReportBytesHash)` -- domain-separated keccak256
 - `_mergePcrSpecs(invariants, overrides)` -- bitmask merge

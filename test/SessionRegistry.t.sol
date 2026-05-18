@@ -41,7 +41,8 @@ import {
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
     WORKLOAD_DOMAIN,
-    ALGO_ID_ES256K
+    ALGO_ID_ES256K,
+    KEY_DOMAIN
 } from "../src/types/Constants.sol";
 
 contract SessionRegistryTest is Test {
@@ -403,6 +404,93 @@ contract SessionRegistryTest is Test {
     function sessionCalldata() private view returns (bytes memory) {
         string memory hexString = vm.readFile("test/fixtures/session_register.hex");
         return vm.parseBytes(hexString);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────
+    // Revoke-cascade tests
+    //
+    // _isSessionActive must fail-closed when the underlying workload or baseimage is
+    // revoked, even if the session row itself is still alive (exists, !isRevoked,
+    // !expired). Without this, a compromised baseimage's live sessions would keep
+    // producing valid signatures until expiresAt.
+    //
+    // To exercise the gate without re-capturing the registerSession fixture, these
+    // tests inject a synthetic session row via vm.store. CVMSessionStorage layout
+    // (slot 0 of struct): exists(byte0) + isRevoked(byte1) packed in slot +0; owner
+    // at +1; CVMSession at +2..+9; expiresAt is the high 8 bytes of slot +9.
+    // ─────────────────────────────────────────────────────────────────────────────────
+
+    function _seedActiveSession(bytes32 baseImageId, bytes32 workloadId, uint64 expiresAt)
+        internal
+        returns (bytes32 sessionId)
+    {
+        sessionId = keccak256(abi.encodePacked("cascade-test-session", baseImageId, workloadId));
+        uint256 base = uint256(keccak256(abi.encode(sessionId, uint256(0))));
+
+        // exists=1, isRevoked=0 (packed in slot+0)
+        vm.store(address(sessionRegistry), bytes32(base + 0), bytes32(uint256(1)));
+        // CVMSession.baseImageId at +5, CVMSession.workloadId at +6
+        vm.store(address(sessionRegistry), bytes32(base + 5), baseImageId);
+        vm.store(address(sessionRegistry), bytes32(base + 6), workloadId);
+        // CVMSession.registeredAt | expiresAt packed at +9 (uint64+uint64)
+        uint256 packed = (uint256(expiresAt) << 64) | uint64(block.timestamp);
+        vm.store(address(sessionRegistry), bytes32(base + 9), bytes32(packed));
+    }
+
+    function testIsSessionActiveCascade_BaseImageRevoke() public {
+        bytes32 baseImageId = _registerBaseImage();
+        bytes32 workloadId = _registerWorkload(baseImageId);
+        bytes32 sessionId = _seedActiveSession(baseImageId, workloadId, uint64(block.timestamp + 1 days));
+
+        assertTrue(sessionRegistry.isSessionActive(sessionId), "baseline: session active");
+
+        // signatureVerifier.verify is mocked to true in setUp, so an empty sig passes
+        baseImageRegistry.deactivateBaseImage(baseImageId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
+
+        assertFalse(
+            sessionRegistry.isSessionActive(sessionId),
+            "cascade: session must report inactive after baseimage revoke"
+        );
+    }
+
+    function testIsSessionActiveCascade_WorkloadRevoke() public {
+        bytes32 baseImageId = _registerBaseImage();
+        bytes32 workloadId = _registerWorkload(baseImageId);
+        bytes32 sessionId = _seedActiveSession(baseImageId, workloadId, uint64(block.timestamp + 1 days));
+
+        assertTrue(sessionRegistry.isSessionActive(sessionId), "baseline: session active");
+
+        workloadRegistry.deactivateWorkload(workloadId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
+
+        assertFalse(
+            sessionRegistry.isSessionActive(sessionId),
+            "cascade: session must report inactive after workload revoke"
+        );
+    }
+
+    function testVerifySessionSignatureCascade_BaseImageRevoke() public {
+        bytes32 baseImageId = _registerBaseImage();
+        bytes32 workloadId = _registerWorkload(baseImageId);
+        bytes32 sessionId = _seedActiveSession(baseImageId, workloadId, uint64(block.timestamp + 1 days));
+
+        // Seed sessionKeyFingerprint so the fingerprint match check passes pre-revoke.
+        PublicIdentity memory sessionKey = ownerIdentity;
+        bytes32 sessionKeyFingerprint = keccak256(abi.encode(KEY_DOMAIN, sessionKey.typeId, sessionKey.key));
+        uint256 base = uint256(keccak256(abi.encode(sessionId, uint256(0))));
+        // CVMSession.sessionKeyFingerprint at +4
+        vm.store(address(sessionRegistry), bytes32(base + 4), sessionKeyFingerprint);
+
+        assertTrue(
+            sessionRegistry.verifySessionSignature(sessionId, sessionKey, bytes32(uint256(0xdeadbeef)), ""),
+            "baseline: signature valid"
+        );
+
+        baseImageRegistry.deactivateBaseImage(baseImageId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
+
+        assertFalse(
+            sessionRegistry.verifySessionSignature(sessionId, sessionKey, bytes32(uint256(0xdeadbeef)), ""),
+            "cascade: verifySessionSignature must fail after baseimage revoke"
+        );
     }
 
     function _deployP256() private {
