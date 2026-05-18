@@ -58,12 +58,13 @@ src/
 ├── WorkloadRegistry.sol           (305 lines)
 ├── SessionRegistry.sol            (1,312 lines)
 ├── KeyResolver.sol                (102 lines)
+├── MaaKeyRegistry.sol             (per-region MAA signing keys for AzureMaaJwt)
 ├── TeeVerifier.sol                (298 lines)
 ├── SignatureVerifier.sol          (172 lines)
 ├── bases/
 │   ├── TpmBase.sol                (30 lines)
 │   ├── TpmVerifier.sol            (197 lines)
-│   └── AkCollateralVerifier.sol   (191 lines)
+│   └── AkCollateralVerifier.sol   (MAA JWT + GCP cert chain verification)
 ├── interfaces/
 │   ├── ISignatureVerifier.sol
 │   ├── ITeeVerifier.sol
@@ -71,7 +72,8 @@ src/
 │   │   ├── IBaseImageRegistry.sol
 │   │   ├── IWorkloadRegistry.sol
 │   │   ├── ISessionRegistry.sol
-│   │   └── IKeyResolver.sol
+│   │   ├── IKeyResolver.sol
+│   │   └── IMaaKeyRegistry.sol
 │   └── external/
 │       ├── IDcapAttestation.sol   (Intel DCAP)
 │       ├── ISnpAttestation.sol    (AMD SNP)
@@ -98,7 +100,8 @@ src/
 ```
 SessionRegistry
   ├── inherits: TpmVerifier, AkCollateralVerifier, OwnableUpgradeable, UUPSUpgradeable
-  ├── immutable refs: ITeeVerifier, ISignatureVerifier, IBaseImageRegistry, IWorkloadRegistry
+  ├── immutable refs: ITeeVerifier, ISignatureVerifier, IBaseImageRegistry,
+  │                   IWorkloadRegistry, IMaaKeyRegistry
   └── uses: LibKey, LibBytes, Sha2Ext, BytesUtils
 
 BaseImageRegistry
@@ -124,12 +127,20 @@ KeyResolver
   ├── inherits: IKeyResolver, OwnableUpgradeable, UUPSUpgradeable
   └── uses: LibKey
 
+MaaKeyRegistry
+  ├── inherits: IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable
+  ├── immutable ref: ISignatureVerifier
+  └── stores: per-region Microsoft Azure Attestation signing keys (RS256 / RSA-2048)
+              consumed by AkCollateralVerifier when verifying AzureMaaJwt collateral
+
 TpmVerifier (abstract)
   ├── inherits: TpmBase
   └── uses: LibKey
 
 AkCollateralVerifier (abstract)
   ├── inherits: TpmBase
+  ├── immutable ref: IMaaKeyRegistry
+  ├── virtual: _signatureVerifier() (overridden by SessionRegistry)
   └── uses: LibString, Base64 (Solady)
 
 TpmBase (abstract)
@@ -180,10 +191,12 @@ message = sha256(abi.encode(MSG_SEPARATOR, block.chainid, address(this), expireA
 
 | TEE | Cloud | AK Binding | PCR15 Binding |
 |---|---|---|---|
-| Intel TDX | Azure | `reportData[0:32] == sha256(akJsonBytes)` | N/A |
+| Intel TDX | Azure | MAA-signed JWT (RS256); `tdx_report_data` claim commits to `sha256(hclVarData)`; JWT signature verified against per-region MAA RSA-2048 key from MaaKeyRegistry | N/A |
+| AMD SEV-SNP | Azure | MAA-signed JWT (RS256); `x-ms-sevsnpvm-reportdata` claim commits to `sha256(hclVarData)`; same per-region MAA key signs both TDX and SNP paths | N/A |
 | Intel TDX | GCP | Certificate chain via `ITpmAttestation.verifyCertChain` | `sha256(bytes32(0) || bytes16(0) || UUID)`; RTMR3 = `sha384(bytes48(0) || bytes32(0) || UUID)` |
-| AMD SEV-SNP | Azure | `reportData[0:32] == sha256(akJsonBytes)` | N/A |
 | AMD SEV-SNP | GCP | Certificate chain | `sha256(bytes32(0) || report_id)` |
+
+Azure binding (both TDX and SNP) runs entirely inside `_verifyAzureAkCollateral` via the MAA JWT path. `_verifyTeeAkBinding` returns `expectedPcr15 = bytes32(0)` for Azure; no `REPORT_DATA` extraction is performed in `_verifyTeeAkBinding` for the Azure branch.
 
 ## Signature Algorithm Support
 

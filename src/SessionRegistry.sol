@@ -7,6 +7,7 @@ import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {IBaseImageRegistry} from "./interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "./interfaces/registries/IWorkloadRegistry.sol";
+import {IMaaKeyRegistry} from "./interfaces/registries/IMaaKeyRegistry.sol";
 import {ISessionRegistry, CVMSessionStorage} from "./interfaces/registries/ISessionRegistry.sol";
 import {TeeVerificationResult} from "./types/Evidence.sol";
 import {TpmVerifier, TpmQuoteVerificationResult, TpmCertifyVerificationResult, TpmBase} from "./bases/TpmVerifier.sol";
@@ -171,23 +172,32 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Initializes SessionRegistry with all dependency contracts
-    /// @param _teeVerifier TEE verifier for TEE attestation report verification
-    /// @param _tpmAttestation TPM attestation verifier from automata-tpm-attestation
-    /// @param _signatureVerifier Signature verifier for owner authentication
-    /// @param _baseImageRegistry Base image registry for platform profiles
-    /// @param _workloadRegistry Workload registry for workload policies
+    /// @param teeVerifier_ TEE verifier for TEE attestation report verification
+    /// @param tpmAttestation_ TPM attestation verifier from automata-tpm-attestation
+    /// @param signatureVerifier_ Signature verifier for owner auth + MAA JWT verification
+    /// @param baseImageRegistry_ Base image registry for platform profiles
+    /// @param workloadRegistry_ Workload registry for workload policies
+    /// @param maaKeyRegistry_ MAA signing key directory used by AkCollateralVerifier for AzureMaaJwt
     constructor(
-        ITeeVerifier _teeVerifier,
-        ITpmAttestation _tpmAttestation,
-        ISignatureVerifier _signatureVerifier,
-        IBaseImageRegistry _baseImageRegistry,
-        IWorkloadRegistry _workloadRegistry
-    ) TpmBase(_tpmAttestation) {
-        teeVerifier = _teeVerifier;
-        signatureVerifier = _signatureVerifier;
-        baseImageRegistry = _baseImageRegistry;
-        workloadRegistry = _workloadRegistry;
+        ITeeVerifier teeVerifier_,
+        ITpmAttestation tpmAttestation_,
+        ISignatureVerifier signatureVerifier_,
+        IBaseImageRegistry baseImageRegistry_,
+        IWorkloadRegistry workloadRegistry_,
+        IMaaKeyRegistry maaKeyRegistry_
+    ) TpmBase(tpmAttestation_) AkCollateralVerifier(maaKeyRegistry_) {
+        teeVerifier = teeVerifier_;
+        signatureVerifier = signatureVerifier_;
+        baseImageRegistry = baseImageRegistry_;
+        workloadRegistry = workloadRegistry_;
         _disableInitializers();
+    }
+
+    /// @dev AkCollateralVerifier requires a virtual getter for the ISignatureVerifier used to
+    ///      verify MAA JWT signatures (Azure path); we satisfy it by returning the same
+    ///      immutable used for owner authentication, keeping a single source of truth.
+    function _signatureVerifier() internal view override returns (ISignatureVerifier) {
+        return signatureVerifier;
     }
 
     /// @notice Initializes the contract with the initial owner
@@ -939,33 +949,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         AkCollateralVerificationResult memory akResult,
         AttestationEvidence calldata evidence
     ) private view returns (bytes32 expectedPcr15) {
-        if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureAkPubJson) {
-            // Azure binding: reportData[0:32] == sha256(akCollateral.data).
-            // Extraction is TEE-type-specific: TDX REPORT_DATA lives at a
-            // different offset than SNP REPORT_DATA. Dispatching on teeType
-            // here is what enables Azure-SNP CVMs to bind, not just Azure-TDX.
-            bytes memory reportData;
-            if (teeResult.teeType == TEEType.IntelTDX) {
-                reportData = teeVerifier.extractDcapReportData(teeResult.reportData);
-            } else if (teeResult.teeType == TEEType.AmdSevSnp) {
-                reportData = teeVerifier.extractSnpReportData(teeResult.reportData);
-            } else {
-                revert TEEAKBindingFailed();
-            }
-
-            bytes32 reportDataHash;
-            bytes32 reportDataPadding;
-            assembly ("memory-safe") {
-                reportDataHash := mload(add(reportData, 0x20))
-                reportDataPadding := mload(add(reportData, 0x40))
-            }
-
-            // first 32 bytes is hash, next 32 bytes should be zero padding
-            if (reportDataHash != akResult.bindingHash || reportDataPadding != bytes32(0)) {
-                revert TEEAKBindingFailed();
-            }
-
-            return bytes32(0); // No PCR15 binding for Azure
+        if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt) {
+            // Azure binding is anchored end-to-end inside verifyAkCollateral (§8.3.1, §14.9):
+            // the MAA-signed JWT covers `tdx_report_data` / `x-ms-sevsnpvm-reportdata` which
+            // commits to sha256(hclVarData), and verifyAkCollateral has already cross-checked
+            // sha256(hclVarData) against that claim. The on-chain teeReport is independently
+            // verified for hardware signature in Step 2; we do NOT re-check its REPORT_DATA
+            // against akResult.bindingHash here. No PCR15 binding for Azure.
+            return bytes32(0);
         } else if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.GcpCertChain) {
             // GCP binding: different logic based on TEE type
             if (teeResult.teeType == TEEType.IntelTDX) {

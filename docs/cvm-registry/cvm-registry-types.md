@@ -123,7 +123,9 @@ enum TpmReportType {
 }
 
 enum AkPubCollateralType {
-    AzureAkPubJson,  // Azure JWK JSON with AK public key
+    AzureMaaJwt,     // Azure: abi.encode((bytes jwt, bytes hclVarData))
+                     //   jwt: MAA-signed JWT (RS256) from /attest/TdxVm or /attest/SevSnpVm
+                     //   hclVarData: vTPM NV 0x01400001 JSON; contains HCLAkPub
     GcpCertChain     // GCP X.509 certificate chain
 }
 ```
@@ -183,7 +185,8 @@ struct PcrValue {
 ```solidity
 struct AkPubCollateral {
     AkPubCollateralType akPubCollateralType;
-    bytes data;   // Azure: raw JSON bytes; GCP: ABI-encoded bytes[] certs
+    bytes data;   // Azure: abi.encode((bytes jwt, bytes hclVarData));
+                  // GCP: ABI-encoded bytes[] certs
 }
 ```
 
@@ -232,7 +235,10 @@ struct AkCollateralVerificationResult {
     bool valid;
     PublicIdentity akPub;
     bytes32 akPubFingerprint;
-    bytes32 bindingHash;   // Azure: sha256(jsonBytes), GCP: bytes32(0) (binding via PCR15 instead)
+    bytes32 bindingHash;   // Azure: sha256(hclVarData) (asserted equal to MAA JWT's
+                           //   tdx_report_data / x-ms-sevsnpvm-reportdata claim prefix
+                           //   inside verifyAkCollateral; not re-checked downstream)
+                           // GCP: bytes32(0) (binding via PCR15 in SessionRegistry step 7)
 }
 ```
 
@@ -270,6 +276,8 @@ All are `bytes32 constant = keccak256("...")`. Note the `CVM_MSG_` prefix and `_
 | `SESSION_REGISTER_MSG` | `"CVM_MSG_SESSION_REGISTER_V1"` | registerSession |
 | `SESSION_REVOKE_MSG` | `"CVM_MSG_SESSION_REVOKE_V1"` | revokeSession |
 | `SESSION_ROTATE_MSG` | `"CVM_MSG_SESSION_ROTATE_V1"` | rotateSession |
+| `MAA_KEY_UPSERT_MSG` | `"CVM_MSG_MAA_KEY_UPSERT_V1"` | MaaKeyRegistry.upsertMaaSigningKey |
+| `MAA_KEY_REVOKE_MSG` | `"CVM_MSG_MAA_KEY_REVOKE_V1"` | MaaKeyRegistry.revokeMaaSigningKey |
 
 ### Algorithm Identifiers
 

@@ -41,8 +41,14 @@ struct ZkProof {
 
 /// @notice Attestation Key (AK) public key collateral format
 enum AkPubCollateralType {
-    /// @dev Azure: JSON-encoded AK public key from vTPM
-    AzureAkPubJson,
+    /// @dev Azure: abi.encode((bytes jwt, bytes hclVarData))
+    ///      jwt: Microsoft Azure Attestation-signed JWT (RS256) from /attest/TdxVm or
+    ///           /attest/SevSnpVm, signed by a per-region MAA RSA-2048 key registered in
+    ///           MaaKeyRegistry. JWT carries iss / x-ms-attestation-type /
+    ///           x-ms-compliance-status / tdx_report_data or x-ms-sevsnpvm-reportdata claims.
+    ///      hclVarData: JSON document from vTPM NV 0x01400001; contains HCLAkPub JWK.
+    ///      See on-chain-registry-design.md §8.3.1, §14.9.
+    AzureMaaJwt,
     /// @dev GCP: X.509 certificate chain from vTPM endorsement
     GcpCertChain
 }
@@ -109,11 +115,11 @@ struct TpmCertifyReport {
 
 /// @notice Attestation Key public key collateral for AK authentication
 struct AkPubCollateral {
-    /// @dev Format of the collateral data (Azure JSON or GCP cert chain)
+    /// @dev Format of the collateral data (Azure MAA JWT bundle or GCP cert chain)
     AkPubCollateralType akPubCollateralType;
     /// @dev Polymorphic data field:
-    ///      - AzureAkPubJson: JSON-encoded AK public key
-    ///      - GcpCertChain: X.509 certificate chain (DER-encoded)
+    ///      - AzureMaaJwt: abi.encode((bytes jwt, bytes hclVarData))
+    ///      - GcpCertChain: X.509 certificate chain (DER-encoded, abi.encoded bytes[])
     bytes data;
 }
 

@@ -146,13 +146,21 @@ Actions:
   - Call verifyAkCollateral(collateral) -> AkCollateralVerificationResult { valid, akPub, akPubFingerprint, bindingHash }
   - Revert AKCollateralVerificationFailed if !result.valid
   - Platform-specific binding:
-    Azure (AzureAkPubJson):
-      - Dispatch on teeResult.teeType:
-          IntelTDX  -> reportData = teeVerifier.extractDcapReportData(teeResult.reportData)
-          AmdSevSnp -> reportData = teeVerifier.extractSnpReportData(teeResult.reportData)
-          other     -> revert TEEAKBindingFailed
-      - Verify reportData[0:32] == akResult.bindingHash AND reportData[32:64] == bytes32(0)
-      - Return expectedPcr15 = bytes32(0)
+    Azure (AzureMaaJwt):
+      - All binding work is performed inside verifyAkCollateral (§8.3.1):
+        - abi.decode (bytes jwt, bytes hclVarData) from collateral.data
+        - Verify the MAA-signed RS256 JWT against the per-region signing key
+          looked up by JWT header `kid` in the MAA Signing Key Registry (§10.3)
+        - Assert iss, x-ms-attestation-type in {"tdxvm","sevsnpvm"}, and
+          x-ms-compliance-status == "azure-compliant-cvm"
+        - Hex-decode the first 32 bytes of tdx_report_data (TDX) or
+          x-ms-sevsnpvm-reportdata (SNP); next 32 bytes must be zero
+        - Assert sha256(hclVarData) equals those 32 bytes
+        - Parse HCLAkPub from hclVarData using the §14.3-scoped JWK parser
+      - akResult.bindingHash = sha256(hclVarData); on-chain teeReport
+        REPORT_DATA is NOT separately checked (MAA already attested to it)
+      - Return expectedPcr15 = bytes32(0); no TEE-type dispatch is required
+        for the Azure branch
     GCP (GcpCertChain) + TDX:
       - Extract UUID (16 bytes) from quoteBody at offset 520
       - Verify RTMR3 (at offset 472) == sha384(bytes48(0) || (bytes32(0) || UUID))

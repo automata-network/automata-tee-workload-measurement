@@ -12,7 +12,8 @@ src/interfaces/
 │   ├── IBaseImageRegistry.sol
 │   ├── IWorkloadRegistry.sol
 │   ├── ISessionRegistry.sol
-│   └── IKeyResolver.sol
+│   ├── IKeyResolver.sol
+│   └── IMaaKeyRegistry.sol
 └── external/
     ├── IDcapAttestation.sol
     ├── ISnpAttestation.sol
@@ -259,6 +260,58 @@ function getIdentity(bytes32 fingerprint) external view returns (PublicIdentity 
 function hasIdentity(bytes32 fingerprint) external view returns (bool);
 function computeFingerprint(PublicIdentity calldata identity) external pure returns (bytes32 fingerprint);
 ```
+
+---
+
+## IMaaKeyRegistry
+
+**File**: `src/interfaces/registries/IMaaKeyRegistry.sol`
+
+Admin-managed directory of Microsoft Azure Attestation signing keys consumed by `AkCollateralVerifier` when verifying `AzureMaaJwt` collateral. Distinct from `IKeyResolver` because the stored value shape (PKCS#1 RSA pubkey + issuer + validity + revocation) and lifecycle (rotation, expiry, admin revocation) differ from a `PublicIdentity` directory.
+
+### Types
+
+```solidity
+struct MaaSigningKey {
+    bytes pkcs1Pubkey;     // DER PKCS#1 RSAPublicKey, ~270 bytes for RSA-2048
+    bytes32 issuerHash;    // keccak256(bytes("https://<region>.attest.azure.net"))
+    uint64 notAfter;       // Unix seconds; from leaf cert NotAfter
+    bool revoked;
+}
+```
+
+### Events
+
+```solidity
+event MaaSigningKeyUpserted(bytes32 indexed kidHash, bytes32 issuerHash, uint64 notAfter);
+event MaaSigningKeyRevoked(bytes32 indexed kidHash);
+```
+
+### Function Signatures
+
+```solidity
+function upsertMaaSigningKey(
+    bytes32 kidHash,
+    bytes calldata pkcs1Pubkey,
+    bytes32 issuerHash,
+    uint64 notAfter,
+    uint64 expireAt,
+    PublicIdentity calldata ownerIdentity,
+    bytes calldata ownerSignature
+) external;
+
+function revokeMaaSigningKey(
+    bytes32 kidHash,
+    uint64 expireAt,
+    PublicIdentity calldata ownerIdentity,
+    bytes calldata ownerSignature
+) external;
+
+function getMaaSigningKey(bytes32 kidHash) external view returns (MaaSigningKey memory);
+function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
+```
+
+Owner-signed admin operations use `MAA_KEY_UPSERT_MSG` / `MAA_KEY_REVOKE_MSG` separators with chainid + address(this) for replay protection (same pattern as the other registries).
 
 ---
 

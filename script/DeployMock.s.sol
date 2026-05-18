@@ -10,6 +10,7 @@ import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
+import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {SessionRegistry,AttestationEvidence} from "../src/SessionRegistry.sol";
 
@@ -68,9 +69,11 @@ contract DeployMock is Script, DeploymentConfig {
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
+        address maaKeyRegistryAddr = readContractAddress("MaaKeyRegistry");
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
+        console.log("Using MaaKeyRegistry at:", maaKeyRegistryAddr);
 
         // 5. SessionRegistry with mock TEE/TPM but real signature verification
         d.sessionRegistry = new SessionRegistry(
@@ -78,7 +81,8 @@ contract DeployMock is Script, DeploymentConfig {
             ITpmAttestation(address(d.tpmAttestation)),
             ISignatureVerifier(signatureVerifierAddr),
             IBaseImageRegistry(baseImageRegistryAddr),
-            IWorkloadRegistry(workloadRegistryAddr)
+            IWorkloadRegistry(workloadRegistryAddr),
+            IMaaKeyRegistry(maaKeyRegistryAddr)
         );
         console.log("Mock SessionRegistry deployed at:", address(d.sessionRegistry));
     }

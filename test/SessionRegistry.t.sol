@@ -7,6 +7,7 @@ import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
 import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
@@ -53,6 +54,7 @@ contract SessionRegistryTest is Test {
     MockAutomataSnpAttestation public mockSnp;
     TpmAttestation public tpmAttestation;
     TeeVerifier public teeVerifier;
+    MaaKeyRegistry public maaKeyRegistry;
 
     address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
     address constant owner = address(0x1234);
@@ -91,9 +93,18 @@ contract SessionRegistryTest is Test {
         // Deploy TeeVerifier (wraps DCAP + SNP into single contract)
         teeVerifier = new TeeVerifier(mockDcap, mockSnp);
 
-        // Deploy SessionRegistry implementation (5 args, not 6)
-        SessionRegistry impl =
-            new SessionRegistry(teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry);
+        // Deploy MaaKeyRegistry behind a proxy (UUPS, owner-initialized).
+        // Required for SessionRegistry construction even when tests don't exercise the
+        // AzureMaaJwt path — the immutable reference is set in the constructor.
+        MaaKeyRegistry maaImpl = new MaaKeyRegistry(signatureVerifier);
+        ERC1967Proxy maaProxy =
+            new ERC1967Proxy(address(maaImpl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
+        maaKeyRegistry = MaaKeyRegistry(address(maaProxy));
+
+        // Deploy SessionRegistry implementation
+        SessionRegistry impl = new SessionRegistry(
+            teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry, maaKeyRegistry
+        );
 
         // Deploy behind ERC1967 proxy and call initialize
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeCall(SessionRegistry.initialize, (owner)));

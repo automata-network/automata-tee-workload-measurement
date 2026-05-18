@@ -238,19 +238,31 @@ function verifyAkCollateral(
 
 Dispatches based on `collateral.akPubCollateralType`:
 
-#### AzureAkPubJson
-Azure provides AK public key as a JWK JSON object:
-```json
-{"kid":"HCLAkPub","kty":"RSA","n":"<base64url>","e":"<base64url>"}
+#### AzureMaaJwt
+Azure delivers the AK public key inside an HCL `var_data` JWK document, anchored to the platform via a Microsoft Azure Attestation (MAA) signed JWT. Wire format is an ABI tuple:
+
+```
+abi.encode((bytes jwt, bytes hclVarData))
 ```
 
-Parsing steps:
-1. Locate `"n":"` field in JSON, extract base64url value → decode → RSA modulus
-2. Locate `"e":"` field → decode → RSA exponent
-3. DER-encode as PKCS#1 RSA public key: `SEQUENCE { INTEGER n, INTEGER e }`
-4. Construct `PublicIdentity(ALGO_ID_RS256, derEncodedKey)`
+- `jwt` is a Microsoft Azure Attestation-signed JSON Web Token (RS256 / RSA-2048 / SHA-256) issued for `/attest/TdxVm` (TDX) or `/attest/SevSnpVm` (SNP).
+- `hclVarData` is the JSON document from vTPM NV `0x01400001`, containing the `HCLAkPub` JWK.
 
-Binding: `sha256(jsonBytes)` returned as `bindingHash` field. SessionRegistry step 3 verifies `reportData[0:32] == bindingHash`.
+Verification steps:
+1. `abi.decode` `collateral.data` into `(bytes jwt, bytes hclVarData)`.
+2. Split `jwt` on `.` into header / claims / signature parts (all base64url).
+3. Base64url-decode the header; parse JSON; extract `kid` and `alg` (require `"RS256"`).
+4. Look up MAA signing key by `keccak256(bytes(kid))` in the MAA Signing Key Registry; require `!revoked` and `block.timestamp <= notAfter`.
+5. Verify the RS256 signature on `header || "." || claims` against the registered PKCS#1 RSA-2048 pubkey using `SignatureVerifier.verify`.
+6. Base64url-decode the claims; parse JSON; assert:
+   - `iss` matches `key.issuerHash`
+   - `x-ms-attestation-type` in `{"tdxvm", "sevsnpvm"}`
+   - `x-ms-compliance-status == "azure-compliant-cvm"`
+7. Extract the report-data claim (`tdx_report_data` for TDX, `x-ms-sevsnpvm-reportdata` for SNP); hex-decode first 32 bytes as `bindingHash`; assert next 32 bytes decode to zero.
+8. Assert `sha256(hclVarData) == bindingHash`.
+9. Parse `HCLAkPub` from `hclVarData` using the §14.3-scoped JWK parser, construct `PublicIdentity` with `typeId = ALGO_ID_RS256`.
+
+Binding: `sha256(hclVarData)` returned as `bindingHash` field. The on-chain `teeReport`'s `REPORT_DATA` is NOT separately verified against this hash — MAA's `tdx_report_data` / `x-ms-sevsnpvm-reportdata` claim is the on-chain binding to the TEE attestation.
 
 #### GcpCertChain
 GCP provides X.509 certificate chain:
@@ -265,7 +277,17 @@ Binding: `bindingHash = bytes32(0)`. AK is bound to TEE via PCR15 computation (v
 | Error | Condition |
 |---|---|
 | `UnsupportedAkCollateralType()` | Unknown collateral type |
-| `AzureJwkParsingFailed()` | JSON field extraction failed |
+| `AzureJwkParsingFailed()` | `HCLAkPub` JWK field extraction from `hclVarData` failed |
+| `MaaJwtMalformed()` | JWT does not split into three base64url parts, or header/claims fail base64url/JSON decode |
+| `MaaJwtAlgUnsupported()` | JWT header `alg` is not `"RS256"` |
+| `MaaJwtHeaderClaimMissing()` | JWT header is missing `kid` or `alg` |
+| `MaaJwtClaimMissing()` | JWT claims is missing a required field |
+| `MaaKidNotRegistered()` | `kidHash` lookup in MAA Signing Key Registry returned an empty / revoked / expired key |
+| `MaaJwtIssuerMismatch()` | `iss` claim hash does not equal `key.issuerHash` |
+| `MaaJwtComplianceFailed()` | `x-ms-compliance-status` ≠ `"azure-compliant-cvm"`, or `x-ms-attestation-type` ∉ `{"tdxvm","sevsnpvm"}` |
+| `MaaJwtReportDataMalformed()` | report_data claim has wrong length, non-hex chars, or non-zero padding |
+| `MaaJwtSignatureInvalid()` | `signatureVerifier.verify` rejected the RS256 signature over `header || "." || claims` |
+| `MaaJwtBindingMismatch()` | `sha256(hclVarData)` did not equal the report-data claim prefix |
 
 ---
 
