@@ -65,7 +65,7 @@ contract AkCollateralVerifierMaaTest is Test {
 
         vm.startPrank(owner);
         signatureVerifier = new SignatureVerifier(address(0xdead));
-        MaaKeyRegistry impl = new MaaKeyRegistry(signatureVerifier);
+        MaaKeyRegistry impl = new MaaKeyRegistry();
         ERC1967Proxy proxy =
             new ERC1967Proxy(address(impl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
         registry = MaaKeyRegistry(address(proxy));
@@ -75,6 +75,8 @@ contract AkCollateralVerifierMaaTest is Test {
         harness = new AkCollateralVerifierHarness(registry, signatureVerifier, ITpmAttestation(address(0xdead)));
 
         // Default: signatureVerifier.verify always returns true. Individual tests override.
+        // (This signatureVerifier is the AkCollateralVerifier's JWT-verification dependency;
+        // MaaKeyRegistry no longer consults it now that admin auth is onlyOwner.)
         vm.mockCall(
             address(signatureVerifier), abi.encodeWithSelector(signatureVerifier.verify.selector), abi.encode(true)
         );
@@ -85,10 +87,7 @@ contract AkCollateralVerifierMaaTest is Test {
             TEST_KID_HASH,
             TEST_PKCS1_PUBKEY,
             TEST_ISSUER_HASH,
-            uint64(block.timestamp + 365 days),
-            uint64(block.timestamp + 1 hours),
-            ownerIdentity,
-            hex"00"
+            uint64(block.timestamp + 365 days)
         );
     }
 
@@ -177,7 +176,7 @@ contract AkCollateralVerifierMaaTest is Test {
 
     function test_revert_when_kid_revoked() public {
         vm.prank(owner);
-        registry.revokeMaaSigningKey(TEST_KID_HASH, uint64(block.timestamp + 1 hours), ownerIdentity, hex"00");
+        registry.revokeMaaSigningKey(TEST_KID_HASH);
 
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);

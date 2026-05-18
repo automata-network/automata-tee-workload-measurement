@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {PublicIdentity} from "./types/Common.sol";
-import {MAA_KEY_UPSERT_MSG, MAA_KEY_REVOKE_MSG} from "./types/Constants.sol";
-import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {IMaaKeyRegistry, MaaSigningKey} from "./interfaces/registries/IMaaKeyRegistry.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -11,18 +8,14 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 /// @title MaaKeyRegistry
 /// @notice Admin-managed directory of Microsoft Azure Attestation signing keys for AzureMaaJwt
 ///         AK collateral verification (§8.3.1, §10.3).
-/// @dev Owner-signed admin operations; per-operation message includes chainid + address(this)
-///      for replay protection, matching the BaseImageRegistry / WorkloadRegistry pattern.
+/// @dev Admin operations gated by `OwnableUpgradeable.onlyOwner`. The EVM tx nonce provides
+///      replay protection; no separate signed-message envelope is needed. The owner key is
+///      the root of trust for the entire Azure attestation path on this deployment, so
+///      treat it accordingly (multisig / time-locked rotation / etc.).
 contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable {
     // ============================================================================
     // Errors
     // ============================================================================
-
-    /// @notice Signature has expired
-    error SignatureExpired();
-
-    /// @notice Owner signature is invalid
-    error InvalidSignature();
 
     /// @notice Pkcs1Pubkey is empty
     error EmptyPubkey();
@@ -33,12 +26,8 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
     /// @notice notAfter is in the past at submission time
     error NotAfterInPast();
 
-    // ============================================================================
-    // Immutables
-    // ============================================================================
-
-    /// @notice Signature verifier used to authenticate owner-signed admin operations
-    ISignatureVerifier public immutable signatureVerifier;
+    /// @notice Attempted to revoke a kid that was never registered
+    error KidNotRegistered();
 
     // ============================================================================
     // Storage
@@ -55,8 +44,7 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
     // ============================================================================
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(ISignatureVerifier _signatureVerifier) {
-        signatureVerifier = _signatureVerifier;
+    constructor() {
         _disableInitializers();
     }
 
@@ -75,32 +63,11 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
         bytes32 kidHash,
         bytes calldata pkcs1Pubkey,
         bytes32 issuerHash,
-        uint64 notAfter,
-        uint64 expireAt,
-        PublicIdentity calldata ownerIdentity,
-        bytes calldata ownerSignature
-    ) external {
-        if (block.timestamp > expireAt) revert SignatureExpired();
+        uint64 notAfter
+    ) external onlyOwner {
         if (pkcs1Pubkey.length == 0) revert EmptyPubkey();
         if (issuerHash == bytes32(0)) revert EmptyIssuerHash();
-        if (notAfter <= block.timestamp) revert NotAfterInPast();
-
-        bytes32 message = sha256(
-            abi.encode(
-                MAA_KEY_UPSERT_MSG,
-                block.chainid,
-                address(this),
-                expireAt,
-                kidHash,
-                pkcs1Pubkey,
-                issuerHash,
-                notAfter
-            )
-        );
-
-        if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
-        }
+        if (notAfter < block.timestamp) revert NotAfterInPast();
 
         _keys[kidHash] = MaaSigningKey({
             pkcs1Pubkey: pkcs1Pubkey,
@@ -113,23 +80,9 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
     }
 
     /// @inheritdoc IMaaKeyRegistry
-    function revokeMaaSigningKey(
-        bytes32 kidHash,
-        uint64 expireAt,
-        PublicIdentity calldata ownerIdentity,
-        bytes calldata ownerSignature
-    ) external {
-        if (block.timestamp > expireAt) revert SignatureExpired();
-
-        bytes32 message =
-            sha256(abi.encode(MAA_KEY_REVOKE_MSG, block.chainid, address(this), expireAt, kidHash));
-
-        if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
-        }
-
+    function revokeMaaSigningKey(bytes32 kidHash) external onlyOwner {
+        if (_keys[kidHash].pkcs1Pubkey.length == 0) revert KidNotRegistered();
         _keys[kidHash].revoked = true;
-
         emit MaaSigningKeyRevoked(kidHash);
     }
 

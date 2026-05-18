@@ -276,8 +276,6 @@ All are `bytes32 constant = keccak256("...")`. Note the `CVM_MSG_` prefix and `_
 | `SESSION_REGISTER_MSG` | `"CVM_MSG_SESSION_REGISTER_V1"` | registerSession |
 | `SESSION_REVOKE_MSG` | `"CVM_MSG_SESSION_REVOKE_V1"` | revokeSession |
 | `SESSION_ROTATE_MSG` | `"CVM_MSG_SESSION_ROTATE_V1"` | rotateSession |
-| `MAA_KEY_UPSERT_MSG` | `"CVM_MSG_MAA_KEY_UPSERT_V1"` | MaaKeyRegistry.upsertMaaSigningKey |
-| `MAA_KEY_REVOKE_MSG` | `"CVM_MSG_MAA_KEY_REVOKE_V1"` | MaaKeyRegistry.revokeMaaSigningKey |
 
 ### Algorithm Identifiers
 

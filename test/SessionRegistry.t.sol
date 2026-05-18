@@ -96,7 +96,7 @@ contract SessionRegistryTest is Test {
         // Deploy MaaKeyRegistry behind a proxy (UUPS, owner-initialized).
         // Required for SessionRegistry construction even when tests don't exercise the
         // AzureMaaJwt path — the immutable reference is set in the constructor.
-        MaaKeyRegistry maaImpl = new MaaKeyRegistry(signatureVerifier);
+        MaaKeyRegistry maaImpl = new MaaKeyRegistry();
         ERC1967Proxy maaProxy =
             new ERC1967Proxy(address(maaImpl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
         maaKeyRegistry = MaaKeyRegistry(address(maaProxy));

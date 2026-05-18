@@ -41,10 +41,6 @@ bytes32 constant SESSION_REGISTER_MSG = keccak256("CVM_MSG_SESSION_REGISTER_V1")
 bytes32 constant SESSION_REVOKE_MSG = keccak256("CVM_MSG_SESSION_REVOKE_V1");
 /// @dev Message separator for session rotation message signatures
 bytes32 constant SESSION_ROTATE_MSG = keccak256("CVM_MSG_SESSION_ROTATE_V1");
-/// @dev Message separator for MAA signing key upsert (admin op on MaaKeyRegistry)
-bytes32 constant MAA_KEY_UPSERT_MSG = keccak256("CVM_MSG_MAA_KEY_UPSERT_V1");
-/// @dev Message separator for MAA signing key revocation (admin op on MaaKeyRegistry)
-bytes32 constant MAA_KEY_REVOKE_MSG = keccak256("CVM_MSG_MAA_KEY_REVOKE_V1");
 
 // ============================================================================
 // Algorithm Constants (JWT Standard Names - RFC 7518)

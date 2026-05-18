@@ -294,24 +294,16 @@ function upsertMaaSigningKey(
     bytes32 kidHash,
     bytes calldata pkcs1Pubkey,
     bytes32 issuerHash,
-    uint64 notAfter,
-    uint64 expireAt,
-    PublicIdentity calldata ownerIdentity,
-    bytes calldata ownerSignature
+    uint64 notAfter
 ) external;
 
-function revokeMaaSigningKey(
-    bytes32 kidHash,
-    uint64 expireAt,
-    PublicIdentity calldata ownerIdentity,
-    bytes calldata ownerSignature
-) external;
+function revokeMaaSigningKey(bytes32 kidHash) external;
 
 function getMaaSigningKey(bytes32 kidHash) external view returns (MaaSigningKey memory);
 function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
 ```
 
-Owner-signed admin operations use `MAA_KEY_UPSERT_MSG` / `MAA_KEY_REVOKE_MSG` separators with chainid + address(this) for replay protection (same pattern as the other registries).
+Admin authentication: `OwnableUpgradeable.onlyOwner` (EVM tx). No off-chain-signed envelope; the EVM tx nonce supplies replay protection. Validation: pubkey non-empty, issuerHash non-zero, `notAfter >= block.timestamp` (boundary inclusive); revoke reverts `KidNotRegistered` for never-registered kids. Upsert overwrites any existing record (resets `revoked = false`).
 
 ---
 

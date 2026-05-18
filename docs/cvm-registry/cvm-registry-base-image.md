@@ -125,11 +125,13 @@ function addPlatformVariants(
 ) external
 ```
 
-- Adds or upserts platform profiles and variants to existing base image
-- Profile upsert: replaces `invariants` and `attributes`, preserves existing `variantIds` (appends new ones)
-- Variant upsert: replaces `overridePcrs` and `attributes`
-- Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), expireAt, baseImageId, platformProfiles, measurementVariants))`
-- Emits: `BaseImageUpdated`, `PlatformProfileRegistered`, `MeasurementVariantRegistered`
+- Strictly append-only:
+  - New profile ids → stored with their `invariants` + `attributes`.
+  - Existing profile ids → caller MUST submit a `PlatformProfile` whose `invariants.length == 0` and `attributes.length == 0` (only `name` is consulted, to derive the id). Reverts `PlatformProfileAlreadyExists(profileId)` otherwise.
+  - New variant ids → stored with their `overridePcrs` + `attributes`.
+  - Existing variant ids → reverts `MeasurementVariantAlreadyExists(variantId)`.
+- Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), expireAt, baseImageId, platformProfiles, measurementVariants))`. The strict rejection on submitted-but-existing metadata ensures the signed authorization unambiguously matches the on-chain effect — no silent drops (§14.2).
+- Emits: `BaseImageUpdated`, `PlatformProfileRegistered` (only for newly-created profiles), `MeasurementVariantRegistered` (per new variant).
 
 ### View Functions
 
@@ -163,6 +165,7 @@ function addPlatformVariants(
 | `PlatformProfileNotFound(bytes32 platformProfileId)` | Profile ID doesn't exist |
 | `MeasurementVariantNotFound(bytes32 variantId)` | Variant ID doesn't exist |
 | `MeasurementVariantAlreadyExists(bytes32 variantId)` | `addPlatformVariants` is append-only; can't re-register a variantId |
+| `PlatformProfileAlreadyExists(bytes32 profileId)` | `addPlatformVariants` got an existing profileId with non-empty `invariants` or `attributes` |
 | `ArrayLengthMismatch()` | `platformProfiles.length != measurementVariants.length` |
 | `InvalidSignature()` | Signature verification failed |
 | `Unauthorized()` | Signer != owner |
