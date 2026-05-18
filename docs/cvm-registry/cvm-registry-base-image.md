@@ -125,12 +125,12 @@ function addPlatformVariants(
 ) external
 ```
 
-- Strictly append-only:
-  - New profile ids → stored with their `invariants` + `attributes`.
-  - Existing profile ids → caller MUST submit a `PlatformProfile` whose `invariants.length == 0` and `attributes.length == 0` (only `name` is consulted, to derive the id). Reverts `PlatformProfileAlreadyExists(profileId)` otherwise.
-  - New variant ids → stored with their `overridePcrs` + `attributes`.
+- Append-only for new metadata; lenient about resubmitted profile metadata:
+  - New profile ids → stored with their `invariants` + `attributes`; emits `PlatformProfileRegistered`.
+  - Existing profile ids → submitted `invariants` and `attributes` are silently dropped (§14.2). The stored profile metadata is immutable post-registration; only the variant set under that profile can grow. Callers can pass the full PlatformProfile struct from their config without having to clear the metadata fields first.
+  - New variant ids → stored with their `overridePcrs` + `attributes`; emits `MeasurementVariantRegistered`.
   - Existing variant ids → reverts `MeasurementVariantAlreadyExists(variantId)`.
-- Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), expireAt, baseImageId, platformProfiles, measurementVariants))`. The strict rejection on submitted-but-existing metadata ensures the signed authorization unambiguously matches the on-chain effect — no silent drops (§14.2).
+- Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), expireAt, baseImageId, platformProfiles, measurementVariants))`.
 - Emits: `BaseImageUpdated`, `PlatformProfileRegistered` (only for newly-created profiles), `MeasurementVariantRegistered` (per new variant).
 
 ### View Functions
@@ -164,8 +164,8 @@ function addPlatformVariants(
 | `BaseImageNotActive(bytes32 baseImageId)` | Image is revoked |
 | `PlatformProfileNotFound(bytes32 platformProfileId)` | Profile ID doesn't exist |
 | `MeasurementVariantNotFound(bytes32 variantId)` | Variant ID doesn't exist |
-| `MeasurementVariantAlreadyExists(bytes32 variantId)` | `addPlatformVariants` is append-only; can't re-register a variantId |
-| `PlatformProfileAlreadyExists(bytes32 profileId)` | `addPlatformVariants` got an existing profileId with non-empty `invariants` or `attributes` |
+| `MeasurementVariantAlreadyExists(bytes32 variantId)` | `addPlatformVariants` / `registerBaseImage` is append-only; can't re-register a variantId |
+| `PlatformProfileAlreadyExists(bytes32 profileId)` | `registerBaseImage` got two input profiles with the same `name` (would silently overwrite + duplicate the id in `platformProfileIds`). `addPlatformVariants` does NOT raise this — it tolerates resubmitted profile metadata silently. |
 | `ArrayLengthMismatch()` | `platformProfiles.length != measurementVariants.length` |
 | `InvalidSignature()` | Signature verification failed |
 | `Unauthorized()` | Signer != owner |

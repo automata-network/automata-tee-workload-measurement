@@ -4,6 +4,15 @@ pragma solidity ^0.8.27;
 import {BaseImageSpec, PlatformProfile, MeasurementVariant, PublicIdentity} from "../../types/Common.sol";
 
 /// @dev implements mapping (bytes32 baseImageId => BaseImageSpecStorage)
+/// @dev STORAGE LAYOUT IS LOAD-BEARING for off-chain consumers. The Rust client crate
+///      `crates/automata-tee-workload-measurement/src/base_image_registry.rs::get_hierarchy`
+///      reads `platformProfileIds` directly via `eth_getStorageAt` at the hard-coded
+///      sub-slot offset +5 from the per-entry storage base (the `BaseImageSpec spec`
+///      member occupies offsets 2..4 because it has three `string` fields). Reordering
+///      fields, inserting new fields, or changing the type of any existing field will
+///      silently break off-chain enumeration with no compile-time signal on either
+///      side. If you must change the layout, update both this struct AND the offset
+///      constant in the Rust crate in the same atomic change.
 struct BaseImageSpecStorage {
     bool exists;
     bool isRevoked;
@@ -13,6 +22,11 @@ struct BaseImageSpecStorage {
 }
 
 /// @dev implements mapping (bytes32 platformProfileId => PlatformProfileStorage)
+/// @dev STORAGE LAYOUT IS LOAD-BEARING — same caveat as BaseImageSpecStorage. The Rust
+///      `get_hierarchy` walker reads `variantIds` directly at sub-slot offset +4 from
+///      the per-entry storage base (the `PlatformProfile platformProfile` member
+///      occupies offsets 1..3: one `string name` plus two dynamic-array headers).
+///      Reorders silently break off-chain enumeration.
 struct PlatformProfileStorage {
     bool exists;
     PlatformProfile platformProfile;

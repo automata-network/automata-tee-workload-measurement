@@ -47,16 +47,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error PlatformProfileNotFound(bytes32 platformProfileId);
     error MeasurementVariantNotFound(bytes32 variantId);
     error MeasurementVariantAlreadyExists(bytes32 variantId);
-    /// @dev A registration step tried to write a platform profile id that is already
-    ///      registered. Two call sites:
-    ///        - `registerBaseImage`: the input `platformProfiles` array contained two
-    ///          entries with the same `name` (would have silently overwritten + duplicated
-    ///          the id in `platformProfileIds`).
-    ///        - `addPlatformVariants`: the caller targeted an existing profile id but
-    ///          submitted non-empty `invariants` or `attributes`; existing profile metadata
-    ///          is immutable post-registration. To grow the variant set of an existing
-    ///          profile, submit a PlatformProfile whose only non-empty field is `name`.
-    ///      See §14.2.
+    /// @dev `registerBaseImage` saw two entries in its `platformProfiles` input with the
+    ///      same `name` — without this guard the second would silently overwrite the first's
+    ///      metadata and push a duplicate id into `platformProfileIds`. `addPlatformVariants`
+    ///      does NOT raise this error; it tolerates re-submitted profile metadata silently
+    ///      (§14.2 documented resolution) so operator tooling that resubmits a full
+    ///      PlatformProfile struct alongside new variants keeps working.
     error PlatformProfileAlreadyExists(bytes32 profileId);
     error ArrayLengthMismatch();
     error InvalidSignature();
@@ -335,31 +331,28 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
 
         // Append-only: existing profile and variant ids cannot be overwritten.
-        // New profile ids are registered fresh with their metadata; existing profile ids
-        // accept new variants ONLY if the caller submits an otherwise-empty PlatformProfile
-        // (invariants.length == 0 && attributes.length == 0), reverting otherwise. This
-        // is stricter than the prior silent-drop behavior: it forces the operator's signed
-        // authorization to unambiguously match the on-chain effect — non-empty metadata on
-        // an existing profile is rejected up-front rather than discarded silently. Any
-        // attempt to re-register a variantId that already exists reverts the same way.
-        // To publish a different policy, owners must mint a fresh base image with a bumped
-        // name or version. See on-chain-registry-design.md §14.2.
+        // For an existing profile, only its variant set may grow — the stored
+        // invariants and attributes are kept as-is and any re-submitted profile
+        // metadata is ignored. New (variantId) values are stored fresh. Any
+        // attempt to re-register a variantId that already exists reverts.
+        // This prevents post-hoc relaxation of PCR specs / attributes on
+        // policies that downstream sessions already reference. To publish a
+        // stricter or looser policy, owners must mint a fresh base image with
+        // a bumped name or version. See on-chain-registry-design.md §14.2.
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
 
             // Compute platform profile ID (deterministic from base image + profile name)
             bytes32 platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name));
 
+            // Store profile only if new; never overwrite existing profile metadata.
+            // Submitted invariants/attributes on an already-registered profile are
+            // silently dropped — see PlatformProfileAlreadyExists doc.
             if (!_platformProfiles[platformProfileId].exists) {
-                // New profile: store metadata and link into the base image.
                 _platformProfiles[platformProfileId].exists = true;
                 _platformProfiles[platformProfileId].platformProfile = profile;
                 _baseImages[baseImageId].platformProfileIds.push(platformProfileId);
                 emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
-            } else if (profile.invariants.length != 0 || profile.attributes.length != 0) {
-                // Existing profile: caller MUST submit empty metadata. Any non-empty field
-                // here is rejected to avoid the "signed message lies about effect" footgun.
-                revert PlatformProfileAlreadyExists(platformProfileId);
             }
 
             // Append measurement variants for this profile
