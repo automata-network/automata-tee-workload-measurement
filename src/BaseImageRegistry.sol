@@ -47,10 +47,16 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error PlatformProfileNotFound(bytes32 platformProfileId);
     error MeasurementVariantNotFound(bytes32 variantId);
     error MeasurementVariantAlreadyExists(bytes32 variantId);
-    /// @dev addPlatformVariants got an existing profile id with non-empty `invariants` or
-    ///      `attributes`. Existing profile metadata is immutable post-registration; to grow
-    ///      the variant set of an existing profile, submit a PlatformProfile whose only
-    ///      non-empty field is `name`. See §14.2.
+    /// @dev A registration step tried to write a platform profile id that is already
+    ///      registered. Two call sites:
+    ///        - `registerBaseImage`: the input `platformProfiles` array contained two
+    ///          entries with the same `name` (would have silently overwritten + duplicated
+    ///          the id in `platformProfileIds`).
+    ///        - `addPlatformVariants`: the caller targeted an existing profile id but
+    ///          submitted non-empty `invariants` or `attributes`; existing profile metadata
+    ///          is immutable post-registration. To grow the variant set of an existing
+    ///          profile, submit a PlatformProfile whose only non-empty field is `name`.
+    ///      See §14.2.
     error PlatformProfileAlreadyExists(bytes32 profileId);
     error ArrayLengthMismatch();
     error InvalidSignature();
@@ -176,12 +182,21 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         _baseImages[baseImageId].owner = ownerFingerprint;
         _baseImages[baseImageId].spec = spec;
 
-        // Store platform profiles and variants
+        // Store platform profiles and variants. Within this single call, profile.name and
+        // variant.name must each be unique per profile — duplicates in the input arrays would
+        // otherwise silently overwrite an earlier entry's metadata and push a duplicate id
+        // into the parent's `platformProfileIds` / `variantIds` list (corrupt invariant).
+        // The exists checks reject those duplicates explicitly; the same guards exist on the
+        // `addPlatformVariants` path.
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
 
             // Compute platform profile ID
             bytes32 platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name));
+
+            if (_platformProfiles[platformProfileId].exists) {
+                revert PlatformProfileAlreadyExists(platformProfileId);
+            }
 
             // Store platform profile
             _platformProfiles[platformProfileId].exists = true;
@@ -197,6 +212,10 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
                 // Compute variant ID
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
+
+                if (_variants[variantId].exists) {
+                    revert MeasurementVariantAlreadyExists(variantId);
+                }
 
                 // Store variant
                 _variants[variantId].exists = true;
