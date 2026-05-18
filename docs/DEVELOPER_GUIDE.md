@@ -359,7 +359,7 @@ Verifies the Attestation Key (AK) and its binding to the TEE instance:
 
 Verifies the TPM Quote report:
 - Validates the AK signature over the TPM2B_ATTEST structure
-- Checks nonce binding: `extraData == keccak256(SESSION_NONCE_DOMAIN, ownerFingerprint, currentNonce)`
+- Checks nonce binding: `extraData == keccak256(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, currentNonce)`
 - Extracts measured PCR values from the quote
 
 This step ensures the PCR measurements are fresh and tied to this specific registration request.
@@ -381,7 +381,7 @@ sessionId = keccak256(abi.encode(SESSION_DOMAIN, keccak256(tpmSignature), keccak
 Verifies session key delegation — the TPM signing key authorizes the session key:
 ```
 delegationMessage = keccak256(abi.encode(
-    DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint
+    DELEGATION_DOMAIN, block.chainid, address(this), baseImageId, workloadId, sessionId, sessionKeyFingerprint
 ))
 ```
 
@@ -484,7 +484,7 @@ Replace TPM signing key and session key **without** full TEE re-attestation:
 3. Verify new TPM signing key certified by same AK
 4. Old TPM signing key signs rotation authorization:
    ```
-   keccak256(abi.encode(ROTATION_DOMAIN, oldSessionId, newTpmKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))
+   keccak256(abi.encode(ROTATION_DOMAIN, block.chainid, address(this), oldSessionId, newTpmKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))
    ```
 5. Compute new session ID from new TPM signature
 6. Verify new session key delegation

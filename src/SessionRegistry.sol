@@ -771,7 +771,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         bytes32 ownerFingerprint
     ) private returns (PcrValue[] memory pcrValues, bytes32 tpmSignatureHash) {
         uint256 nonce = _ownerNonces[ownerFingerprint];
-        bytes32 expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, ownerFingerprint, nonce));
+        bytes32 expectedExtraData = keccak256(
+            abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce)
+        );
 
         TpmQuoteVerificationResult memory quoteResult =
             verifyTpmQuote(tpmQuoteReport, akPub, abi.encodePacked(expectedExtraData));
@@ -826,8 +828,17 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     ) private view returns (bytes32 sessionKeyFingerprint) {
         sessionKeyFingerprint = LibKey.computeKeyFingerprint(sessionKey);
 
-        bytes32 delegationMessage =
-            keccak256(abi.encode(DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint));
+        bytes32 delegationMessage = keccak256(
+            abi.encode(
+                DELEGATION_DOMAIN,
+                block.chainid,
+                address(this),
+                baseImageId,
+                workloadId,
+                sessionId,
+                sessionKeyFingerprint
+            )
+        );
 
         if (!signatureVerifier.verify(certifiedKey, delegationMessage, sessionKeySignature)) {
             revert SessionKeyDelegationFailed();
@@ -853,7 +864,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     ) private view {
         bytes32 rotationMessage = keccak256(
             abi.encode(
-                ROTATION_DOMAIN, oldSessionId, certifiedKeyFingerprint, sessionKeyFingerprint, teeReportBytesHash
+                ROTATION_DOMAIN,
+                block.chainid,
+                address(this),
+                oldSessionId,
+                certifiedKeyFingerprint,
+                sessionKeyFingerprint,
+                teeReportBytesHash
             )
         );
 

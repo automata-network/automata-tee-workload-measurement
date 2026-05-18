@@ -177,7 +177,7 @@ Output: expectedPcr15
 Input: evidence.tpmQuoteReport, akPub, ownerFingerprint
 Actions:
   - Compute nonce = _ownerNonces[ownerFingerprint]
-  - Compute expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, ownerFingerprint, nonce))
+  - Compute expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce))
   - Call verifyTpmQuote(tpmQuoteReport, akPub, abi.encodePacked(expectedExtraData))
   - Revert TPMQuoteVerificationFailed if !result.valid
   - INCREMENT NONCE immediately (replay protection)
@@ -202,7 +202,7 @@ Actions:
   - teeReportBytesHash = teeVerifier.getTeeReportHash(evidence.teeReport)
   - sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
   - Revert SessionAlreadyExists if session exists
-  - Delegation message = keccak256(abi.encode(DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint))
+  - Delegation message = keccak256(abi.encode(DELEGATION_DOMAIN, block.chainid, address(this), baseImageId, workloadId, sessionId, sessionKeyFingerprint))
   - Verify: signatureVerifier.verify(certifiedKey, delegationMessage, sessionKeySignature)
   - Revert SessionKeyDelegationFailed if invalid
 Output: sessionId, sessionKeyFingerprint
@@ -301,7 +301,7 @@ Rotation steps:
 1. Load old session context, verify old TPM signing key fingerprint, AK fingerprint, owner fingerprint match
 2. Run TPM quote verification with nonce (step 4)
 3. Run TPM certify verification (step 5)
-4. Verify rotation authorization: old TPM signing key signs `keccak256(abi.encode(ROTATION_DOMAIN, oldSessionId, newTpmSigningKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))`
+4. Verify rotation authorization: old TPM signing key signs `keccak256(abi.encode(ROTATION_DOMAIN, block.chainid, address(this), oldSessionId, newTpmSigningKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))`
 5. Compute new session ID from tpmSignatureHash + teeReportBytesHash
 6. Verify session key delegation (step 6)
 7. Look up policy and evaluate PCR + attributes (steps 7-8), with expectedPcr15=0 (no TEE re-attestation)
@@ -374,7 +374,7 @@ function verifySessionSignature(
 ### Nonce Binding & Increment Timing
 The TPM quote `extraData` is bound to the owner's nonce. The nonce is incremented **immediately after** successful TPM quote verification (step 4), not at session creation (step 9). This means if steps 5-9 fail, the nonce is still consumed.
 ```
-expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, ownerFingerprint, nonce))
+expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce))
 // passed to verifyTpmQuote as: abi.encodePacked(expectedExtraData)
 ```
 
@@ -397,7 +397,7 @@ Public keys (AK, TPM signing key, session key) are NEVER stored on-chain. Only t
 
 ### Session Key Delegation Message
 ```
-delegationMessage = keccak256(abi.encode(DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint))
+delegationMessage = keccak256(abi.encode(DELEGATION_DOMAIN, block.chainid, address(this), baseImageId, workloadId, sessionId, sessionKeyFingerprint))
 ```
 This binds the session key to a specific base image, workload, and session.
 
