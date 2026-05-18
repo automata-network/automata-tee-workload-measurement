@@ -275,8 +275,28 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         // STEP 9: Owner Signature Verification + Session Creation
         // ─────────────────────────────────────────────────────────────────────────────────
 
-        // Verify owner signature over session registration message
-        bytes32 message = sha256(abi.encode(SESSION_REGISTER_MSG, block.chainid, address(this), expireAt, sessionId));
+        // Verify owner signature over the full session-registration tuple. The owner sig
+        // explicitly authorizes (sessionId, workloadId, baseImageId, platformProfileId,
+        // variantId, sessionKeyFingerprint) — not just an opaque sessionId. Without those
+        // fields in the digest, a compromised in-CVM agent could ask the TPM to sign a
+        // delegation for a different (W, B) tuple and submit on behalf of the operator
+        // while the operator's wallet thought it was authorizing the legitimate workload.
+        // sessionKeyFingerprint is also covered by the delegation signature (defense in
+        // depth).
+        bytes32 message = sha256(
+            abi.encode(
+                SESSION_REGISTER_MSG,
+                block.chainid,
+                address(this),
+                expireAt,
+                sessionId,
+                workloadId,
+                baseImageId,
+                platformProfileId,
+                variantId,
+                sessionKeyFingerprint
+            )
+        );
         _requireSignature(ownerIdentity, message, ownerSignature);
 
         // Create session with TTL handling (default: 30 days)

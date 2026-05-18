@@ -242,7 +242,7 @@ Output: All requirements satisfied (or revert)
 ```
 Input: ownerIdentity, ownerSignature, expireAt, sessionId
 Actions:
-  - message = sha256(abi.encode(SESSION_REGISTER_MSG, block.chainid, address(this), expireAt, sessionId))
+  - message = sha256(abi.encode(SESSION_REGISTER_MSG, block.chainid, address(this), expireAt, sessionId, workloadId, baseImageId, platformProfileId, variantId, sessionKeyFingerprint))
   - Verify owner signature over message (revert InvalidSignature)
   - Compute expiresAt:
     - If workloadSpec.ttl == 0: block.timestamp + DEFAULT_CVM_TTL (30 days)

@@ -405,7 +405,10 @@ Evaluates application measurement policies:
 
 Verifies the owner's authorization:
 ```
-message = sha256(abi.encode(SESSION_REGISTER_MSG, chainId, address(this), expireAt, sessionId))
+message = sha256(abi.encode(
+    SESSION_REGISTER_MSG, chainId, address(this), expireAt, sessionId,
+    workloadId, baseImageId, platformProfileId, variantId, sessionKeyFingerprint
+))
 ```
 
 - Signature verified via `SignatureVerifier` against `ownerIdentity`
