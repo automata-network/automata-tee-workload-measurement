@@ -1190,15 +1190,25 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     /// @dev Evaluates a single PCR spec against a measured PCR value
     /// @param spec PCR specification
     /// @param measured Measured PCR value
-    function _evaluateSinglePcr(PcrSpec memory spec, PcrValue memory measured) private pure {
+    function _evaluateSinglePcr(PcrSpec memory spec, PcrValue memory measured) internal pure {
         if (spec.verifyType == PcrVerifyType.STATIC) {
             // STATIC: exact value match
             if (measured.value != spec.matchData[0]) {
                 revert PCRVerificationFailed();
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSET) {
-            // DYNAMIC_SUBSET: eventLogHashes ⊆ matchData
+            // DYNAMIC_SUBSET: eventLogHashes ⊆ matchData, and eventLogHashes MUST be non-empty.
+            //
+            // An empty event log would trivially satisfy "subset of anything" under set theory,
+            // but it bypasses the policy entirely: the TPM lib only cross-checks the PCR value
+            // against the event hash chain when events are present, so an attacker can submit
+            // any `value` with `eventLogHashes = []` and the cumulative measurement is never
+            // verified. DYNAMIC_SUBSET semantically means "this PCR is extended at runtime with
+            // events from the allow-list"; zero events does not satisfy that intent.
             uint256 measuredLen = measured.eventLogHashes.length;
+            if (measuredLen == 0) {
+                revert PCRVerificationFailed();
+            }
             uint256 matchLen = spec.matchData.length;
             for (uint256 i = 0; i < measuredLen;) {
                 bool found = false;
@@ -1219,8 +1229,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
                 }
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSEQUENCE) {
-            // DYNAMIC_SUBSEQUENCE: matchData is subsequence of eventLogHashes
+            // DYNAMIC_SUBSEQUENCE: matchData is subsequence of eventLogHashes. Empty event log
+            // is rejected for the same reason as DYNAMIC_SUBSET (no event hash chain verification).
+            // The matchIdx != matchLen check below already catches this when matchData is
+            // non-empty (rejected at registration), but the explicit guard documents intent.
             uint256 measuredLen = measured.eventLogHashes.length;
+            if (measuredLen == 0) {
+                revert PCRVerificationFailed();
+            }
             uint256 matchLen = spec.matchData.length;
             uint256 matchIdx = 0;
             for (uint256 i = 0; i < measuredLen && matchIdx < matchLen;) {

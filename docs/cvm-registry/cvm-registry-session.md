@@ -219,8 +219,12 @@ Actions:
     NOTE: SessionRegistry does not enforce a hard platform-vs-workload PCR index split; it evaluates whatever sorted specs the registries provide
   - For each PCR spec:
     STATIC: pcrValue.value == matchData[0]
-    DYNAMIC_SUBSET: each pcrValue.eventLogHashes[i] must be in matchData set
-    DYNAMIC_SUBSEQUENCE: matchData must appear as subsequence in eventLogHashes
+    DYNAMIC_SUBSET: pcrValue.eventLogHashes must be non-empty AND every entry must be in matchData set
+      (empty event log is rejected — the TPM lib skips the value↔events hash-chain check when
+      events are empty, so accepting empty would let an attacker submit any `value` and bypass
+      the policy)
+    DYNAMIC_SUBSEQUENCE: pcrValue.eventLogHashes must be non-empty AND matchData must appear
+      as a subsequence (same empty-event-log rejection rationale)
   - If expectedPcr15 != 0: verify measured PCR15 value matches expectedPcr15
 Output: All PCR checks pass (or revert PCRVerificationFailed / PCRNotFound)
 ```
@@ -368,6 +372,8 @@ function verifySessionSignature(
 | `AttestationKeysRevealed` | `sessionId (indexed), akPub, tpmSigningKey, sessionKey` (full public keys, never stored) |
 | `SessionRevoked` | `sessionId (indexed), revoker (indexed)` |
 | `SessionRotated` | `oldSessionId (indexed), newSessionId (indexed), owner (indexed), newTpmSigningKeyFingerprint, newSessionKeyFingerprint` |
+
+> **Cascade revocations emit no `SessionRegistry` event.** When the underlying workload or base image is revoked, every dependent session transitions active→inactive on the next read (see `isSessionActive` above), but **no `SessionRevoked` is emitted** for those sessions. The only on-chain signal is `BaseImageDeactivated` from `BaseImageRegistry` or `WorkloadDeactivated` from `WorkloadRegistry`. Indexers/dashboards that track session lifecycle must subscribe to all three registries and treat each upstream deactivation as a cascading deactivation of every session whose `baseImageId` / `workloadId` matches.
 
 ## Key Implementation Details
 
