@@ -47,6 +47,10 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error PlatformProfileNotFound(bytes32 platformProfileId);
     error MeasurementVariantNotFound(bytes32 variantId);
     error MeasurementVariantAlreadyExists(bytes32 variantId);
+    /// @notice Thrown by getVariant when the (baseImageId, platformProfileId, variantId)
+    ///         triple is not a valid parent-child chain (each id exists in isolation but
+    ///         the platform profile / variant was registered under a different parent).
+    error HierarchyMismatch(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId);
     /// @dev `registerBaseImage` saw two entries in its `platformProfiles` input with the
     ///      same `name` — without this guard the second would silently overwrite the first's
     ///      metadata and push a duplicate id into `platformProfileIds`. `addPlatformVariants`
@@ -407,6 +411,13 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     }
 
     /// @inheritdoc IBaseImageRegistry
+    /// @dev Hierarchy binding: child IDs are computed deterministically from their parent
+    ///      (platformProfileId = keccak256(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name);
+    ///       variantId = keccak256(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name)).
+    ///      Existence alone is insufficient — without re-deriving and comparing, a caller
+    ///      could pass a platformProfileId/variantId that exists but was registered under a
+    ///      different baseImageId/platformProfileId, mixing unrelated PCR policy with a
+    ///      target base image. SessionRegistry._lookupPolicy depends on this guarantee.
     function getVariant(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
         external
         view
@@ -424,6 +435,21 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
         if (!_variants[variantId].exists) {
             revert MeasurementVariantNotFound(variantId);
+        }
+
+        // Recompute child IDs from the provided parent and the stored child name;
+        // by collision resistance, a match proves the child was registered under that
+        // exact parent. Otherwise reject the triple.
+        bytes32 expectedProfileId = keccak256(
+            abi.encode(
+                PLATFORM_PROFILE_DOMAIN, baseImageId, _platformProfiles[platformProfileId].platformProfile.name
+            )
+        );
+        bytes32 expectedVariantId = keccak256(
+            abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, _variants[variantId].measurementVariant.name)
+        );
+        if (expectedProfileId != platformProfileId || expectedVariantId != variantId) {
+            revert HierarchyMismatch(baseImageId, platformProfileId, variantId);
         }
 
         return (

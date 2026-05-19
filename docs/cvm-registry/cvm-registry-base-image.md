@@ -140,7 +140,7 @@ function addPlatformVariants(
 | `getBaseImage(baseImageId)` | `BaseImageSpec` | Reverts if not found |
 | `getPlatformProfile(platformProfileId)` | `PlatformProfile` | Reverts if not found |
 | `getMeasurementVariant(variantId)` | `MeasurementVariant` | Reverts if not found |
-| `getVariant(baseImageId, platformProfileId, variantId)` | `(BaseImageSpec, PlatformProfile, MeasurementVariant)` | All three in one call; checks existence only, not parent-child linkage |
+| `getVariant(baseImageId, platformProfileId, variantId)` | `(BaseImageSpec, PlatformProfile, MeasurementVariant)` | All three in one call. Enforces parent-child binding: the platform profile MUST belong to the base image and the variant MUST belong to the platform profile — otherwise reverts `HierarchyMismatch(baseImageId, platformProfileId, variantId)`. |
 | `getBaseImageOwner(baseImageId)` | `bytes32` | Owner fingerprint |
 | `isBaseImageRevoked(baseImageId)` | `bool` | Revocation status |
 | `hasVariant(variantId)` | `bool` | Existence check |
@@ -209,4 +209,11 @@ Contract starts **paused** (`_pause()` called in `initialize`). Owner must eithe
 
 ## Implementation Nuance
 
-`getVariant(baseImageId, platformProfileId, variantId)` does **not** verify hierarchy membership. It only checks that the base image, platform profile, and variant IDs each exist somewhere in storage. Callers that need lineage consistency must enforce it themselves.
+`getVariant(baseImageId, platformProfileId, variantId)` enforces parent-child binding in addition to existence. By construction every child ID embeds its parent in its keccak preimage:
+
+- `platformProfileId = keccak256(PLATFORM_PROFILE_DOMAIN ‖ baseImageId ‖ profile.name)`
+- `variantId = keccak256(PLATFORM_VARIANT_DOMAIN ‖ platformProfileId ‖ variant.name)`
+
+After the existence checks pass, `getVariant` recomputes each expected child ID from the **caller-provided parent** and the **stored child name** and reverts `HierarchyMismatch(baseImageId, platformProfileId, variantId)` if either equality fails. By collision resistance, a match proves the child was registered under that exact parent.
+
+This invariant is load-bearing: `SessionRegistry._lookupPolicy` reads `(platformProfile, variant)` via `getVariant` and uses them as the PCR policy for the session being registered. Without the hierarchy check a caller could pair their target `baseImageId` with an unrelated platform profile / variant from a weaker base image and bypass PCR policy enforcement.
