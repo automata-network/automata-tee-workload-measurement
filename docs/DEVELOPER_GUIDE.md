@@ -183,7 +183,7 @@ Additive/upsert semantics — new profiles and variants are added, existing ones
 - `getBaseImage(baseImageId)` → `BaseImageSpec`
 - `getPlatformProfile(platformProfileId)` → `PlatformProfile`
 - `getMeasurementVariant(variantId)` → `MeasurementVariant`
-- `getVariant(baseImageId, platformProfileId, variantId)` → all three specs in one call
+- `getVariant(baseImageId, platformProfileId, variantId)` → all three specs in one call; enforces parent-child binding (reverts `HierarchyMismatch` if the platform profile isn't registered under the supplied base image, or the variant isn't registered under the supplied platform profile)
 - `getBaseImageOwner(baseImageId)` → owner fingerprint
 - `isBaseImageRevoked(baseImageId)` → revocation status
 

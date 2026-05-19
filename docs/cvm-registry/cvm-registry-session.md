@@ -125,7 +125,7 @@ Actions:
   - Check base image not revoked (revert BaseImageNotActive)
   - Check workload allows base image (revert BaseImageNotAllowed)
   - Fetch platform profile + variant via baseImageRegistry.getVariant()
-    NOTE: getVariant() checks existence only; it does NOT prove platformProfileId belongs to baseImageId or variantId belongs to platformProfileId
+    NOTE: getVariant() enforces parent-child binding -- platformProfileId MUST have been registered under baseImageId AND variantId MUST have been registered under platformProfileId, or it reverts HierarchyMismatch. SessionRegistry relies on this to prevent cross-base-image PCR policy substitution.
   - Fetch workload spec via workloadRegistry.getWorkload()
 Output: PolicyContext { platformProfile, variant, workloadSpec }
 ```
@@ -414,8 +414,8 @@ This binds the session key to a specific base image, workload, and session.
 - Rotation authorization: old TPM signing key must sign rotation message
 - Owner `expireAt` and owner signature are checked late in `_finalizeRotation`, after TPM quote verification has already consumed the owner's nonce
 
-### Policy Lookup Caveat
-`_lookupPolicy()` relies on `baseImageRegistry.getVariant(baseImageId, platformProfileId, variantId)`, and that BaseImageRegistry helper only verifies that each ID exists. It does not enforce base-image/profile/variant lineage consistency.
+### Policy Lookup Invariant
+`_lookupPolicy()` relies on `baseImageRegistry.getVariant(baseImageId, platformProfileId, variantId)` to enforce parent-child binding (platform profile registered under the supplied base image; variant registered under the supplied platform profile). On mismatch `getVariant` reverts `HierarchyMismatch(baseImageId, platformProfileId, variantId)`, which propagates out of `_lookupPolicy` and causes registration / rotation to fail. This prevents a caller from pairing their target `baseImageId` with an unrelated platform profile / variant and verifying PCRs against a weaker policy.
 
 ### Internal Helpers
 - `_requireNotExpired(expireAt)` -- reverts `SignatureExpired` if expired

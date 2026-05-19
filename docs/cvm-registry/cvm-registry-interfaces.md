@@ -92,6 +92,11 @@ function addPlatformVariants(
 function getBaseImage(bytes32 baseImageId) external view returns (BaseImageSpec memory spec);
 function getPlatformProfile(bytes32 platformProfileId) external view returns (PlatformProfile memory);
 function getMeasurementVariant(bytes32 variantId) external view returns (MeasurementVariant memory);
+/// @dev Enforces parent-child binding: reverts HierarchyMismatch unless the
+///      supplied platformProfileId was registered under `baseImageId` and the
+///      supplied variantId was registered under `platformProfileId`. Implementation
+///      recomputes each child ID from the caller-provided parent + stored child
+///      name. See cvm-registry-base-image.md "Implementation Nuance".
 function getVariant(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
     external view returns (BaseImageSpec memory, PlatformProfile memory, MeasurementVariant memory);
 function getBaseImageOwner(bytes32 baseImageId) external view returns (bytes32);
