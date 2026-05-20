@@ -161,16 +161,24 @@ struct TpmReport {
 }
 
 struct TpmQuoteReport {
-    bytes tpm2bAttest;       // TPM2B_ATTEST structure
-    bytes tpmSignature;      // TPM signature over attest
+    bytes tpm2bAttest;       // Marshalled TPMS_ATTEST (no TPM2B size prefix). See note below.
+    bytes tpmSignature;      // TPM signature over tpm2bAttest
     PcrValue[] pcrValues;    // PCR register values
 }
 
 struct TpmCertifyReport {
-    bytes tpm2bAttest;       // TPM2B_ATTEST structure
-    bytes tpmSignature;      // TPM signature over attest
+    bytes tpm2bAttest;       // Marshalled TPMS_ATTEST (no TPM2B size prefix). See note below.
+    bytes tpmSignature;      // TPM signature over tpm2bAttest
     bytes tpmtPublic;        // TPMT_PUBLIC of certified key
 }
+
+// Note on `tpm2bAttest`: despite the field name, the bytes are the bare
+// marshalled `TPMS_ATTEST` — i.e. they start with the TPM2.0 magic
+// `0xFF544347` at offset 0. The 2-byte `TPM2B_ATTEST` size prefix the TPM
+// ABI returns MUST be stripped before populating this field. TPM2.0
+// signatures are computed over `TPMS_ATTEST` (not the size-prefixed
+// `TPM2B_ATTEST`), and `LibTpm.parseAttestHeaders` reverts with
+// `InvalidTpmMagic()` if the prefix is present.
 
 // PcrValue imported from @automata-network/automata-tpm-attestation/types/Types.sol
 struct PcrValue {

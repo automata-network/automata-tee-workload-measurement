@@ -95,7 +95,14 @@ struct TpmReport {
 
 /// @notice TPM Quote report containing PCR measurements and signature
 struct TpmQuoteReport {
-    /// @dev TPM2B_ATTEST structure (TPM 2.0 spec Part 2, Section 10.12.8)
+    /// @dev Marshalled `TPMS_ATTEST` (TPM 2.0 spec Part 2, Section 10.12.8) —
+    ///      type field = TPM2_ST_ATTEST_QUOTE. The bytes start with the TPM2.0
+    ///      magic `0xFF544347` at offset 0; callers MUST strip the 2-byte
+    ///      `TPM2B_ATTEST` size prefix that the TPM ABI returns. TPM2.0
+    ///      signatures are computed over `TPMS_ATTEST` (not the size-prefixed
+    ///      `TPM2B_ATTEST`), and `LibTpm.parseAttestHeaders` reverts with
+    ///      `InvalidTpmMagic()` if the prefix is present. The historical
+    ///      `tpm2bAttest` name is preserved for backwards compat.
     bytes tpm2bAttest;
     /// @dev TPMT_SIGNATURE structure over tpm2bAttest (TPM 2.0 spec Part 2, Section 11.2.3)
     bytes tpmSignature;
@@ -105,7 +112,9 @@ struct TpmQuoteReport {
 
 /// @notice TPM Certify report for key certification
 struct TpmCertifyReport {
-    /// @dev TPM2B_ATTEST structure for TPM2_Certify command
+    /// @dev Marshalled `TPMS_ATTEST` for TPM2_Certify (type = TPM2_ST_ATTEST_CERTIFY).
+    ///      Same wire-format rule as `TpmQuoteReport.tpm2bAttest`: no `TPM2B`
+    ///      size prefix.
     bytes tpm2bAttest;
     /// @dev TPMT_SIGNATURE structure over tpm2bAttest
     bytes tpmSignature;

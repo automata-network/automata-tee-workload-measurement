@@ -358,7 +358,7 @@ Verifies the Attestation Key (AK) and its binding to the TEE instance:
 ### Step 4: TPM Quote Verification
 
 Verifies the TPM Quote report:
-- Validates the AK signature over the TPM2B_ATTEST structure
+- Validates the AK signature over the marshalled `TPMS_ATTEST` (carried in the `tpm2bAttest` field; the historical name is preserved but the bytes have **no** `TPM2B` 2-byte size prefix — see `Evidence.sol`)
 - Checks nonce binding: `extraData == keccak256(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, currentNonce)`
 - Extracts measured PCR values from the quote
 
