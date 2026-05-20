@@ -42,12 +42,10 @@ contract BaseImageRegistryHierarchyTest is Test {
         signatureVerifier = new SignatureVerifier(address(0));
 
         BaseImageRegistry impl = new BaseImageRegistry(ISignatureVerifier(address(signatureVerifier)));
-        ERC1967Proxy proxy =
-            new ERC1967Proxy(address(impl), abi.encodeCall(BaseImageRegistry.initialize, (OWNER)));
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeCall(BaseImageRegistry.initialize, (OWNER)));
         registry = BaseImageRegistry(address(proxy));
 
-        ownerIdentity =
-            PublicIdentity({typeId: ALGO_ID_ES256K, key: hex"0102030405060708090a0b0c0d0e0f"});
+        ownerIdentity = PublicIdentity({typeId: ALGO_ID_ES256K, key: hex"0102030405060708090a0b0c0d0e0f"});
         ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
         // Default-paused; whitelist our test fingerprint so registerBaseImage can proceed.
@@ -58,36 +56,25 @@ contract BaseImageRegistryHierarchyTest is Test {
 
         // Bypass owner-signature verification.
         vm.mockCall(
-            address(signatureVerifier),
-            abi.encodeWithSelector(SignatureVerifier.verify.selector),
-            abi.encode(true)
+            address(signatureVerifier), abi.encodeWithSelector(SignatureVerifier.verify.selector), abi.encode(true)
         );
 
         vm.warp(1_700_000_000);
     }
 
-    function _register(
-        string memory name,
-        string memory ver,
-        string memory profileName,
-        string memory variantName
-    ) internal returns (bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId) {
+    function _register(string memory name, string memory ver, string memory profileName, string memory variantName)
+        internal
+        returns (bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
+    {
         BaseImageSpec memory spec = BaseImageSpec({name: name, version: ver, uri: ""});
 
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] = PlatformProfile({
-            name: profileName,
-            invariants: new PcrSpec[](0),
-            attributes: new Attribute[](0)
-        });
+        profiles[0] = PlatformProfile({name: profileName, invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
 
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] = MeasurementVariant({
-            name: variantName,
-            overridePcrs: new PcrSpec[](0),
-            attributes: new Attribute[](0)
-        });
+        variants[0][0] =
+            MeasurementVariant({name: variantName, overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
 
         baseImageId =
             registry.registerBaseImage(spec, profiles, variants, uint64(block.timestamp + 1000), ownerIdentity, "");
@@ -130,7 +117,7 @@ contract BaseImageRegistryHierarchyTest is Test {
     }
 
     function testGetVariant_RejectsCrossedPlatformProfile() public {
-        (bytes32 bA, , ) = _register("img-a", "v1", "gcp-tdx", "c3-standard-4");
+        (bytes32 bA,,) = _register("img-a", "v1", "gcp-tdx", "c3-standard-4");
         (, bytes32 pB, bytes32 vB) = _register("img-b", "v1", "gcp-snp", "n2d-standard-2");
 
         // bA is real, pB+vB are real, but pB was registered under img-b, not img-a.
@@ -154,9 +141,8 @@ contract BaseImageRegistryHierarchyTest is Test {
         variants[1][0] =
             MeasurementVariant({name: "snp-var", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
 
-        bytes32 baseImageId = registry.registerBaseImage(
-            spec, profiles, variants, uint64(block.timestamp + 1000), ownerIdentity, ""
-        );
+        bytes32 baseImageId =
+            registry.registerBaseImage(spec, profiles, variants, uint64(block.timestamp + 1000), ownerIdentity, "");
 
         bytes32[] memory profileIds = _platformProfileIdsOf(baseImageId);
         bytes32 pTdx = profileIds[0];

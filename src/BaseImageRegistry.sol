@@ -441,9 +441,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // by collision resistance, a match proves the child was registered under that
         // exact parent. Otherwise reject the triple.
         bytes32 expectedProfileId = keccak256(
-            abi.encode(
-                PLATFORM_PROFILE_DOMAIN, baseImageId, _platformProfiles[platformProfileId].platformProfile.name
-            )
+            abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, _platformProfiles[platformProfileId].platformProfile.name)
         );
         bytes32 expectedVariantId = keccak256(
             abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, _variants[variantId].measurementVariant.name)

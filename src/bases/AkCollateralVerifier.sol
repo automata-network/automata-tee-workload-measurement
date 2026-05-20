@@ -190,8 +190,7 @@ abstract contract AkCollateralVerifier is TpmBase {
         if (!isTdx && !isSnp) revert MaaJwtComplianceFailed();
 
         // x-ms-compliance-status must be "azure-compliant-cvm"
-        string memory complianceStatus =
-            _jsonExtractStringRequired(claims, "x-ms-compliance-status", false);
+        string memory complianceStatus = _jsonExtractStringRequired(claims, "x-ms-compliance-status", false);
         if (!LibString.eq(complianceStatus, "azure-compliant-cvm")) revert MaaJwtComplianceFailed();
 
         // report_data: 128-char hex = 64 bytes. First 32 bytes = bindingHash;
@@ -209,10 +208,7 @@ abstract contract AkCollateralVerifier is TpmBase {
         bytes32 akPubFingerprint = LibKey.computeKeyFingerprint(akPub);
 
         return AkCollateralVerificationResult({
-            valid: true,
-            akPub: akPub,
-            akPubFingerprint: akPubFingerprint,
-            bindingHash: bindingHash
+            valid: true, akPub: akPub, akPubFingerprint: akPubFingerprint, bindingHash: bindingHash
         });
     }
 

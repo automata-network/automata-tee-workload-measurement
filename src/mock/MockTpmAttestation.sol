@@ -34,11 +34,10 @@ contract MockTpmAttestation is ITpmAttestation {
     }
 
     /// @inheritdoc ITpmAttestation
-    function verifyTpmQuoteWithTrustedAkPub(
-        bytes calldata tpmQuote,
-        bytes calldata,
-        CertPubkey calldata
-    ) external returns (bool success, bytes memory extraData) {
+    function verifyTpmQuoteWithTrustedAkPub(bytes calldata tpmQuote, bytes calldata, CertPubkey calldata)
+        external
+        returns (bool success, bytes memory extraData)
+    {
         // Skip signature verification, just extract extraData
         extraData = LibTpm.extractExtraData(tpmQuote);
         emit TpmSignatureVerified(keccak256(tpmQuote));

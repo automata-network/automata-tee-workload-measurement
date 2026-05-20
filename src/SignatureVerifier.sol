@@ -51,7 +51,11 @@ contract SignatureVerifier is ISignatureVerifier {
     /// @param message Message digest
     /// @param signature Raw RSA signature bytes
     /// @return valid True if signature is valid
-    function _verifyRsa(bytes calldata key, bytes32 message, bytes calldata signature) internal view returns (bool valid) {
+    function _verifyRsa(bytes calldata key, bytes32 message, bytes calldata signature)
+        internal
+        view
+        returns (bool valid)
+    {
         // Copy key from calldata to memory (Asn1Decode requires memory)
         bytes memory keyMem = key;
 

@@ -59,22 +59,16 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
     // ============================================================================
 
     /// @inheritdoc IMaaKeyRegistry
-    function upsertMaaSigningKey(
-        bytes32 kidHash,
-        bytes calldata pkcs1Pubkey,
-        bytes32 issuerHash,
-        uint64 notAfter
-    ) external onlyOwner {
+    function upsertMaaSigningKey(bytes32 kidHash, bytes calldata pkcs1Pubkey, bytes32 issuerHash, uint64 notAfter)
+        external
+        onlyOwner
+    {
         if (pkcs1Pubkey.length == 0) revert EmptyPubkey();
         if (issuerHash == bytes32(0)) revert EmptyIssuerHash();
         if (notAfter < block.timestamp) revert NotAfterInPast();
 
-        _keys[kidHash] = MaaSigningKey({
-            pkcs1Pubkey: pkcs1Pubkey,
-            issuerHash: issuerHash,
-            notAfter: notAfter,
-            revoked: false
-        });
+        _keys[kidHash] =
+            MaaSigningKey({pkcs1Pubkey: pkcs1Pubkey, issuerHash: issuerHash, notAfter: notAfter, revoked: false});
 
         emit MaaSigningKeyUpserted(kidHash, issuerHash, notAfter);
     }

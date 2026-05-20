@@ -24,10 +24,7 @@ import {Base64} from "@solady/utils/Base64.sol";
 contract AkCollateralVerifierHarness is AkCollateralVerifier {
     ISignatureVerifier private immutable _sv;
 
-    constructor(IMaaKeyRegistry m, ISignatureVerifier sv, ITpmAttestation t)
-        TpmBase(t)
-        AkCollateralVerifier(m)
-    {
+    constructor(IMaaKeyRegistry m, ISignatureVerifier sv, ITpmAttestation t) TpmBase(t) AkCollateralVerifier(m) {
         _sv = sv;
     }
 
@@ -66,8 +63,7 @@ contract AkCollateralVerifierMaaTest is Test {
         vm.startPrank(owner);
         signatureVerifier = new SignatureVerifier(address(0xdead));
         MaaKeyRegistry impl = new MaaKeyRegistry();
-        ERC1967Proxy proxy =
-            new ERC1967Proxy(address(impl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
         registry = MaaKeyRegistry(address(proxy));
         vm.stopPrank();
 
@@ -84,10 +80,7 @@ contract AkCollateralVerifierMaaTest is Test {
         // Pre-register the MAA signing key shared by all happy-path tests.
         vm.prank(owner);
         registry.upsertMaaSigningKey(
-            TEST_KID_HASH,
-            TEST_PKCS1_PUBKEY,
-            TEST_ISSUER_HASH,
-            uint64(block.timestamp + 365 days)
+            TEST_KID_HASH, TEST_PKCS1_PUBKEY, TEST_ISSUER_HASH, uint64(block.timestamp + 365 days)
         );
     }
 
@@ -120,8 +113,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         bytes memory jwt = _buildJwt(_snpClaims(reportData));
@@ -143,8 +135,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         // header with alg=HS256 instead of RS256
@@ -161,8 +152,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         string memory header = '{"alg":"RS256","kid":"unknown-kid"}';
@@ -181,8 +171,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
@@ -196,8 +185,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         // claims with the wrong issuer
@@ -220,8 +208,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         string memory claims = string.concat(
@@ -243,16 +230,13 @@ contract AkCollateralVerifierMaaTest is Test {
     function test_revert_when_signature_invalid() public {
         // override the global mock to return false
         vm.mockCall(
-            address(signatureVerifier),
-            abi.encodeWithSelector(signatureVerifier.verify.selector),
-            abi.encode(false)
+            address(signatureVerifier), abi.encodeWithSelector(signatureVerifier.verify.selector), abi.encode(false)
         );
 
         bytes memory hclVarData = _buildHclVarData();
         bytes32 bindingHash = sha256(hclVarData);
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
@@ -267,8 +251,7 @@ contract AkCollateralVerifierMaaTest is Test {
         // use a different binding hash than sha256(hclVarData)
         bytes32 wrongBindingHash = keccak256("wrong");
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(wrongBindingHash),
-            "0000000000000000000000000000000000000000000000000000000000000000"
+            _bytes32ToHex64Lower(wrongBindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
         );
 
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
@@ -283,8 +266,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes32 bindingHash = sha256(hclVarData);
         // non-zero second half
         string memory reportData = string.concat(
-            _bytes32ToHex64Lower(bindingHash),
-            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            _bytes32ToHex64Lower(bindingHash), "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         );
 
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
@@ -323,11 +305,7 @@ contract AkCollateralVerifierMaaTest is Test {
         string memory nB64 = Base64.encode(n, true, true);
         string memory eB64 = Base64.encode(e, true, true);
 
-        return bytes(
-            string.concat(
-                '{"keys":[{"kid":"HCLAkPub","kty":"RSA","e":"', eB64, '","n":"', nB64, '"}]}'
-            )
-        );
+        return bytes(string.concat('{"keys":[{"kid":"HCLAkPub","kty":"RSA","e":"', eB64, '","n":"', nB64, '"}]}'));
     }
 
     function _tdxClaims(string memory reportDataHex) internal pure returns (string memory) {

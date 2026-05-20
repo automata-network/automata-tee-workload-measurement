@@ -51,12 +51,8 @@ interface IMaaKeyRegistry {
     /// @param issuerHash keccak256(bytes(MAA endpoint URL))
     /// @param notAfter Unix seconds; key validity window end. Must be strictly greater than
     ///                 block.timestamp at the upsert moment.
-    function upsertMaaSigningKey(
-        bytes32 kidHash,
-        bytes calldata pkcs1Pubkey,
-        bytes32 issuerHash,
-        uint64 notAfter
-    ) external;
+    function upsertMaaSigningKey(bytes32 kidHash, bytes calldata pkcs1Pubkey, bytes32 issuerHash, uint64 notAfter)
+        external;
 
     /// @notice Revoke a MAA signing key. Subsequent JWT verifications against this kid revert
     ///         regardless of notAfter. Owner-only. Reverts if the kid was never registered.

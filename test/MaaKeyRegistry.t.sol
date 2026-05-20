@@ -105,9 +105,7 @@ contract MaaKeyRegistryTest is Test {
     function test_revert_when_non_owner_upserts() public {
         uint64 notAfter = uint64(block.timestamp + 365 days);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rando)
-        );
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rando));
         vm.prank(rando);
         registry.upsertMaaSigningKey(TEST_KID_HASH, TEST_PKCS1_PUBKEY, TEST_ISSUER_HASH, notAfter);
     }
@@ -117,9 +115,7 @@ contract MaaKeyRegistryTest is Test {
         vm.prank(owner);
         registry.upsertMaaSigningKey(TEST_KID_HASH, TEST_PKCS1_PUBKEY, TEST_ISSUER_HASH, notAfter);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rando)
-        );
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rando));
         vm.prank(rando);
         registry.revokeMaaSigningKey(TEST_KID_HASH);
     }

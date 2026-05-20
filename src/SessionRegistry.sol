@@ -799,9 +799,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         bytes32 ownerFingerprint
     ) private returns (PcrValue[] memory pcrValues, bytes32 tpmSignatureHash) {
         uint256 nonce = _ownerNonces[ownerFingerprint];
-        bytes32 expectedExtraData = keccak256(
-            abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce)
-        );
+        bytes32 expectedExtraData =
+            keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce));
 
         TpmQuoteVerificationResult memory quoteResult =
             verifyTpmQuote(tpmQuoteReport, akPub, abi.encodePacked(expectedExtraData));

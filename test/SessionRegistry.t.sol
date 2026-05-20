@@ -98,8 +98,7 @@ contract SessionRegistryTest is Test {
         // Required for SessionRegistry construction even when tests don't exercise the
         // AzureMaaJwt path — the immutable reference is set in the constructor.
         MaaKeyRegistry maaImpl = new MaaKeyRegistry();
-        ERC1967Proxy maaProxy =
-            new ERC1967Proxy(address(maaImpl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
+        ERC1967Proxy maaProxy = new ERC1967Proxy(address(maaImpl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
         maaKeyRegistry = MaaKeyRegistry(address(maaProxy));
 
         // Deploy SessionRegistry implementation
@@ -448,8 +447,7 @@ contract SessionRegistryTest is Test {
         baseImageRegistry.deactivateBaseImage(baseImageId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
 
         assertFalse(
-            sessionRegistry.isSessionActive(sessionId),
-            "cascade: session must report inactive after baseimage revoke"
+            sessionRegistry.isSessionActive(sessionId), "cascade: session must report inactive after baseimage revoke"
         );
     }
 
@@ -463,8 +461,7 @@ contract SessionRegistryTest is Test {
         workloadRegistry.deactivateWorkload(workloadId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
 
         assertFalse(
-            sessionRegistry.isSessionActive(sessionId),
-            "cascade: session must report inactive after workload revoke"
+            sessionRegistry.isSessionActive(sessionId), "cascade: session must report inactive after workload revoke"
         );
     }
 

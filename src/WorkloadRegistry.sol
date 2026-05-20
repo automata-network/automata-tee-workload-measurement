@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {WorkloadSpec, PublicIdentity, AccessMode, PcrSpec, PcrVerifyType, AttributeRequirement} from "./types/Common.sol";
+import {
+    WorkloadSpec,
+    PublicIdentity,
+    AccessMode,
+    PcrSpec,
+    PcrVerifyType,
+    AttributeRequirement
+} from "./types/Common.sol";
 import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";

@@ -56,11 +56,7 @@ contract PcrEvalEmptyEventLogTest is Test {
     // ─── DYNAMIC_SUBSET ──────────────────────────────────────────────────────────
 
     function testDynamicSubset_RevertsOnEmptyEventLog() public {
-        PcrSpec memory spec = PcrSpec({
-            pcrIndex: 0,
-            verifyType: PcrVerifyType.DYNAMIC_SUBSET,
-            matchData: _matchSet()
-        });
+        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         PcrValue memory measured = _measured(new bytes32[](0));
         vm.expectRevert(PCRVerificationFailed.selector);
         harness.evaluateSinglePcr(spec, measured);
@@ -70,22 +66,14 @@ contract PcrEvalEmptyEventLogTest is Test {
         bytes32[] memory events = new bytes32[](2);
         events[0] = bytes32(uint256(0xa1));
         events[1] = bytes32(uint256(0xa2));
-        PcrSpec memory spec = PcrSpec({
-            pcrIndex: 0,
-            verifyType: PcrVerifyType.DYNAMIC_SUBSET,
-            matchData: _matchSet()
-        });
+        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         harness.evaluateSinglePcr(spec, _measured(events)); // no revert
     }
 
     function testDynamicSubset_RevertsOnEventOutsideMatchSet() public {
         bytes32[] memory events = new bytes32[](1);
         events[0] = bytes32(uint256(0xdead));
-        PcrSpec memory spec = PcrSpec({
-            pcrIndex: 0,
-            verifyType: PcrVerifyType.DYNAMIC_SUBSET,
-            matchData: _matchSet()
-        });
+        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         vm.expectRevert(PCRVerificationFailed.selector);
         harness.evaluateSinglePcr(spec, _measured(events));
     }
@@ -93,11 +81,8 @@ contract PcrEvalEmptyEventLogTest is Test {
     // ─── DYNAMIC_SUBSEQUENCE ─────────────────────────────────────────────────────
 
     function testDynamicSubsequence_RevertsOnEmptyEventLog() public {
-        PcrSpec memory spec = PcrSpec({
-            pcrIndex: 0,
-            verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE,
-            matchData: _matchSet()
-        });
+        PcrSpec memory spec =
+            PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
         PcrValue memory measured = _measured(new bytes32[](0));
         vm.expectRevert(PCRVerificationFailed.selector);
         harness.evaluateSinglePcr(spec, measured);
@@ -107,11 +92,8 @@ contract PcrEvalEmptyEventLogTest is Test {
         bytes32[] memory events = new bytes32[](2);
         events[0] = bytes32(uint256(0xa1));
         events[1] = bytes32(uint256(0xa2));
-        PcrSpec memory spec = PcrSpec({
-            pcrIndex: 0,
-            verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE,
-            matchData: _matchSet()
-        });
+        PcrSpec memory spec =
+            PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
         harness.evaluateSinglePcr(spec, _measured(events)); // no revert
     }
 }
