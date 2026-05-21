@@ -7,6 +7,7 @@ import {DeployBaseImageRegistry} from "./DeployBaseImageRegistry.s.sol";
 import {DeployWorkloadRegistry} from "./DeployWorkloadRegistry.s.sol";
 import {DeployMaaKeyRegistry} from "./DeployMaaKeyRegistry.s.sol";
 import {DeployKeyResolver} from "./DeployKeyResolver.s.sol";
+import {DeployAkCollateralVerifier} from "./DeployAkCollateralVerifier.s.sol";
 import {DeploySessionRegistry} from "./DeploySessionRegistry.s.sol";
 import "forge-std/console.sol";
 
@@ -33,6 +34,7 @@ contract DeployFork is
     DeployWorkloadRegistry,
     DeployMaaKeyRegistry,
     DeployKeyResolver,
+    DeployAkCollateralVerifier,
     DeploySessionRegistry
 {
     function run()
@@ -44,6 +46,7 @@ contract DeployFork is
             DeployWorkloadRegistry,
             DeployMaaKeyRegistry,
             DeployKeyResolver,
+            DeployAkCollateralVerifier,
             DeploySessionRegistry
         )
     {
@@ -54,11 +57,12 @@ contract DeployFork is
         deploySignatureVerifier();
         deployTeeVerifier();
 
-        // 2. Proxy registries
+        // 2. Proxy registries (read deps from JSON written above)
         deployBaseImageRegistryProxy(address(0));
         deployWorkloadRegistryProxy(address(0));
         deployMaaKeyRegistryProxy(address(0));
         deployKeyResolverProxy(address(0));
+        deployAkCollateralVerifier();
 
         // 3. SessionRegistry last (depends on all others + real TPM_ATTESTATION_ADDR)
         deploySessionRegistryProxy(address(0));
