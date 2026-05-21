@@ -7,37 +7,18 @@ import {AkPubCollateral, AkPubCollateralType} from "../types/Evidence.sol";
 import {PublicIdentity} from "../types/Common.sol";
 import {ALGO_ID_RS256} from "../types/Constants.sol";
 import {ISignatureVerifier} from "../interfaces/ISignatureVerifier.sol";
+import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../interfaces/IAkCollateralVerifier.sol";
 import {IMaaKeyRegistry, MaaSigningKey} from "../interfaces/registries/IMaaKeyRegistry.sol";
 import {LibString} from "@solady/utils/LibString.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 import {LibKey} from "../lib/LibKey.sol";
 import {TpmBase} from "./TpmBase.sol";
 
-/// @notice Result of AK collateral verification
-struct AkCollateralVerificationResult {
-    /// @dev True if the AK collateral is valid (signature chain verified)
-    bool valid;
-    /// @dev Extracted Attestation Key public identity
-    PublicIdentity akPub;
-    /// @dev Fingerprint of the AK public key (for session binding)
-    bytes32 akPubFingerprint;
-    /// @dev Expected binding hash from the TEE report (provider-specific).
-    ///      Azure: sha256(hclVarData) — already cross-checked inside _verifyAzureAkCollateral
-    ///             against the MAA JWT's tdx_report_data / x-ms-sevsnpvm-reportdata claim, so the
-    ///             downstream caller does NOT need to re-check it against the on-chain teeReport.
-    ///      GCP:   bytes32(0). Binding is enforced via PCR15 by SessionRegistry step 7.
-    bytes32 bindingHash;
-}
-
 /// @title AkCollateralVerifier
 /// @notice Abstract base contract for verifying AK collateral (Azure MAA JWT / GCP cert chain)
-/// @dev Designed to be inherited by SessionRegistry. The Azure path validates a Microsoft
-///      Azure Attestation-signed JWT against a per-region signing key registered in
-///      MaaKeyRegistry (§10.3); the GCP path walks an X.509 chain via ITpmAttestation. The
-///      ISignatureVerifier dependency is reached via the _signatureVerifier() virtual getter
-///      so SessionRegistry can keep a single immutable for owner auth and JWT verification
-///      both.
-abstract contract AkCollateralVerifier is TpmBase {
+/// @dev Deployed separately from SessionRegistry so Azure JWT parsing and certificate-chain logic
+///      do not count against SessionRegistry's EIP-170 runtime size budget.
+contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -45,19 +26,19 @@ abstract contract AkCollateralVerifier is TpmBase {
     /// @notice MAA signing key directory consulted when verifying AzureMaaJwt collateral
     IMaaKeyRegistry public immutable maaKeyRegistry;
 
+    /// @notice Signature verifier used for MAA JWT RS256 signature verification
+    ISignatureVerifier public immutable signatureVerifier;
+
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    constructor(IMaaKeyRegistry _maaKeyRegistry) {
+    constructor(IMaaKeyRegistry _maaKeyRegistry, ISignatureVerifier _signatureVerifier, ITpmAttestation _tpmAttestation)
+        TpmBase(_tpmAttestation)
+    {
         maaKeyRegistry = _maaKeyRegistry;
+        signatureVerifier = _signatureVerifier;
     }
-
-    /// @notice Returns the ISignatureVerifier used for owner-auth and MAA JWT signature
-    ///         verification. Implemented by the deriving contract (SessionRegistry); using a
-    ///         virtual getter keeps SessionRegistry's existing signatureVerifier immutable as
-    ///         the single source of truth.
-    function _signatureVerifier() internal view virtual returns (ISignatureVerifier);
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors
@@ -103,8 +84,9 @@ abstract contract AkCollateralVerifier is TpmBase {
     /// @notice Verifies AK collateral and extracts the AK public key
     /// @param collateral The AK collateral to verify (Azure MAA JWT bundle or GCP cert chain)
     /// @return result Verification result containing AK identity, fingerprint, and binding hash
-    function verifyAkCollateral(AkPubCollateral memory collateral)
-        internal
+    function verifyAkCollateral(AkPubCollateral calldata collateral)
+        external
+        override
         returns (AkCollateralVerificationResult memory result)
     {
         if (collateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt) {
@@ -124,7 +106,7 @@ abstract contract AkCollateralVerifier is TpmBase {
     ///      See on-chain-registry-design.md §8.3.1 / §14.9 for the design rationale.
     /// @param data abi.encode((bytes jwt, bytes hclVarData))
     /// @return result Verification result with extracted AK public key from HCLAkPub
-    function _verifyAzureAkCollateral(bytes memory data)
+    function _verifyAzureAkCollateral(bytes calldata data)
         private
         view
         returns (AkCollateralVerificationResult memory result)
@@ -169,7 +151,7 @@ abstract contract AkCollateralVerifier is TpmBase {
         if (sig.length == 0) revert MaaJwtMalformed();
 
         PublicIdentity memory maaIdentity = PublicIdentity({typeId: ALGO_ID_RS256, key: key.pkcs1Pubkey});
-        if (!_signatureVerifier().verify(maaIdentity, message, sig)) {
+        if (!signatureVerifier.verify(maaIdentity, message, sig)) {
             revert MaaJwtSignatureInvalid();
         }
 
@@ -387,7 +369,10 @@ abstract contract AkCollateralVerifier is TpmBase {
     /// @dev Verifies GCP AK collateral (X.509 certificate chain)
     /// @param data The GCP certificate chain (abi-encoded bytes[] array)
     /// @return result Verification result with extracted AK public key
-    function _verifyGcpAkCollateral(bytes memory data) private returns (AkCollateralVerificationResult memory result) {
+    function _verifyGcpAkCollateral(bytes calldata data)
+        private
+        returns (AkCollateralVerificationResult memory result)
+    {
         // Decode certificate chain
         bytes[] memory certs = abi.decode(data, (bytes[]));
 

@@ -3,6 +3,7 @@ pragma solidity >=0.8.0;
 
 bytes32 constant SIGNATURE_VERIFIER_SALT = keccak256(bytes("SIGNATURE_VERIFIER_SALT"));
 bytes32 constant TEE_VERIFIER_SALT = keccak256(bytes("TEE_VERIFIER_SALT"));
+bytes32 constant AK_COLLATERAL_VERIFIER_SALT = keccak256(bytes("AK_COLLATERAL_VERIFIER_SALT"));
 
 // Implementation salts
 bytes32 constant BASE_IMAGE_REGISTRY_IMPL_SALT = keccak256(bytes("BASE_IMAGE_REGISTRY_IMPL_SALT"));

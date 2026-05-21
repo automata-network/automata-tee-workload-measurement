@@ -4,12 +4,10 @@ pragma solidity ^0.8.27;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-import {AkCollateralVerifier, AkCollateralVerificationResult} from "../src/bases/AkCollateralVerifier.sol";
-import {TpmBase} from "../src/bases/TpmBase.sol";
+import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
+import {AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
 import {SignatureVerifier} from "../src/SignatureVerifier.sol";
-import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
-import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {AkPubCollateral, AkPubCollateralType} from "../src/types/Evidence.sol";
 import {PublicIdentity} from "../src/types/Common.sol";
@@ -17,28 +15,8 @@ import {ALGO_ID_ES256K, ALGO_ID_RS256} from "../src/types/Constants.sol";
 import {LibString} from "@solady/utils/LibString.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 
-/// @dev Test harness exposing the internal verifyAkCollateral entry point. The MaaKeyRegistry
-///      dependency is real (UUPS-proxied); ITpmAttestation is unused on the Azure path so
-///      we pass a sentinel address. _signatureVerifier() is wired to the constructor-supplied
-///      mock-friendly ISignatureVerifier.
-contract AkCollateralVerifierHarness is AkCollateralVerifier {
-    ISignatureVerifier private immutable _sv;
-
-    constructor(IMaaKeyRegistry m, ISignatureVerifier sv, ITpmAttestation t) TpmBase(t) AkCollateralVerifier(m) {
-        _sv = sv;
-    }
-
-    function _signatureVerifier() internal view override returns (ISignatureVerifier) {
-        return _sv;
-    }
-
-    function verifyExposed(AkPubCollateral memory c) external returns (AkCollateralVerificationResult memory) {
-        return verifyAkCollateral(c);
-    }
-}
-
 /// @title AkCollateralVerifierMaaTest
-/// @notice Exercises the new AzureMaaJwt verification path end-to-end via a harness. The RSA
+/// @notice Exercises the AzureMaaJwt verification path end-to-end. The RSA
 ///         signature verification step is mocked through vm.mockCall on the SignatureVerifier
 ///         — the surrounding plumbing (JWT split, base64url decode, JSON field extraction,
 ///         hex decoding, binding check, HCLAkPub parse from hclVarData) is exercised against
@@ -46,7 +24,7 @@ contract AkCollateralVerifierHarness is AkCollateralVerifier {
 contract AkCollateralVerifierMaaTest is Test {
     SignatureVerifier internal signatureVerifier;
     MaaKeyRegistry internal registry;
-    AkCollateralVerifierHarness internal harness;
+    AkCollateralVerifier internal verifier;
 
     address internal constant owner = address(0xABCD);
     PublicIdentity internal ownerIdentity;
@@ -68,7 +46,7 @@ contract AkCollateralVerifierMaaTest is Test {
         vm.stopPrank();
 
         // sentinel for ITpmAttestation; Azure path does not touch it
-        harness = new AkCollateralVerifierHarness(registry, signatureVerifier, ITpmAttestation(address(0xdead)));
+        verifier = new AkCollateralVerifier(registry, signatureVerifier, ITpmAttestation(address(0xdead)));
 
         // Default: signatureVerifier.verify always returns true. Individual tests override.
         // (This signatureVerifier is the AkCollateralVerifier's JWT-verification dependency;
@@ -101,7 +79,7 @@ contract AkCollateralVerifierMaaTest is Test {
 
         AkPubCollateral memory c = AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data});
 
-        AkCollateralVerificationResult memory r = harness.verifyExposed(c);
+        AkCollateralVerificationResult memory r = verifier.verifyAkCollateral(c);
 
         assertTrue(r.valid, "valid");
         assertEq(r.bindingHash, bindingHash, "bindingHash equals sha256(hclVarData)");
@@ -121,7 +99,7 @@ contract AkCollateralVerifierMaaTest is Test {
 
         AkPubCollateral memory c = AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data});
 
-        AkCollateralVerificationResult memory r = harness.verifyExposed(c);
+        AkCollateralVerificationResult memory r = verifier.verifyAkCollateral(c);
 
         assertTrue(r.valid, "valid");
         assertEq(r.bindingHash, bindingHash, "bindingHash matches");
@@ -145,7 +123,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaJwtAlgUnsupported.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_kid_not_registered() public {
@@ -161,7 +139,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaKidNotRegistered.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_kid_revoked() public {
@@ -178,7 +156,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaKidNotRegistered.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_issuer_mismatch() public {
@@ -201,7 +179,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaJwtIssuerMismatch.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_compliance_status_wrong() public {
@@ -224,7 +202,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaJwtComplianceFailed.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_signature_invalid() public {
@@ -243,7 +221,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaJwtSignatureInvalid.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_binding_hash_mismatch() public {
@@ -258,7 +236,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaJwtBindingMismatch.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_report_data_padding_nonzero() public {
@@ -273,7 +251,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaJwtReportDataMalformed.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     function test_revert_when_jwt_malformed_two_dots_missing() public {
@@ -283,7 +261,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory data = abi.encode(jwt, hclVarData);
 
         vm.expectRevert(AkCollateralVerifier.MaaJwtMalformed.selector);
-        harness.verifyExposed(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
     // ───────────────────────────────────────────────────────────────────────────

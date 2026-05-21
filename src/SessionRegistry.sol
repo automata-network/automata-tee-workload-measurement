@@ -5,13 +5,12 @@ import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interf
 import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
+import {IAkCollateralVerifier, AkCollateralVerificationResult} from "./interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "./interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "./interfaces/registries/IWorkloadRegistry.sol";
-import {IMaaKeyRegistry} from "./interfaces/registries/IMaaKeyRegistry.sol";
 import {ISessionRegistry, CVMSessionStorage} from "./interfaces/registries/ISessionRegistry.sol";
 import {TeeVerificationResult} from "./types/Evidence.sol";
 import {TpmVerifier, TpmQuoteVerificationResult, TpmCertifyVerificationResult, TpmBase} from "./bases/TpmVerifier.sol";
-import {AkCollateralVerifier, AkCollateralVerificationResult} from "./bases/AkCollateralVerifier.sol";
 import {
     CVMSession,
     PublicIdentity,
@@ -48,9 +47,9 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 
 /// @title SessionRegistry
 /// @notice Central orchestrator for CVM session registration with 9-step attestation verification
-/// @dev Inherits verification capabilities from TpmVerifier and AkCollateralVerifier.
-///      Coordinates with BaseImageRegistry and WorkloadRegistry to enforce platform and workload policies.
-contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier, OwnableUpgradeable, UUPSUpgradeable {
+/// @dev Inherits TPM verification capabilities from TpmVerifier and delegates AK collateral
+///      verification to a separate contract to keep this implementation deployable under EIP-170.
+contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, UUPSUpgradeable {
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -80,6 +79,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
     /// @notice Signature verifier for owner authentication
     ISignatureVerifier public immutable signatureVerifier;
+
+    /// @notice AK collateral verifier for Azure MAA JWT and GCP cert-chain verification
+    IAkCollateralVerifier public immutable akCollateralVerifier;
 
     /// @notice Base image registry for platform profile and variant lookups
     IBaseImageRegistry public immutable baseImageRegistry;
@@ -174,30 +176,24 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     /// @notice Initializes SessionRegistry with all dependency contracts
     /// @param teeVerifier_ TEE verifier for TEE attestation report verification
     /// @param tpmAttestation_ TPM attestation verifier from automata-tpm-attestation
-    /// @param signatureVerifier_ Signature verifier for owner auth + MAA JWT verification
+    /// @param signatureVerifier_ Signature verifier for owner auth
+    /// @param akCollateralVerifier_ AK collateral verifier for Azure MAA JWT and GCP cert-chain verification
     /// @param baseImageRegistry_ Base image registry for platform profiles
     /// @param workloadRegistry_ Workload registry for workload policies
-    /// @param maaKeyRegistry_ MAA signing key directory used by AkCollateralVerifier for AzureMaaJwt
     constructor(
         ITeeVerifier teeVerifier_,
         ITpmAttestation tpmAttestation_,
         ISignatureVerifier signatureVerifier_,
+        IAkCollateralVerifier akCollateralVerifier_,
         IBaseImageRegistry baseImageRegistry_,
-        IWorkloadRegistry workloadRegistry_,
-        IMaaKeyRegistry maaKeyRegistry_
-    ) TpmBase(tpmAttestation_) AkCollateralVerifier(maaKeyRegistry_) {
+        IWorkloadRegistry workloadRegistry_
+    ) TpmBase(tpmAttestation_) {
         teeVerifier = teeVerifier_;
         signatureVerifier = signatureVerifier_;
+        akCollateralVerifier = akCollateralVerifier_;
         baseImageRegistry = baseImageRegistry_;
         workloadRegistry = workloadRegistry_;
         _disableInitializers();
-    }
-
-    /// @dev AkCollateralVerifier requires a virtual getter for the ISignatureVerifier used to
-    ///      verify MAA JWT signatures (Azure path); we satisfy it by returning the same
-    ///      immutable used for owner authentication, keeping a single source of truth.
-    function _signatureVerifier() internal view override returns (ISignatureVerifier) {
-        return signatureVerifier;
     }
 
     /// @notice Initializes the contract with the initial owner
@@ -672,13 +668,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 3: AK Collateral + TEE↔vTPM Binding
         // ─────────────────────────────────────────────────────────────────────────────────
-        AkCollateralVerificationResult memory akResult = verifyAkCollateral(evidence.akPubCollateral);
+        AkCollateralVerificationResult memory akResult =
+            akCollateralVerifier.verifyAkCollateral(evidence.akPubCollateral);
         if (!akResult.valid) {
             revert AKCollateralVerificationFailed();
         }
 
         // Verify TEE-AK binding and get expected PCR15 for GCP
-        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, akResult, evidence);
+        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence);
 
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 4: TPM Quote Verification
@@ -985,14 +982,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
     /// @dev Verifies TEE-AK binding based on cloud provider and TEE type
     /// @param teeResult TEE verification result (contains reportData)
-    /// @param akResult AK collateral verification result (contains bindingHash)
     /// @param evidence Attestation evidence bundle
     /// @return expectedPcr15 Expected PCR15 value for GCP binding (zero for Azure)
-    function _verifyTeeAkBinding(
-        TeeVerificationResult memory teeResult,
-        AkCollateralVerificationResult memory akResult,
-        AttestationEvidence calldata evidence
-    ) private view returns (bytes32 expectedPcr15) {
+    function _verifyTeeAkBinding(TeeVerificationResult memory teeResult, AttestationEvidence calldata evidence)
+        private
+        pure
+        returns (bytes32 expectedPcr15)
+    {
         if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt) {
             // Azure binding is anchored end-to-end inside verifyAkCollateral (§8.3.1, §14.9):
             // the MAA-signed JWT covers `tdx_report_data` / `x-ms-sevsnpvm-reportdata` which

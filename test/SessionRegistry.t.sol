@@ -8,6 +8,7 @@ import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
+import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
 import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
@@ -56,6 +57,7 @@ contract SessionRegistryTest is Test {
     TpmAttestation public tpmAttestation;
     TeeVerifier public teeVerifier;
     MaaKeyRegistry public maaKeyRegistry;
+    AkCollateralVerifier public akCollateralVerifier;
 
     address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
     address constant owner = address(0x1234);
@@ -104,9 +106,12 @@ contract SessionRegistryTest is Test {
         ERC1967Proxy maaProxy = new ERC1967Proxy(address(maaImpl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
         maaKeyRegistry = MaaKeyRegistry(address(maaProxy));
 
+        // Deploy AK collateral verifier separately so SessionRegistry remains under EIP-170.
+        akCollateralVerifier = new AkCollateralVerifier(maaKeyRegistry, signatureVerifier, tpmAttestation);
+
         // Deploy SessionRegistry implementation
         SessionRegistry impl = new SessionRegistry(
-            teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry, maaKeyRegistry
+            teeVerifier, tpmAttestation, signatureVerifier, akCollateralVerifier, baseImageRegistry, workloadRegistry
         );
 
         // Deploy behind ERC1967 proxy. The proxy address MUST be 0xc2cfa7345c4ec6daee4d82136ebd3483c65ef650

@@ -6,6 +6,8 @@ import {DeployTeeVerifier} from "./DeployTeeVerifier.s.sol";
 import {DeployBaseImageRegistry} from "./DeployBaseImageRegistry.s.sol";
 import {DeployWorkloadRegistry} from "./DeployWorkloadRegistry.s.sol";
 import {DeployKeyResolver} from "./DeployKeyResolver.s.sol";
+import {DeployMaaKeyRegistry} from "./DeployMaaKeyRegistry.s.sol";
+import {DeployAkCollateralVerifier} from "./DeployAkCollateralVerifier.s.sol";
 import {DeploySessionRegistry} from "./DeploySessionRegistry.s.sol";
 import "forge-std/console.sol";
 
@@ -26,6 +28,8 @@ contract DeployProd is
     DeployBaseImageRegistry,
     DeployWorkloadRegistry,
     DeployKeyResolver,
+    DeployMaaKeyRegistry,
+    DeployAkCollateralVerifier,
     DeploySessionRegistry
 {
     function run()
@@ -36,6 +40,8 @@ contract DeployProd is
             DeployBaseImageRegistry,
             DeployWorkloadRegistry,
             DeployKeyResolver,
+            DeployMaaKeyRegistry,
+            DeployAkCollateralVerifier,
             DeploySessionRegistry
         )
     {
@@ -49,6 +55,8 @@ contract DeployProd is
         deployBaseImageRegistryProxy(address(0));
         deployWorkloadRegistryProxy(address(0));
         deployKeyResolverProxy(address(0));
+        deployMaaKeyRegistryProxy(address(0));
+        deployAkCollateralVerifier();
 
         // 3. SessionRegistry last (depends on all others)
         deploySessionRegistryProxy(address(0));

@@ -7,7 +7,9 @@ import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestati
 import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
 import {MockTpmAttestation} from "../src/mock/MockTpmAttestation.sol";
 import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
+import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
+import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
 import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
@@ -41,6 +43,7 @@ contract DeployMock is Script, DeploymentConfig {
         SessionRegistry sessionRegistry;
         TeeVerifier teeVerifier;
         MockTpmAttestation tpmAttestation;
+        AkCollateralVerifier akCollateralVerifier;
         MockAutomataDcapAttestation dcapAttestation;
         MockAutomataSnpAttestation snpAttestation;
     }
@@ -75,14 +78,21 @@ contract DeployMock is Script, DeploymentConfig {
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
         console.log("Using MaaKeyRegistry at:", maaKeyRegistryAddr);
 
+        d.akCollateralVerifier = new AkCollateralVerifier(
+            IMaaKeyRegistry(maaKeyRegistryAddr),
+            ISignatureVerifier(signatureVerifierAddr),
+            ITpmAttestation(address(d.tpmAttestation))
+        );
+        console.log("AkCollateralVerifier deployed at:", address(d.akCollateralVerifier));
+
         // 5. SessionRegistry with mock TEE/TPM but real signature verification
         d.sessionRegistry = new SessionRegistry(
             ITeeVerifier(address(d.teeVerifier)),
             ITpmAttestation(address(d.tpmAttestation)),
             ISignatureVerifier(signatureVerifierAddr),
+            IAkCollateralVerifier(address(d.akCollateralVerifier)),
             IBaseImageRegistry(baseImageRegistryAddr),
-            IWorkloadRegistry(workloadRegistryAddr),
-            IMaaKeyRegistry(maaKeyRegistryAddr)
+            IWorkloadRegistry(workloadRegistryAddr)
         );
         console.log("Mock SessionRegistry deployed at:", address(d.sessionRegistry));
     }
@@ -110,6 +120,7 @@ contract DeployMock is Script, DeploymentConfig {
     /// @notice Write deployed addresses to deployment JSON.
     function _writeMockAddresses(MockDeployment memory d) internal {
         writeToJson("TeeVerifierMock", address(d.teeVerifier));
+        writeToJson("AkCollateralVerifierMock", address(d.akCollateralVerifier));
         writeToJson("SessionRegistryMock", address(d.sessionRegistry));
     }
 

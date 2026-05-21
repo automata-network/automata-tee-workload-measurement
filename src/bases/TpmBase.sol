@@ -5,10 +5,7 @@ import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interf
 
 /// @title TpmBase
 /// @notice Base contract for TPM attestation verification with shared immutable reference
-/// @dev Resolves diamond inheritance when multiple contracts need tpmAttestation.
-///      SessionRegistry inherits both TpmVerifier and AkCollateralVerifier, which both
-///      require ITpmAttestation. By extracting to a common base, Solidity's C3 linearization
-///      ensures a single instance of the immutable is shared across the inheritance chain.
+/// @dev Shared by contracts that need access to the Automata TPM attestation verifier.
 abstract contract TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - TPM Attestation Contract

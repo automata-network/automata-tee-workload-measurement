@@ -7,9 +7,9 @@ import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
+import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
-import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {PcrSpec, PcrVerifyType} from "../src/types/Common.sol";
 import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 
@@ -21,9 +21,9 @@ contract SessionRegistryHarness is SessionRegistry {
             ITeeVerifier(address(0)),
             ITpmAttestation(address(0)),
             ISignatureVerifier(address(0)),
+            IAkCollateralVerifier(address(0)),
             IBaseImageRegistry(address(0)),
-            IWorkloadRegistry(address(0)),
-            IMaaKeyRegistry(address(0))
+            IWorkloadRegistry(address(0))
         )
     {}
 

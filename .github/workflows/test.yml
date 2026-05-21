@@ -35,14 +35,8 @@ jobs:
 
       - name: Run Forge build
         run: |
-          forge build
-        id: build
-
-      - name: Report Forge contract sizes
-        run: |
           forge build --sizes
-        continue-on-error: true
-        id: sizes
+        id: build
 
       - name: Run Forge tests
         run: |

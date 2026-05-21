@@ -6,9 +6,9 @@ import {SESSION_REGISTRY_IMPL_SALT, SESSION_REGISTRY_PROXY_SALT} from "./utils/S
 import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
+import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
-import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -18,25 +18,25 @@ contract DeploySessionRegistry is DeploymentConfig {
     function _deploySessionRegistryImpl() internal returns (address) {
         address teeVerifierAddr = readContractAddress("TeeVerifier");
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
+        address akCollateralVerifierAddr = readContractAddress("AkCollateralVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
-        address maaKeyRegistryAddr = readContractAddress("MaaKeyRegistry");
         address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
 
         console.log("Using TeeVerifier at:", teeVerifierAddr);
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
+        console.log("Using AkCollateralVerifier at:", akCollateralVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
-        console.log("Using MaaKeyRegistry at:", maaKeyRegistryAddr);
         console.log("Using TPM attestation at:", tpmAttestationAddr);
 
         SessionRegistry impl = new SessionRegistry{salt: SESSION_REGISTRY_IMPL_SALT}(
             ITeeVerifier(teeVerifierAddr),
             ITpmAttestation(tpmAttestationAddr),
             ISignatureVerifier(signatureVerifierAddr),
+            IAkCollateralVerifier(akCollateralVerifierAddr),
             IBaseImageRegistry(baseImageRegistryAddr),
-            IWorkloadRegistry(workloadRegistryAddr),
-            IMaaKeyRegistry(maaKeyRegistryAddr)
+            IWorkloadRegistry(workloadRegistryAddr)
         );
         console.log("SessionRegistry implementation deployed at:", address(impl));
         writeToJson("SessionRegistryImpl", address(impl));
