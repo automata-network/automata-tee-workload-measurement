@@ -7,6 +7,8 @@ import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
+import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
 import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
@@ -40,7 +42,8 @@ import {
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
     WORKLOAD_DOMAIN,
-    ALGO_ID_ES256K
+    ALGO_ID_ES256K,
+    KEY_DOMAIN
 } from "../src/types/Constants.sol";
 
 contract SessionRegistryTest is Test {
@@ -53,6 +56,8 @@ contract SessionRegistryTest is Test {
     MockAutomataSnpAttestation public mockSnp;
     TpmAttestation public tpmAttestation;
     TeeVerifier public teeVerifier;
+    MaaKeyRegistry public maaKeyRegistry;
+    AkCollateralVerifier public akCollateralVerifier;
 
     address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
     address constant owner = address(0x1234);
@@ -63,8 +68,11 @@ contract SessionRegistryTest is Test {
     function setUp() public {
         _deployP256();
 
-        // Warp to a valid timestamp (2025-01-01) for certificate validation
-        vm.warp(1770568586);
+        // Warp to a timestamp valid for the GCP vTPM AK leaf cert embedded in
+        // test/fixtures/session_register.hex (issued 2026-05-20, ~1779285600).
+        // Sits just before the session expireAt of 1779285919 so all expiry
+        // checks pass at this single timestamp.
+        vm.warp(1779285800);
 
         // Set up owner identity
         ownerIdentity = PublicIdentity({
@@ -91,13 +99,39 @@ contract SessionRegistryTest is Test {
         // Deploy TeeVerifier (wraps DCAP + SNP into single contract)
         teeVerifier = new TeeVerifier(mockDcap, mockSnp);
 
-        // Deploy SessionRegistry implementation (5 args, not 6)
-        SessionRegistry impl =
-            new SessionRegistry(teeVerifier, tpmAttestation, signatureVerifier, baseImageRegistry, workloadRegistry);
+        // Deploy MaaKeyRegistry behind a proxy (UUPS, owner-initialized).
+        // Required for SessionRegistry construction even when tests don't exercise the
+        // AzureMaaJwt path — the immutable reference is set in the constructor.
+        MaaKeyRegistry maaImpl = new MaaKeyRegistry();
+        ERC1967Proxy maaProxy = new ERC1967Proxy(address(maaImpl), abi.encodeCall(MaaKeyRegistry.initialize, (owner)));
+        maaKeyRegistry = MaaKeyRegistry(address(maaProxy));
 
-        // Deploy behind ERC1967 proxy and call initialize
+        // Deploy AK collateral verifier separately so SessionRegistry remains under EIP-170.
+        akCollateralVerifier = new AkCollateralVerifier(maaKeyRegistry, signatureVerifier, tpmAttestation);
+
+        // Deploy SessionRegistry implementation
+        SessionRegistry impl = new SessionRegistry(
+            teeVerifier, tpmAttestation, signatureVerifier, akCollateralVerifier, baseImageRegistry, workloadRegistry
+        );
+
+        // Deploy behind ERC1967 proxy. The proxy address MUST be 0xc2cfa7345c4ec6daee4d82136ebd3483c65ef650
+        // because test/fixtures/session_register.hex carries a TPM quote whose extraData binds
+        // `address(this)` to that exact address (see SessionRegistry.sol::_verifyTpmQuoteWithNonce).
+        // Construct the proxy normally, then relocate its runtime code + ERC1967 impl slot to the
+        // target via vm.etch / vm.store so address(this) inside session-register matches the quote.
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeCall(SessionRegistry.initialize, (owner)));
-        sessionRegistry = SessionRegistry(address(proxy));
+        address sessionRegistryAddr = 0xC2CFa7345C4Ec6daeE4D82136EBd3483C65Ef650;
+        vm.etch(sessionRegistryAddr, address(proxy).code);
+        // ERC1967 implementation slot: keccak256("eip1967.proxy.implementation") - 1
+        bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+        vm.store(sessionRegistryAddr, implSlot, vm.load(address(proxy), implSlot));
+        // OwnableUpgradeable namespaced storage (ERC-7201 "openzeppelin.storage.Ownable")
+        bytes32 ownableSlot = 0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300;
+        vm.store(sessionRegistryAddr, ownableSlot, vm.load(address(proxy), ownableSlot));
+        // Initializable namespaced storage (ERC-7201 "openzeppelin.storage.Initializable")
+        bytes32 initSlot = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
+        vm.store(sessionRegistryAddr, initSlot, vm.load(address(proxy), initSlot));
+        sessionRegistry = SessionRegistry(sessionRegistryAddr);
 
         // Add GCP vTPM Root CA to TpmAttestation
         tpmAttestation.addCA(_gcpRootCa());
@@ -140,9 +174,14 @@ contract SessionRegistryTest is Test {
     }
 
     function _registerBaseImage() internal returns (bytes32 baseImageId) {
-        // BaseImage spec
-        BaseImageSpec memory spec =
-            BaseImageSpec({name: "automata-linux", version: "v0.0.6", uri: "https://github.com"});
+        // BaseImage spec - matches the production publish of `dev-baseimage:v0.0.3-noverify`
+        // on anvil-fork (chain 31337). Together with the gcp-tdx profile + c3-standard-4
+        // variant below this produces:
+        //   baseImageId        = 0x7cf44b1f9796e8063c664163d731bc8a842553bb4ae49d5204ddb8bfda443421
+        //   profileId(gcp-tdx) = 0x53b0d43d5e0eae2b0c529eab77cc2c4a12b7e9e93fdb30fa67aa982d1e2fff0b
+        //   variantId(c3-4)    = 0x58269ef9f72fa10972f7140af74bf0dc8ebaab1e8986747370687e6d5454dad8
+        // Those are the IDs embedded in test/fixtures/session_register.hex.
+        BaseImageSpec memory spec = BaseImageSpec({name: "dev-baseimage", version: "v0.0.3-noverify", uri: ""});
 
         // Platform profiles
         PlatformProfile[] memory platformProfiles = new PlatformProfile[](2);
@@ -162,7 +201,9 @@ contract SessionRegistryTest is Test {
             platformProfiles[0] = PlatformProfile({name: "gcp-snp", invariants: new PcrSpec[](0), attributes: attrs1});
         }
 
-        // Profile 2: gcp-tdx
+        // Profile 2: gcp-tdx — invariants mirror the actual published profile for
+        // `dev-baseimage:v0.0.3-noverify` so the session-time PCR-spec check matches
+        // the quote bytes inside session_register.hex.
         {
             Attribute[] memory attrs2 = new Attribute[](2);
             attrs2[0] = Attribute({
@@ -174,7 +215,8 @@ contract SessionRegistryTest is Test {
                 value: 0x34bef19ef372626c712f3e728d74b5544a621e4ba1df121959d2b6c15b51a989
             });
 
-            platformProfiles[1] = PlatformProfile({name: "gcp-tdx", invariants: new PcrSpec[](0), attributes: attrs2});
+            platformProfiles[1] =
+                PlatformProfile({name: "gcp-tdx", invariants: _gcpTdxInvariants(), attributes: attrs2});
         }
 
         // Measurement variants (parallel array with platformProfiles)
@@ -188,12 +230,12 @@ contract SessionRegistryTest is Test {
         measurementVariants[1] = new MeasurementVariant[](1);
         measurementVariants[1][0] = _createC3Standard4Variant();
 
-        uint64 expireAt = 1770547477;
+        // SignatureVerifier.verify is mocked to true in setUp, so the signature
+        // bytes here are filler; expireAt just has to be in the future relative
+        // to the test's block.timestamp set in setUp.
+        uint64 expireAt = 1900000000;
         bytes memory signature =
             hex"e51236c453cad477b48d11c448cdcab96fe6e94ed306fd02ee7d0251e6dc37264ba08f0ac5823adf62f0d7746fde131c52d7ba954886e98848cd11f37753d7c51b";
-
-        // Warp to before expiration
-        vm.warp(expireAt - 1000);
 
         baseImageId = baseImageRegistry.registerBaseImage(
             spec, platformProfiles, measurementVariants, expireAt, ownerIdentity, signature
@@ -239,50 +281,78 @@ contract SessionRegistryTest is Test {
     }
 
     function _createC3Standard4Variant() internal pure returns (MeasurementVariant memory) {
-        PcrSpec[] memory pcrs = new PcrSpec[](8);
-
-        bytes32[] memory matchData0 = new bytes32[](1);
-        matchData0[0] = 0x0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802;
-        pcrs[0] = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: matchData0});
-
-        bytes32[] memory matchData2 = new bytes32[](1);
-        matchData2[0] = 0x0fb87efae3c3aee3e0ee8e85c5149b1985d442f4bed22afdce0610bb55ee4270;
-        pcrs[1] = PcrSpec({pcrIndex: 2, verifyType: PcrVerifyType.STATIC, matchData: matchData2});
-
-        bytes32[] memory matchData4 = new bytes32[](1);
-        matchData4[0] = 0xc36d9e765efa54f2981707bb7dec3c38385476cf91a413f7d85dced9f092e21f;
-        pcrs[2] = PcrSpec({pcrIndex: 4, verifyType: PcrVerifyType.STATIC, matchData: matchData4});
-
-        bytes32[] memory matchData7 = new bytes32[](1);
-        matchData7[0] = 0xa11c5239a222bb78072c2c73caa691bb9a0f118de2d95cdce1fce06711e4d3ed;
-        pcrs[3] = PcrSpec({pcrIndex: 7, verifyType: PcrVerifyType.STATIC, matchData: matchData7});
-
-        bytes32[] memory matchData9 = new bytes32[](1);
-        matchData9[0] = 0x41551ed5a5003d5174f42a03b77d1cb2be954acca10cfb7eae040e99f4d8284a;
-        pcrs[4] = PcrSpec({pcrIndex: 9, verifyType: PcrVerifyType.STATIC, matchData: matchData9});
-
-        bytes32[] memory matchData11 = new bytes32[](1);
-        matchData11[0] = 0x0000000000000000000000000000000000000000000000000000000000000000;
-        pcrs[5] = PcrSpec({pcrIndex: 11, verifyType: PcrVerifyType.STATIC, matchData: matchData11});
-
-        bytes32[] memory matchData16 = new bytes32[](1);
-        matchData16[0] = 0x0000000000000000000000000000000000000000000000000000000000000000;
-        pcrs[6] = PcrSpec({pcrIndex: 16, verifyType: PcrVerifyType.STATIC, matchData: matchData16});
-
-        bytes32[] memory matchData23 = new bytes32[](1);
-        matchData23[0] = 0x0000000000000000000000000000000000000000000000000000000000000000;
-        pcrs[7] = PcrSpec({pcrIndex: 23, verifyType: PcrVerifyType.STATIC, matchData: matchData23});
+        // Override PCR 10 only — the machine-type-dependent value for c3-standard-4
+        // on dev-baseimage:v0.0.3-noverify, gcp-tdx. PCRs 0-9, 11 are invariants on
+        // the parent profile (see `_gcpTdxInvariants`).
+        PcrSpec[] memory pcrs = new PcrSpec[](1);
+        bytes32[] memory matchData10 = new bytes32[](1);
+        matchData10[0] = 0x0dcd89f3f240aef5a3c8ab38f2863b9c43c034a2e9ddfef94a22fbc8475512a1;
+        pcrs[0] = PcrSpec({pcrIndex: 10, verifyType: PcrVerifyType.STATIC, matchData: matchData10});
 
         return MeasurementVariant({name: "c3-standard-4", overridePcrs: pcrs, attributes: new Attribute[](0)});
+    }
+
+    /// Invariant PCR specs for the gcp-tdx profile, mirroring the values published
+    /// to BaseImageRegistry for dev-baseimage:v0.0.3-noverify. PCR 1 is a
+    /// dynamic_subsequence over the 4 informational events the supervisor extends;
+    /// the rest are STATIC. PCR 10 is the c3-standard-4 variant override.
+    function _gcpTdxInvariants() internal pure returns (PcrSpec[] memory pcrs) {
+        pcrs = new PcrSpec[](10);
+
+        bytes32[] memory m0 = new bytes32[](1);
+        m0[0] = 0x0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802;
+        pcrs[0] = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: m0});
+
+        bytes32[] memory m1 = new bytes32[](4);
+        m1[0] = 0x67abdd721024f0ff4e0b3f4c2fc13bc5bad42d0b7851d456d88d203d15aaa450;
+        m1[1] = 0x2be7a459e309c7bb7888fb58283987fe1c0bd1d3c1be276bc9e97693e65c8d49;
+        m1[2] = 0x3197be1e300fa1600d1884c3a4bd4a90a15405bfb546cf2e6cf6095f8c362a93;
+        m1[3] = 0xdf3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119;
+        pcrs[1] = PcrSpec({pcrIndex: 1, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: m1});
+
+        bytes32[] memory m2 = new bytes32[](1);
+        m2[0] = 0x7ab930b20bed71cc3769c54fd001c78d45ebcf4c9bd7975b069df89eb3f1b0ea;
+        pcrs[2] = PcrSpec({pcrIndex: 2, verifyType: PcrVerifyType.STATIC, matchData: m2});
+
+        bytes32[] memory m3 = new bytes32[](1);
+        m3[0] = 0x3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969;
+        pcrs[3] = PcrSpec({pcrIndex: 3, verifyType: PcrVerifyType.STATIC, matchData: m3});
+
+        bytes32[] memory m4 = new bytes32[](1);
+        m4[0] = 0x7a94ffe8a7729a566d3d3c577fcb4b6b1e671f31540375f80eae6382ab785e35;
+        pcrs[4] = PcrSpec({pcrIndex: 4, verifyType: PcrVerifyType.STATIC, matchData: m4});
+
+        bytes32[] memory m5 = new bytes32[](1);
+        m5[0] = 0xa5ceb755d043f32431d63e39f5161464620a3437280494b5850dc1b47cc074e0;
+        pcrs[5] = PcrSpec({pcrIndex: 5, verifyType: PcrVerifyType.STATIC, matchData: m5});
+
+        bytes32[] memory m6 = new bytes32[](1);
+        m6[0] = 0x3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969;
+        pcrs[6] = PcrSpec({pcrIndex: 6, verifyType: PcrVerifyType.STATIC, matchData: m6});
+
+        bytes32[] memory m7 = new bytes32[](1);
+        m7[0] = 0x293ceeaa07a7c92a2c827e6913e0a797302e266e467d95658409c4c6fecb42d9;
+        pcrs[7] = PcrSpec({pcrIndex: 7, verifyType: PcrVerifyType.STATIC, matchData: m7});
+
+        bytes32[] memory m9 = new bytes32[](1);
+        m9[0] = 0x939f4140387903019111b2be7cfaa68de373b27ffeb1a14a56d55a3de927ff00;
+        pcrs[8] = PcrSpec({pcrIndex: 9, verifyType: PcrVerifyType.STATIC, matchData: m9});
+
+        bytes32[] memory m11 = new bytes32[](1);
+        m11[0] = 0x97dfff0e175560961f9a69a9a91e050f7ce67bd976b4c2b47a7af62d586cdf66;
+        pcrs[9] = PcrSpec({pcrIndex: 11, verifyType: PcrVerifyType.STATIC, matchData: m11});
     }
 
     function _registerWorkload(bytes32 baseImageId) internal returns (bytes32 workloadId) {
         bytes32[] memory baseImageIds = new bytes32[](1);
         baseImageIds[0] = baseImageId;
 
+        // name/version match the workload published as the counterpart to the
+        // baseimage above, producing workloadId 0x45504f5c...215ae82181 — the
+        // workloadId encoded in test/fixtures/session_register.hex.
         WorkloadSpec memory spec = WorkloadSpec({
-            name: "secure-signer",
-            version: "v0.0.6",
+            name: "fedora-oci",
+            version: "v0.0.9",
             ttl: 0,
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: baseImageIds,
@@ -290,12 +360,9 @@ contract SessionRegistryTest is Test {
             pcrs: new PcrSpec[](0)
         });
 
-        uint64 expireAt = 1770547589;
+        uint64 expireAt = 1900000000;
         bytes memory signature =
             hex"4517531794e04ee1f950e7b1bd016ea460e1fe06e5c222469676642080f01d3b4b0f9090064717d49708001bf77958490bec3e3c18dc11f385932d9aca0a88311c";
-
-        // Warp to before expiration
-        vm.warp(expireAt - 1000);
 
         workloadId = workloadRegistry.registerWorkload(spec, expireAt, ownerIdentity, signature);
     }
@@ -392,6 +459,91 @@ contract SessionRegistryTest is Test {
     function sessionCalldata() private view returns (bytes memory) {
         string memory hexString = vm.readFile("test/fixtures/session_register.hex");
         return vm.parseBytes(hexString);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────
+    // Revoke-cascade tests
+    //
+    // _isSessionActive must fail-closed when the underlying workload or baseimage is
+    // revoked, even if the session row itself is still alive (exists, !isRevoked,
+    // !expired). Without this, a compromised baseimage's live sessions would keep
+    // producing valid signatures until expiresAt.
+    //
+    // To exercise the gate without re-capturing the registerSession fixture, these
+    // tests inject a synthetic session row via vm.store. CVMSessionStorage layout
+    // (slot 0 of struct): exists(byte0) + isRevoked(byte1) packed in slot +0; owner
+    // at +1; CVMSession at +2..+9; expiresAt is the high 8 bytes of slot +9.
+    // ─────────────────────────────────────────────────────────────────────────────────
+
+    function _seedActiveSession(bytes32 baseImageId, bytes32 workloadId, uint64 expiresAt)
+        internal
+        returns (bytes32 sessionId)
+    {
+        sessionId = keccak256(abi.encodePacked("cascade-test-session", baseImageId, workloadId));
+        uint256 base = uint256(keccak256(abi.encode(sessionId, uint256(0))));
+
+        // exists=1, isRevoked=0 (packed in slot+0)
+        vm.store(address(sessionRegistry), bytes32(base + 0), bytes32(uint256(1)));
+        // CVMSession.baseImageId at +5, CVMSession.workloadId at +6
+        vm.store(address(sessionRegistry), bytes32(base + 5), baseImageId);
+        vm.store(address(sessionRegistry), bytes32(base + 6), workloadId);
+        // CVMSession.registeredAt | expiresAt packed at +9 (uint64+uint64)
+        uint256 packed = (uint256(expiresAt) << 64) | uint64(block.timestamp);
+        vm.store(address(sessionRegistry), bytes32(base + 9), bytes32(packed));
+    }
+
+    function testIsSessionActiveCascade_BaseImageRevoke() public {
+        bytes32 baseImageId = _registerBaseImage();
+        bytes32 workloadId = _registerWorkload(baseImageId);
+        bytes32 sessionId = _seedActiveSession(baseImageId, workloadId, uint64(block.timestamp + 1 days));
+
+        assertTrue(sessionRegistry.isSessionActive(sessionId), "baseline: session active");
+
+        // signatureVerifier.verify is mocked to true in setUp, so an empty sig passes
+        baseImageRegistry.deactivateBaseImage(baseImageId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
+
+        assertFalse(
+            sessionRegistry.isSessionActive(sessionId), "cascade: session must report inactive after baseimage revoke"
+        );
+    }
+
+    function testIsSessionActiveCascade_WorkloadRevoke() public {
+        bytes32 baseImageId = _registerBaseImage();
+        bytes32 workloadId = _registerWorkload(baseImageId);
+        bytes32 sessionId = _seedActiveSession(baseImageId, workloadId, uint64(block.timestamp + 1 days));
+
+        assertTrue(sessionRegistry.isSessionActive(sessionId), "baseline: session active");
+
+        workloadRegistry.deactivateWorkload(workloadId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
+
+        assertFalse(
+            sessionRegistry.isSessionActive(sessionId), "cascade: session must report inactive after workload revoke"
+        );
+    }
+
+    function testVerifySessionSignatureCascade_BaseImageRevoke() public {
+        bytes32 baseImageId = _registerBaseImage();
+        bytes32 workloadId = _registerWorkload(baseImageId);
+        bytes32 sessionId = _seedActiveSession(baseImageId, workloadId, uint64(block.timestamp + 1 days));
+
+        // Seed sessionKeyFingerprint so the fingerprint match check passes pre-revoke.
+        PublicIdentity memory sessionKey = ownerIdentity;
+        bytes32 sessionKeyFingerprint = keccak256(abi.encode(KEY_DOMAIN, sessionKey.typeId, sessionKey.key));
+        uint256 base = uint256(keccak256(abi.encode(sessionId, uint256(0))));
+        // CVMSession.sessionKeyFingerprint at +4
+        vm.store(address(sessionRegistry), bytes32(base + 4), sessionKeyFingerprint);
+
+        assertTrue(
+            sessionRegistry.verifySessionSignature(sessionId, sessionKey, bytes32(uint256(0xdeadbeef)), ""),
+            "baseline: signature valid"
+        );
+
+        baseImageRegistry.deactivateBaseImage(baseImageId, uint64(block.timestamp + 1 hours), ownerIdentity, "");
+
+        assertFalse(
+            sessionRegistry.verifySessionSignature(sessionId, sessionKey, bytes32(uint256(0xdeadbeef)), ""),
+            "cascade: verifySessionSignature must fail after baseimage revoke"
+        );
     }
 
     function _deployP256() private {

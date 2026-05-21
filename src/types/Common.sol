@@ -45,8 +45,11 @@ struct PcrSpec {
     PcrVerifyType verifyType;
     /// @dev Match data interpretation depends on verifyType:
     ///      - STATIC: matchData[0] = expected PCR final value
-    ///      - DYNAMIC_SUBSET: matchData = set of allowed event hashes (any subset valid)
-    ///      - DYNAMIC_SUBSEQUENCE: matchData = required event sequence (must appear in order)
+    ///      - DYNAMIC_SUBSET: matchData = set of allowed event hashes. Reported event log must be
+    ///        a non-empty subset (empty event log is rejected — no cumulative-hash verification
+    ///        occurs when events are empty, so empty would bypass the policy entirely).
+    ///      - DYNAMIC_SUBSEQUENCE: matchData = required event sequence (must appear in order in
+    ///        a non-empty event log; empty event log is rejected for the same reason).
     bytes32[] matchData;
 }
 

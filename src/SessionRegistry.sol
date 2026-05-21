@@ -5,12 +5,12 @@ import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interf
 import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
+import {IAkCollateralVerifier, AkCollateralVerificationResult} from "./interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "./interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISessionRegistry, CVMSessionStorage} from "./interfaces/registries/ISessionRegistry.sol";
 import {TeeVerificationResult} from "./types/Evidence.sol";
 import {TpmVerifier, TpmQuoteVerificationResult, TpmCertifyVerificationResult, TpmBase} from "./bases/TpmVerifier.sol";
-import {AkCollateralVerifier, AkCollateralVerificationResult} from "./bases/AkCollateralVerifier.sol";
 import {
     CVMSession,
     PublicIdentity,
@@ -47,9 +47,9 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 
 /// @title SessionRegistry
 /// @notice Central orchestrator for CVM session registration with 9-step attestation verification
-/// @dev Inherits verification capabilities from TpmVerifier and AkCollateralVerifier.
-///      Coordinates with BaseImageRegistry and WorkloadRegistry to enforce platform and workload policies.
-contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier, OwnableUpgradeable, UUPSUpgradeable {
+/// @dev Inherits TPM verification capabilities from TpmVerifier and delegates AK collateral
+///      verification to a separate contract to keep this implementation deployable under EIP-170.
+contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, UUPSUpgradeable {
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -79,6 +79,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
     /// @notice Signature verifier for owner authentication
     ISignatureVerifier public immutable signatureVerifier;
+
+    /// @notice AK collateral verifier for Azure MAA JWT and GCP cert-chain verification
+    IAkCollateralVerifier public immutable akCollateralVerifier;
 
     /// @notice Base image registry for platform profile and variant lookups
     IBaseImageRegistry public immutable baseImageRegistry;
@@ -171,22 +174,25 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Initializes SessionRegistry with all dependency contracts
-    /// @param _teeVerifier TEE verifier for TEE attestation report verification
-    /// @param _tpmAttestation TPM attestation verifier from automata-tpm-attestation
-    /// @param _signatureVerifier Signature verifier for owner authentication
-    /// @param _baseImageRegistry Base image registry for platform profiles
-    /// @param _workloadRegistry Workload registry for workload policies
+    /// @param teeVerifier_ TEE verifier for TEE attestation report verification
+    /// @param tpmAttestation_ TPM attestation verifier from automata-tpm-attestation
+    /// @param signatureVerifier_ Signature verifier for owner auth
+    /// @param akCollateralVerifier_ AK collateral verifier for Azure MAA JWT and GCP cert-chain verification
+    /// @param baseImageRegistry_ Base image registry for platform profiles
+    /// @param workloadRegistry_ Workload registry for workload policies
     constructor(
-        ITeeVerifier _teeVerifier,
-        ITpmAttestation _tpmAttestation,
-        ISignatureVerifier _signatureVerifier,
-        IBaseImageRegistry _baseImageRegistry,
-        IWorkloadRegistry _workloadRegistry
-    ) TpmBase(_tpmAttestation) {
-        teeVerifier = _teeVerifier;
-        signatureVerifier = _signatureVerifier;
-        baseImageRegistry = _baseImageRegistry;
-        workloadRegistry = _workloadRegistry;
+        ITeeVerifier teeVerifier_,
+        ITpmAttestation tpmAttestation_,
+        ISignatureVerifier signatureVerifier_,
+        IAkCollateralVerifier akCollateralVerifier_,
+        IBaseImageRegistry baseImageRegistry_,
+        IWorkloadRegistry workloadRegistry_
+    ) TpmBase(tpmAttestation_) {
+        teeVerifier = teeVerifier_;
+        signatureVerifier = signatureVerifier_;
+        akCollateralVerifier = akCollateralVerifier_;
+        baseImageRegistry = baseImageRegistry_;
+        workloadRegistry = workloadRegistry_;
         _disableInitializers();
     }
 
@@ -265,8 +271,28 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         // STEP 9: Owner Signature Verification + Session Creation
         // ─────────────────────────────────────────────────────────────────────────────────
 
-        // Verify owner signature over session registration message
-        bytes32 message = sha256(abi.encode(SESSION_REGISTER_MSG, block.chainid, address(this), expireAt, sessionId));
+        // Verify owner signature over the full session-registration tuple. The owner sig
+        // explicitly authorizes (sessionId, workloadId, baseImageId, platformProfileId,
+        // variantId, sessionKeyFingerprint) — not just an opaque sessionId. Without those
+        // fields in the digest, a compromised in-CVM agent could ask the TPM to sign a
+        // delegation for a different (W, B) tuple and submit on behalf of the operator
+        // while the operator's wallet thought it was authorizing the legitimate workload.
+        // sessionKeyFingerprint is also covered by the delegation signature (defense in
+        // depth).
+        bytes32 message = sha256(
+            abi.encode(
+                SESSION_REGISTER_MSG,
+                block.chainid,
+                address(this),
+                expireAt,
+                sessionId,
+                workloadId,
+                baseImageId,
+                platformProfileId,
+                variantId,
+                sessionKeyFingerprint
+            )
+        );
         _requireSignature(ownerIdentity, message, ownerSignature);
 
         // Create session with TTL handling (default: 30 days)
@@ -642,13 +668,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 3: AK Collateral + TEE↔vTPM Binding
         // ─────────────────────────────────────────────────────────────────────────────────
-        AkCollateralVerificationResult memory akResult = verifyAkCollateral(evidence.akPubCollateral);
+        AkCollateralVerificationResult memory akResult =
+            akCollateralVerifier.verifyAkCollateral(evidence.akPubCollateral);
         if (!akResult.valid) {
             revert AKCollateralVerificationFailed();
         }
 
         // Verify TEE-AK binding and get expected PCR15 for GCP
-        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, akResult, evidence);
+        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence);
 
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 4: TPM Quote Verification
@@ -713,9 +740,17 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         }
     }
 
-    /// @dev Checks if a session exists and is active
+    /// @dev Checks if a session exists and is active.
+    /// @dev Cascades through the underlying workload + baseimage revocation flags: revoking either
+    ///      flips every dependent session inactive on the next read (fail-closed). Without this,
+    ///      live sessions on a compromised baseimage/workload would keep producing valid signatures
+    ///      until their own expiresAt or explicit per-session revoke.
     function _isSessionActive(CVMSessionStorage storage sessionStorage) private view returns (bool) {
-        return sessionStorage.exists && !sessionStorage.isRevoked && block.timestamp <= sessionStorage.session.expiresAt;
+        if (!sessionStorage.exists || sessionStorage.isRevoked) return false;
+        if (block.timestamp > sessionStorage.session.expiresAt) return false;
+        if (workloadRegistry.isWorkloadRevoked(sessionStorage.session.workloadId)) return false;
+        if (baseImageRegistry.isBaseImageRevoked(sessionStorage.session.baseImageId)) return false;
+        return true;
     }
 
     /// @dev Looks up and validates policy components (workload, base image, variant)
@@ -761,7 +796,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         bytes32 ownerFingerprint
     ) private returns (PcrValue[] memory pcrValues, bytes32 tpmSignatureHash) {
         uint256 nonce = _ownerNonces[ownerFingerprint];
-        bytes32 expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, ownerFingerprint, nonce));
+        bytes32 expectedExtraData =
+            keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce));
 
         TpmQuoteVerificationResult memory quoteResult =
             verifyTpmQuote(tpmQuoteReport, akPub, abi.encodePacked(expectedExtraData));
@@ -816,8 +852,17 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     ) private view returns (bytes32 sessionKeyFingerprint) {
         sessionKeyFingerprint = LibKey.computeKeyFingerprint(sessionKey);
 
-        bytes32 delegationMessage =
-            keccak256(abi.encode(DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint));
+        bytes32 delegationMessage = keccak256(
+            abi.encode(
+                DELEGATION_DOMAIN,
+                block.chainid,
+                address(this),
+                baseImageId,
+                workloadId,
+                sessionId,
+                sessionKeyFingerprint
+            )
+        );
 
         if (!signatureVerifier.verify(certifiedKey, delegationMessage, sessionKeySignature)) {
             revert SessionKeyDelegationFailed();
@@ -843,7 +888,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     ) private view {
         bytes32 rotationMessage = keccak256(
             abi.encode(
-                ROTATION_DOMAIN, oldSessionId, certifiedKeyFingerprint, sessionKeyFingerprint, teeReportBytesHash
+                ROTATION_DOMAIN,
+                block.chainid,
+                address(this),
+                oldSessionId,
+                certifiedKeyFingerprint,
+                sessionKeyFingerprint,
+                teeReportBytesHash
             )
         );
 
@@ -931,31 +982,21 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
 
     /// @dev Verifies TEE-AK binding based on cloud provider and TEE type
     /// @param teeResult TEE verification result (contains reportData)
-    /// @param akResult AK collateral verification result (contains bindingHash)
     /// @param evidence Attestation evidence bundle
     /// @return expectedPcr15 Expected PCR15 value for GCP binding (zero for Azure)
-    function _verifyTeeAkBinding(
-        TeeVerificationResult memory teeResult,
-        AkCollateralVerificationResult memory akResult,
-        AttestationEvidence calldata evidence
-    ) private view returns (bytes32 expectedPcr15) {
-        if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureAkPubJson) {
-            // Azure binding: reportData[0:32] == sha256(akCollateral.data)
-            bytes memory reportData = teeVerifier.extractDcapReportData(teeResult.reportData);
-
-            bytes32 reportDataHash;
-            bytes32 reportDataPadding;
-            assembly ("memory-safe") {
-                reportDataHash := mload(add(reportData, 0x20))
-                reportDataPadding := mload(add(reportData, 0x40))
-            }
-
-            // first 32 bytes is hash, next 32 bytes should be zero padding
-            if (reportDataHash != akResult.bindingHash || reportDataPadding != bytes32(0)) {
-                revert TEEAKBindingFailed();
-            }
-
-            return bytes32(0); // No PCR15 binding for Azure
+    function _verifyTeeAkBinding(TeeVerificationResult memory teeResult, AttestationEvidence calldata evidence)
+        private
+        pure
+        returns (bytes32 expectedPcr15)
+    {
+        if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt) {
+            // Azure binding is anchored end-to-end inside verifyAkCollateral (§8.3.1, §14.9):
+            // the MAA-signed JWT covers `tdx_report_data` / `x-ms-sevsnpvm-reportdata` which
+            // commits to sha256(hclVarData), and verifyAkCollateral has already cross-checked
+            // sha256(hclVarData) against that claim. The on-chain teeReport is independently
+            // verified for hardware signature in Step 2; we do NOT re-check its REPORT_DATA
+            // against akResult.bindingHash here. No PCR15 binding for Azure.
+            return bytes32(0);
         } else if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.GcpCertChain) {
             // GCP binding: different logic based on TEE type
             if (teeResult.teeType == TEEType.IntelTDX) {
@@ -983,13 +1024,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
         // Extract actual RTMR3 (48 bytes) from quote body at offset 472
         Bytes48 memory actualRtmr3 = LibBytes.readBytes48(quoteBody, DCAP_RTMR3_OFFSET);
 
-        // Compute expected RTMR3 = sha384( bytes48(0) || sha384(UUID) )
-        Bytes48 memory uuidHash = Sha2Ext.sha384(uuidBytes);
+        // Expected RTMR3 = sha384( bytes48(0) || (bytes32(0) || UUID) ).
+        // The extend value is the 16-byte UUID left-padded with 32 zero
+        // bytes to fill the SHA-384 register width — no intermediate hash.
         Bytes48 memory expectedRtmr3 = Sha2Ext.sha384(
             abi.encodePacked(
-                new bytes(48), // 48 zero bytes
-                uuidHash.first,
-                uuidHash.second // 48-byte inner hash
+                new bytes(48), // previous RTMR3 (reset value: 48 zero bytes)
+                new bytes(32), // UUID zero-pad to 48 bytes
+                uuidBytes
             )
         );
 
@@ -997,9 +1039,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
             revert TEEAKBindingFailed();
         }
 
-        // ── PCR15 Computation (unchanged) ────────────────────────────────────
-        bytes32 innerPcr = sha256(uuidBytes);
-        expectedPcr15 = sha256(abi.encodePacked(bytes32(0), innerPcr));
+        // ── PCR15 Computation ────────────────────────────────────────────────
+        // Expected PCR15 = sha256( bytes32(0) || (bytes16(0) || UUID) ).
+        // Same zero-pad convention in the SHA-256 bank.
+        expectedPcr15 = sha256(abi.encodePacked(bytes32(0), bytes16(0), uuidBytes));
 
         return expectedPcr15;
     }
@@ -1142,15 +1185,25 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
     /// @dev Evaluates a single PCR spec against a measured PCR value
     /// @param spec PCR specification
     /// @param measured Measured PCR value
-    function _evaluateSinglePcr(PcrSpec memory spec, PcrValue memory measured) private pure {
+    function _evaluateSinglePcr(PcrSpec memory spec, PcrValue memory measured) internal pure {
         if (spec.verifyType == PcrVerifyType.STATIC) {
             // STATIC: exact value match
             if (measured.value != spec.matchData[0]) {
                 revert PCRVerificationFailed();
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSET) {
-            // DYNAMIC_SUBSET: eventLogHashes ⊆ matchData
+            // DYNAMIC_SUBSET: eventLogHashes ⊆ matchData, and eventLogHashes MUST be non-empty.
+            //
+            // An empty event log would trivially satisfy "subset of anything" under set theory,
+            // but it bypasses the policy entirely: the TPM lib only cross-checks the PCR value
+            // against the event hash chain when events are present, so an attacker can submit
+            // any `value` with `eventLogHashes = []` and the cumulative measurement is never
+            // verified. DYNAMIC_SUBSET semantically means "this PCR is extended at runtime with
+            // events from the allow-list"; zero events does not satisfy that intent.
             uint256 measuredLen = measured.eventLogHashes.length;
+            if (measuredLen == 0) {
+                revert PCRVerificationFailed();
+            }
             uint256 matchLen = spec.matchData.length;
             for (uint256 i = 0; i < measuredLen;) {
                 bool found = false;
@@ -1171,8 +1224,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, AkCollateralVerifier,
                 }
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSEQUENCE) {
-            // DYNAMIC_SUBSEQUENCE: matchData is subsequence of eventLogHashes
+            // DYNAMIC_SUBSEQUENCE: matchData is subsequence of eventLogHashes. Empty event log
+            // is rejected for the same reason as DYNAMIC_SUBSET (no event hash chain verification).
+            // The matchIdx != matchLen check below already catches this when matchData is
+            // non-empty (rejected at registration), but the explicit guard documents intent.
             uint256 measuredLen = measured.eventLogHashes.length;
+            if (measuredLen == 0) {
+                revert PCRVerificationFailed();
+            }
             uint256 matchLen = spec.matchData.length;
             uint256 matchIdx = 0;
             for (uint256 i = 0; i < measuredLen && matchIdx < matchLen;) {

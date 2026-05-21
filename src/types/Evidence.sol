@@ -41,8 +41,14 @@ struct ZkProof {
 
 /// @notice Attestation Key (AK) public key collateral format
 enum AkPubCollateralType {
-    /// @dev Azure: JSON-encoded AK public key from vTPM
-    AzureAkPubJson,
+    /// @dev Azure: abi.encode((bytes jwt, bytes hclVarData))
+    ///      jwt: Microsoft Azure Attestation-signed JWT (RS256) from /attest/TdxVm or
+    ///           /attest/SevSnpVm, signed by a per-region MAA RSA-2048 key registered in
+    ///           MaaKeyRegistry. JWT carries iss / x-ms-attestation-type /
+    ///           x-ms-compliance-status / tdx_report_data or x-ms-sevsnpvm-reportdata claims.
+    ///      hclVarData: JSON document from vTPM NV 0x01400001; contains HCLAkPub JWK.
+    ///      See on-chain-registry-design.md §8.3.1, §14.9.
+    AzureMaaJwt,
     /// @dev GCP: X.509 certificate chain from vTPM endorsement
     GcpCertChain
 }
@@ -89,7 +95,14 @@ struct TpmReport {
 
 /// @notice TPM Quote report containing PCR measurements and signature
 struct TpmQuoteReport {
-    /// @dev TPM2B_ATTEST structure (TPM 2.0 spec Part 2, Section 10.12.8)
+    /// @dev Marshalled `TPMS_ATTEST` (TPM 2.0 spec Part 2, Section 10.12.8) —
+    ///      type field = TPM2_ST_ATTEST_QUOTE. The bytes start with the TPM2.0
+    ///      magic `0xFF544347` at offset 0; callers MUST strip the 2-byte
+    ///      `TPM2B_ATTEST` size prefix that the TPM ABI returns. TPM2.0
+    ///      signatures are computed over `TPMS_ATTEST` (not the size-prefixed
+    ///      `TPM2B_ATTEST`), and `LibTpm.parseAttestHeaders` reverts with
+    ///      `InvalidTpmMagic()` if the prefix is present. The historical
+    ///      `tpm2bAttest` name is preserved for backwards compat.
     bytes tpm2bAttest;
     /// @dev TPMT_SIGNATURE structure over tpm2bAttest (TPM 2.0 spec Part 2, Section 11.2.3)
     bytes tpmSignature;
@@ -99,21 +112,23 @@ struct TpmQuoteReport {
 
 /// @notice TPM Certify report for key certification
 struct TpmCertifyReport {
-    /// @dev TPM2B_ATTEST structure for TPM2_Certify command
+    /// @dev Marshalled `TPMS_ATTEST` for TPM2_Certify (type = TPM2_ST_ATTEST_CERTIFY).
+    ///      Same wire-format rule as `TpmQuoteReport.tpm2bAttest`: no `TPM2B`
+    ///      size prefix.
     bytes tpm2bAttest;
     /// @dev TPMT_SIGNATURE structure over tpm2bAttest
     bytes tpmSignature;
-    /// @dev TPM2B_PUBLIC structure of the certified key
+    /// @dev TPMT_PUBLIC structure of the certified key (attributes at offset 4)
     bytes tpmtPublic;
 }
 
 /// @notice Attestation Key public key collateral for AK authentication
 struct AkPubCollateral {
-    /// @dev Format of the collateral data (Azure JSON or GCP cert chain)
+    /// @dev Format of the collateral data (Azure MAA JWT bundle or GCP cert chain)
     AkPubCollateralType akPubCollateralType;
     /// @dev Polymorphic data field:
-    ///      - AzureAkPubJson: JSON-encoded AK public key
-    ///      - GcpCertChain: X.509 certificate chain (DER-encoded)
+    ///      - AzureMaaJwt: abi.encode((bytes jwt, bytes hclVarData))
+    ///      - GcpCertChain: X.509 certificate chain (DER-encoded, abi.encoded bytes[])
     bytes data;
 }
 
@@ -127,7 +142,8 @@ struct AttestationEvidence {
     TpmReport tpmCertifyReport;
     /// @dev Attestation Key public key collateral
     AkPubCollateral akPubCollateral;
-    /// @dev Delegation signature: tpmSigningKey signs sessionKey fingerprint
+    /// @dev Delegation signature by tpmSigningKey over keccak256(abi.encode(
+    ///      DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint))
     bytes sessionKeySignature;
     /// @dev Session public key (operational key for application use)
     PublicIdentity sessionKey;

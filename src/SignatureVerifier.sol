@@ -28,7 +28,7 @@ contract SignatureVerifier is ISignatureVerifier {
         P256_VERIFIER_ADDRESS = p256VerifierAddress;
     }
 
-    function verify(PublicIdentity calldata identity, bytes32 hash, bytes calldata signature)
+    function verify(PublicIdentity calldata identity, bytes32 message, bytes calldata signature)
         external
         view
         returns (bool valid)
@@ -36,11 +36,11 @@ contract SignatureVerifier is ISignatureVerifier {
         uint8 typeId = identity.typeId;
 
         if (typeId == ALGO_ID_RS256) {
-            return _verifyRsa(identity.key, hash, signature);
+            return _verifyRsa(identity.key, message, signature);
         } else if (typeId == ALGO_ID_ES256) {
-            return _verifyP256(identity.key, hash, signature);
+            return _verifyP256(identity.key, message, signature);
         } else if (typeId == ALGO_ID_ES256K) {
-            return _verifySecp256k1(identity.key, hash, signature);
+            return _verifySecp256k1(identity.key, message, signature);
         } else {
             revert UnsupportedAlgorithm(typeId);
         }
@@ -48,10 +48,14 @@ contract SignatureVerifier is ISignatureVerifier {
 
     /// @dev Verifies RSA PKCS#1 v1.5 SHA-256 signature
     /// @param key DER-encoded PKCS#1 RSAPublicKey (SEQUENCE { INTEGER n, INTEGER e })
-    /// @param hash Message digest
+    /// @param message Message digest
     /// @param signature Raw RSA signature bytes
     /// @return valid True if signature is valid
-    function _verifyRsa(bytes calldata key, bytes32 hash, bytes calldata signature) internal view returns (bool valid) {
+    function _verifyRsa(bytes calldata key, bytes32 message, bytes calldata signature)
+        internal
+        view
+        returns (bool valid)
+    {
         // Copy key from calldata to memory (Asn1Decode requires memory)
         bytes memory keyMem = key;
 
@@ -68,15 +72,15 @@ contract SignatureVerifier is ISignatureVerifier {
         bytes memory sigMem = signature;
 
         // Verify using OpenZeppelin RSA library
-        return RSA.pkcs1Sha256(hash, sigMem, e, n);
+        return RSA.pkcs1Sha256(message, sigMem, e, n);
     }
 
     /// @dev Verifies ECDSA P-256 signature via external verifier contract
     /// @param key SEC1 uncompressed point (65 bytes: 0x04 || x || y)
-    /// @param hash Message digest
+    /// @param message Message digest
     /// @param signature DER-encoded ECDSA signature (SEQUENCE { INTEGER r, INTEGER s })
     /// @return valid True if signature is valid
-    function _verifyP256(bytes calldata key, bytes32 hash, bytes calldata signature)
+    function _verifyP256(bytes calldata key, bytes32 message, bytes calldata signature)
         internal
         view
         returns (bool valid)
@@ -94,7 +98,7 @@ contract SignatureVerifier is ISignatureVerifier {
         (bytes32 r, bytes32 s) = _decodeDerEcdsaSignature(signature);
 
         // Call external P256 verifier via staticcall
-        bytes memory args = abi.encode(hash, r, s, x, y);
+        bytes memory args = abi.encode(message, r, s, x, y);
         (bool success, bytes memory ret) = P256_VERIFIER_ADDRESS.staticcall(args);
 
         if (!success || ret.length != 32) {
@@ -107,10 +111,10 @@ contract SignatureVerifier is ISignatureVerifier {
 
     /// @dev Verifies ECDSA secp256k1 signature via ecrecover
     /// @param key SEC1 uncompressed point (65 bytes: 0x04 || x || y)
-    /// @param hash Message digest
+    /// @param message Message digest
     /// @param signature Ethereum-style signature (65 bytes: r || s || v)
     /// @return valid True if signature is valid
-    function _verifySecp256k1(bytes calldata key, bytes32 hash, bytes calldata signature)
+    function _verifySecp256k1(bytes calldata key, bytes32 message, bytes calldata signature)
         internal
         pure
         returns (bool valid)
@@ -125,7 +129,7 @@ contract SignatureVerifier is ISignatureVerifier {
         address expectedAddress = address(uint160(uint256(keccak256(key[1:65]))));
 
         // Recover signer address from signature (using calldata variant to avoid copy)
-        (address recovered, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(hash, signature);
+        (address recovered, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(message, signature);
 
         // Valid only if recovery succeeded and address matches
         return err == ECDSA.RecoverError.NoError && recovered == expectedAddress;

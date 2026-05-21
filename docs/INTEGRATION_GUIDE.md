@@ -206,7 +206,9 @@ import {BaseImageSpec, PlatformProfile, MeasurementVariant, WorkloadSpec} from
 // Get base image info
 BaseImageSpec memory spec = baseImageRegistry.getBaseImage(baseImageId);
 
-// Get all three tiers in one call
+// Get all three tiers in one call. Reverts HierarchyMismatch unless the
+// supplied platformProfileId was registered under baseImageId and variantId
+// was registered under platformProfileId.
 (BaseImageSpec memory img, PlatformProfile memory profile, MeasurementVariant memory variant) =
     baseImageRegistry.getVariant(baseImageId, platformProfileId, variantId);
 

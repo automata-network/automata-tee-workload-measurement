@@ -44,14 +44,14 @@ abstract contract TpmVerifier is TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @dev Required attribute bits for TPM certify verification
-    /// fixedTPM (0x2) | fixedParent (0x10) | sensitiveDataOrigin (0x20) | sign (0x40000)
-    uint32 internal constant TPMA_OBJECT_REQUIRED_SET = 0x40032;
+    /// fixedTPM (0x2) | fixedParent (0x10) | sensitiveDataOrigin (0x20) | userWithAuth (0x40) | sign (0x40000)
+    uint32 internal constant TPMA_OBJECT_REQUIRED_SET = 0x40072;
 
     /// @dev Forbidden attribute bits for TPM certify verification
-    /// All reserved bits and security-critical flags that must be zero
-    /// Allowed bits (may be 0 or 1): {1,2,4,5,6,7,10,18} = 0x000404F6
-    /// Everything else must be zero: ~0x000404F6 = 0xFFFBFB09
-    uint32 internal constant TPMA_OBJECT_REQUIRED_CLEAR = 0xFFFBFB09;
+    /// Allowed bits (may be 0 or 1): {1,4,5,6,10,18} = 0x00040472
+    /// Everything else must be zero: ~0x00040472 = 0xFFFBFB8D
+    /// stClear (bit 2) and adminWithPolicy (bit 7) are explicitly forbidden.
+    uint32 internal constant TPMA_OBJECT_REQUIRED_CLEAR = 0xFFFBFB8D;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors

@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {WorkloadSpec, PublicIdentity, AccessMode, PcrSpec, AttributeRequirement} from "./types/Common.sol";
+import {
+    WorkloadSpec,
+    PublicIdentity,
+    AccessMode,
+    PcrSpec,
+    PcrVerifyType,
+    AttributeRequirement
+} from "./types/Common.sol";
 import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
@@ -27,6 +34,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error SignatureExpired();
     error InvalidPcrOrder();
     error PcrIndexOutOfRange(uint8 pcrIndex);
+    error EmptyMatchData(uint8 pcrIndex);
     error DuplicateRequirementKey(bytes32 key);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
@@ -261,6 +269,13 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             }
             if (i > 0 && idx <= prevIdx) {
                 revert InvalidPcrOrder();
+            }
+            PcrVerifyType vt = pcrs[i].verifyType;
+            if (
+                (vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE)
+                    && pcrs[i].matchData.length == 0
+            ) {
+                revert EmptyMatchData(idx);
             }
             prevIdx = idx;
         }

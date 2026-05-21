@@ -6,6 +6,7 @@ import {SESSION_REGISTRY_IMPL_SALT, SESSION_REGISTRY_PROXY_SALT} from "./utils/S
 import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
+import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
@@ -17,12 +18,14 @@ contract DeploySessionRegistry is DeploymentConfig {
     function _deploySessionRegistryImpl() internal returns (address) {
         address teeVerifierAddr = readContractAddress("TeeVerifier");
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
+        address akCollateralVerifierAddr = readContractAddress("AkCollateralVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
         address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
 
         console.log("Using TeeVerifier at:", teeVerifierAddr);
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
+        console.log("Using AkCollateralVerifier at:", akCollateralVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
         console.log("Using TPM attestation at:", tpmAttestationAddr);
@@ -31,6 +34,7 @@ contract DeploySessionRegistry is DeploymentConfig {
             ITeeVerifier(teeVerifierAddr),
             ITpmAttestation(tpmAttestationAddr),
             ISignatureVerifier(signatureVerifierAddr),
+            IAkCollateralVerifier(akCollateralVerifierAddr),
             IBaseImageRegistry(baseImageRegistryAddr),
             IWorkloadRegistry(workloadRegistryAddr)
         );

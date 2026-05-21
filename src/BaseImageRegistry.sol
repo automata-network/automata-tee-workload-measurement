@@ -7,6 +7,7 @@ import {
     MeasurementVariant,
     PublicIdentity,
     PcrSpec,
+    PcrVerifyType,
     Attribute
 } from "./types/Common.sol";
 import {
@@ -45,12 +46,25 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error BaseImageNotActive(bytes32 baseImageId);
     error PlatformProfileNotFound(bytes32 platformProfileId);
     error MeasurementVariantNotFound(bytes32 variantId);
+    error MeasurementVariantAlreadyExists(bytes32 variantId);
+    /// @notice Thrown by getVariant when the (baseImageId, platformProfileId, variantId)
+    ///         triple is not a valid parent-child chain (each id exists in isolation but
+    ///         the platform profile / variant was registered under a different parent).
+    error HierarchyMismatch(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId);
+    /// @dev `registerBaseImage` saw two entries in its `platformProfiles` input with the
+    ///      same `name` — without this guard the second would silently overwrite the first's
+    ///      metadata and push a duplicate id into `platformProfileIds`. `addPlatformVariants`
+    ///      does NOT raise this error; it tolerates re-submitted profile metadata silently
+    ///      (§14.2 documented resolution) so operator tooling that resubmits a full
+    ///      PlatformProfile struct alongside new variants keeps working.
+    error PlatformProfileAlreadyExists(bytes32 profileId);
     error ArrayLengthMismatch();
     error InvalidSignature();
     error Unauthorized();
     error SignatureExpired();
     error InvalidPcrOrder();
     error PcrIndexOutOfRange(uint8 pcrIndex);
+    error EmptyMatchData(uint8 pcrIndex);
     error DuplicateAttributeKey(bytes32 key);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
@@ -168,12 +182,21 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         _baseImages[baseImageId].owner = ownerFingerprint;
         _baseImages[baseImageId].spec = spec;
 
-        // Store platform profiles and variants
+        // Store platform profiles and variants. Within this single call, profile.name and
+        // variant.name must each be unique per profile — duplicates in the input arrays would
+        // otherwise silently overwrite an earlier entry's metadata and push a duplicate id
+        // into the parent's `platformProfileIds` / `variantIds` list (corrupt invariant).
+        // The exists checks reject those duplicates explicitly; the same guards exist on the
+        // `addPlatformVariants` path.
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
 
             // Compute platform profile ID
             bytes32 platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name));
+
+            if (_platformProfiles[platformProfileId].exists) {
+                revert PlatformProfileAlreadyExists(platformProfileId);
+            }
 
             // Store platform profile
             _platformProfiles[platformProfileId].exists = true;
@@ -189,6 +212,10 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
                 // Compute variant ID
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
+
+                if (_variants[variantId].exists) {
+                    revert MeasurementVariantAlreadyExists(variantId);
+                }
 
                 // Store variant
                 _variants[variantId].exists = true;
@@ -307,25 +334,32 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             revert InvalidSignature();
         }
 
-        // Upsert platform profiles and variants
+        // Append-only: existing profile and variant ids cannot be overwritten.
+        // For an existing profile, only its variant set may grow — the stored
+        // invariants and attributes are kept as-is and any re-submitted profile
+        // metadata is ignored. New (variantId) values are stored fresh. Any
+        // attempt to re-register a variantId that already exists reverts.
+        // This prevents post-hoc relaxation of PCR specs / attributes on
+        // policies that downstream sessions already reference. To publish a
+        // stricter or looser policy, owners must mint a fresh base image with
+        // a bumped name or version. See on-chain-registry-design.md §14.2.
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
 
             // Compute platform profile ID (deterministic from base image + profile name)
             bytes32 platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name));
 
-            // Only push to tracking array if this is a new profile
+            // Store profile only if new; never overwrite existing profile metadata.
+            // Submitted invariants/attributes on an already-registered profile are
+            // silently dropped — see PlatformProfileAlreadyExists doc.
             if (!_platformProfiles[platformProfileId].exists) {
+                _platformProfiles[platformProfileId].exists = true;
+                _platformProfiles[platformProfileId].platformProfile = profile;
                 _baseImages[baseImageId].platformProfileIds.push(platformProfileId);
+                emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
             }
 
-            // Store/overwrite platform profile data
-            _platformProfiles[platformProfileId].exists = true;
-            _platformProfiles[platformProfileId].platformProfile = profile;
-
-            emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
-
-            // Upsert measurement variants for this profile
+            // Append measurement variants for this profile
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
@@ -333,14 +367,13 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 // Compute variant ID (deterministic from profile + variant name)
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
 
-                // Only push to tracking array if this is a new variant
-                if (!_variants[variantId].exists) {
-                    _platformProfiles[platformProfileId].variantIds.push(variantId);
+                if (_variants[variantId].exists) {
+                    revert MeasurementVariantAlreadyExists(variantId);
                 }
 
-                // Store/overwrite variant data
                 _variants[variantId].exists = true;
                 _variants[variantId].measurementVariant = variant;
+                _platformProfiles[platformProfileId].variantIds.push(variantId);
 
                 emit MeasurementVariantRegistered(platformProfileId, variantId, variant.name);
             }
@@ -378,6 +411,13 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     }
 
     /// @inheritdoc IBaseImageRegistry
+    /// @dev Hierarchy binding: child IDs are computed deterministically from their parent
+    ///      (platformProfileId = keccak256(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name);
+    ///       variantId = keccak256(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name)).
+    ///      Existence alone is insufficient — without re-deriving and comparing, a caller
+    ///      could pass a platformProfileId/variantId that exists but was registered under a
+    ///      different baseImageId/platformProfileId, mixing unrelated PCR policy with a
+    ///      target base image. SessionRegistry._lookupPolicy depends on this guarantee.
     function getVariant(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
         external
         view
@@ -395,6 +435,19 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
         if (!_variants[variantId].exists) {
             revert MeasurementVariantNotFound(variantId);
+        }
+
+        // Recompute child IDs from the provided parent and the stored child name;
+        // by collision resistance, a match proves the child was registered under that
+        // exact parent. Otherwise reject the triple.
+        bytes32 expectedProfileId = keccak256(
+            abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, _platformProfiles[platformProfileId].platformProfile.name)
+        );
+        bytes32 expectedVariantId = keccak256(
+            abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, _variants[variantId].measurementVariant.name)
+        );
+        if (expectedProfileId != platformProfileId || expectedVariantId != variantId) {
+            revert HierarchyMismatch(baseImageId, platformProfileId, variantId);
         }
 
         return (
@@ -481,6 +534,19 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             }
             if (i > 0 && idx <= prevIdx) {
                 revert InvalidPcrOrder();
+            }
+            // DYNAMIC variants with empty matchData would accept any reported
+            // event log (subset of nothing is always nothing) or trivially
+            // satisfy the subsequence condition — neither is a meaningful
+            // policy. STATIC is allowed to have any matchData length here
+            // (the session-evaluator reads matchData[0]), since a zero-length
+            // STATIC array reverts at session time with an array-bounds panic.
+            PcrVerifyType vt = pcrs[i].verifyType;
+            if (
+                (vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE)
+                    && pcrs[i].matchData.length == 0
+            ) {
+                revert EmptyMatchData(idx);
             }
             prevIdx = idx;
         }

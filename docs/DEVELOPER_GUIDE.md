@@ -183,7 +183,7 @@ Additive/upsert semantics — new profiles and variants are added, existing ones
 - `getBaseImage(baseImageId)` → `BaseImageSpec`
 - `getPlatformProfile(platformProfileId)` → `PlatformProfile`
 - `getMeasurementVariant(variantId)` → `MeasurementVariant`
-- `getVariant(baseImageId, platformProfileId, variantId)` → all three specs in one call
+- `getVariant(baseImageId, platformProfileId, variantId)` → all three specs in one call; enforces parent-child binding (reverts `HierarchyMismatch` if the platform profile isn't registered under the supplied base image, or the variant isn't registered under the supplied platform profile)
 - `getBaseImageOwner(baseImageId)` → owner fingerprint
 - `isBaseImageRevoked(baseImageId)` → revocation status
 
@@ -352,14 +352,14 @@ Returns a `TeeVerificationResult` containing the validated report body and extra
 Verifies the Attestation Key (AK) and its binding to the TEE instance:
 
 - **Azure**: AK public key extracted from JSON collateral. Binding verified by checking that `reportData[0:32] == sha256(akCollateral)`.
-- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(zeros || sha384(UUID))`, where UUID is from `reportData[520:536]`. Also computes `expectedPcr15 = sha256(0x00 || sha256(UUID))`.
+- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. Also computes `expectedPcr15 = sha256(bytes32(0) || bytes16(0) || UUID)`. The 16-byte UUID is left-padded with zeros to fill each bank's register width (no intermediate hash).
 - **GCP (SNP)**: AK from X.509 chain. Binding via `report_id` at SNP report offset `0x140`. Computes `expectedPcr15 = sha256(0x00 || report_id)`.
 
 ### Step 4: TPM Quote Verification
 
 Verifies the TPM Quote report:
-- Validates the AK signature over the TPM2B_ATTEST structure
-- Checks nonce binding: `extraData == keccak256(SESSION_NONCE_DOMAIN, ownerFingerprint, currentNonce)`
+- Validates the AK signature over the marshalled `TPMS_ATTEST` (carried in the `tpm2bAttest` field; the historical name is preserved but the bytes have **no** `TPM2B` 2-byte size prefix — see `Evidence.sol`)
+- Checks nonce binding: `extraData == keccak256(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, currentNonce)`
 - Extracts measured PCR values from the quote
 
 This step ensures the PCR measurements are fresh and tied to this specific registration request.
@@ -381,7 +381,7 @@ sessionId = keccak256(abi.encode(SESSION_DOMAIN, keccak256(tpmSignature), keccak
 Verifies session key delegation — the TPM signing key authorizes the session key:
 ```
 delegationMessage = keccak256(abi.encode(
-    DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint
+    DELEGATION_DOMAIN, block.chainid, address(this), baseImageId, workloadId, sessionId, sessionKeyFingerprint
 ))
 ```
 
@@ -405,7 +405,10 @@ Evaluates application measurement policies:
 
 Verifies the owner's authorization:
 ```
-message = sha256(abi.encode(SESSION_REGISTER_MSG, chainId, address(this), expireAt, sessionId))
+message = sha256(abi.encode(
+    SESSION_REGISTER_MSG, chainId, address(this), expireAt, sessionId,
+    workloadId, baseImageId, platformProfileId, variantId, sessionKeyFingerprint
+))
 ```
 
 - Signature verified via `SignatureVerifier` against `ownerIdentity`
@@ -484,7 +487,7 @@ Replace TPM signing key and session key **without** full TEE re-attestation:
 3. Verify new TPM signing key certified by same AK
 4. Old TPM signing key signs rotation authorization:
    ```
-   keccak256(abi.encode(ROTATION_DOMAIN, oldSessionId, newTpmKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))
+   keccak256(abi.encode(ROTATION_DOMAIN, block.chainid, address(this), oldSessionId, newTpmKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))
    ```
 5. Compute new session ID from new TPM signature
 6. Verify new session key delegation
