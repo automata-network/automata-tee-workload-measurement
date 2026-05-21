@@ -176,8 +176,7 @@ contract SessionRegistryTest is Test {
         //   profileId(gcp-tdx) = 0x53b0d43d5e0eae2b0c529eab77cc2c4a12b7e9e93fdb30fa67aa982d1e2fff0b
         //   variantId(c3-4)    = 0x58269ef9f72fa10972f7140af74bf0dc8ebaab1e8986747370687e6d5454dad8
         // Those are the IDs embedded in test/fixtures/session_register.hex.
-        BaseImageSpec memory spec =
-            BaseImageSpec({name: "dev-baseimage", version: "v0.0.3-noverify", uri: ""});
+        BaseImageSpec memory spec = BaseImageSpec({name: "dev-baseimage", version: "v0.0.3-noverify", uri: ""});
 
         // Platform profiles
         PlatformProfile[] memory platformProfiles = new PlatformProfile[](2);
