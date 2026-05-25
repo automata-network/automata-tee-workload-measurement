@@ -65,9 +65,7 @@ contract PcrEvalEmptyEventLogTest is Test {
     function testDynamicSubset_RevertsOnEmptyEventLog() public {
         PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         PcrValue memory measured = _measured(new bytes32[](0));
-        vm.expectRevert(
-            abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSET)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSET));
         harness.evaluateSinglePcr(spec, measured);
     }
 
@@ -95,9 +93,7 @@ contract PcrEvalEmptyEventLogTest is Test {
         PcrSpec memory spec =
             PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
         PcrValue memory measured = _measured(new bytes32[](0));
-        vm.expectRevert(
-            abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSEQUENCE)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSEQUENCE));
         harness.evaluateSinglePcr(spec, measured);
     }
 
