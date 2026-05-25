@@ -71,13 +71,29 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice TEE type is not supported by this verifier
-    error UnsupportedTeeType();
+    error UnsupportedTeeType(TEEType actual);
 
     /// @notice Verification backend type is not supported for this TEE type
-    error UnsupportedBackendType();
+    error UnsupportedBackendType(TEEType teeType, VerificationBackendType backend);
 
-    /// @notice TEE Report is malformed or too short
-    error InvalidTeeReport();
+    /// @notice TEE report bytes are shorter than the minimum required for the format being parsed
+    error TeeReportTooShort(uint256 length, uint256 minRequired);
+
+    /// @notice DCAP quote bodyType field is neither TD10 (2) nor TD15 (3)
+    error UnsupportedDcapBodyType(uint16 bodyType);
+
+    /// @notice DCAP report-data slice would read past the end of the quote body
+    error DcapReportDataOob(uint256 length, uint256 minRequired);
+
+    /// @notice SNP raw report bytes are shorter than the minimum required to contain REPORT_DATA
+    error SnpReportTooShort(uint256 length, uint256 minRequired);
+
+    /// @notice The upstream DCAP verifier returned !success. The full output is included
+    ///         so off-chain decoders can surface the underlying reason.
+    error DcapVerificationFailed(bytes output);
+
+    /// @notice The upstream SNP verifier returned a non-Success VerificationResult.
+    error SnpVerificationFailed(VerificationResult result);
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -97,7 +113,7 @@ contract TeeVerifier is ITeeVerifier {
         } else {
             ZkProof memory zkProof = abi.decode(teeReport.data, (ZkProof));
             bytes memory zkOutput = zkProof.output;
-            require(zkOutput.length >= 32, InvalidTeeReport());
+            if (zkOutput.length < 32) revert TeeReportTooShort(zkOutput.length, 32);
             // get the last 32 bytes of the output
             bytes32 outputHash;
             assembly ("memory-safe") {
@@ -117,7 +133,7 @@ contract TeeVerifier is ITeeVerifier {
         } else if (teeReport.teeType == TEEType.AmdSevSnp) {
             return _verifyAmdSevSnp(teeReport);
         } else {
-            revert UnsupportedTeeType();
+            revert UnsupportedTeeType(teeReport.teeType);
         }
     }
 
@@ -127,7 +143,7 @@ contract TeeVerifier is ITeeVerifier {
     function extractDcapQuoteBody(bytes memory output) private pure returns (bytes memory quoteBody) {
         // Validate minimum length to read quoteBodyType
         if (output.length < 4) {
-            revert InvalidTeeReport();
+            revert TeeReportTooShort(output.length, 4);
         }
 
         // Read quoteBodyType (uint16 BE) from bytes [2:4]
@@ -146,12 +162,12 @@ contract TeeVerifier is ITeeVerifier {
         } else if (quoteBodyType == QUOTE_BODY_TYPE_TD15) {
             bodySize = TD15_QUOTE_BODY_SIZE;
         } else {
-            revert InvalidTeeReport();
+            revert UnsupportedDcapBodyType(quoteBodyType);
         }
 
         // Validate output length
         if (output.length < DCAP_QUOTE_BODY_OFFSET + bodySize) {
-            revert InvalidTeeReport();
+            revert TeeReportTooShort(output.length, DCAP_QUOTE_BODY_OFFSET + bodySize);
         }
 
         // Allocate quote body buffer
@@ -177,7 +193,7 @@ contract TeeVerifier is ITeeVerifier {
     function extractDcapReportData(bytes memory quoteBody) external pure returns (bytes memory reportData) {
         // Validate minimum length to contain reportData
         if (quoteBody.length < DCAP_MIN_OUTPUT_LEN) {
-            revert InvalidTeeReport();
+            revert DcapReportDataOob(quoteBody.length, DCAP_MIN_OUTPUT_LEN);
         }
 
         // Allocate reportData buffer
@@ -200,7 +216,7 @@ contract TeeVerifier is ITeeVerifier {
     function extractSnpAttestationReport(bytes memory rawReport) private pure returns (bytes memory attestationReport) {
         // Validate minimum length
         if (rawReport.length < SNP_MIN_REPORT_LEN) {
-            revert InvalidTeeReport();
+            revert SnpReportTooShort(rawReport.length, SNP_MIN_REPORT_LEN);
         }
 
         // rawReport IS the attestation report - return directly (no copy needed)
@@ -213,7 +229,7 @@ contract TeeVerifier is ITeeVerifier {
     function extractSnpReportData(bytes memory rawReport) external pure returns (bytes memory reportData) {
         // Validate minimum length to contain REPORT_DATA
         if (rawReport.length < SNP_MIN_REPORT_LEN) {
-            revert InvalidTeeReport();
+            revert SnpReportTooShort(rawReport.length, SNP_MIN_REPORT_LEN);
         }
 
         // Allocate reportData buffer
@@ -255,9 +271,10 @@ contract TeeVerifier is ITeeVerifier {
             (success, output) = dcapAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
         }
 
-        // If verification failed, return invalid result
+        // Surface DCAP failure with the verifier's raw output so off-chain decoders
+        // can pick out the specific reason (was silently swallowed before).
         if (!success) {
-            return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.IntelTDX});
+            revert DcapVerificationFailed(output);
         }
 
         // Extract quote body from DCAP output (Step 1)
@@ -272,7 +289,7 @@ contract TeeVerifier is ITeeVerifier {
     function _verifyAmdSevSnp(TeeReport memory teeReport) private returns (TeeVerificationResult memory result) {
         // SNP does not support Solidity backend (no on-chain verifier exists)
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
-            revert UnsupportedBackendType();
+            revert UnsupportedBackendType(TEEType.AmdSevSnp, teeReport.verificationBackendType);
         }
 
         // ZK proof verification
@@ -285,9 +302,9 @@ contract TeeVerifier is ITeeVerifier {
         VerifierJournal memory journal =
             snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
 
-        // If verification failed, return invalid result
+        // Surface SNP verifier failure mode (was silently swallowed before).
         if (journal.result != VerificationResult.Success) {
-            return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.AmdSevSnp});
+            revert SnpVerificationFailed(journal.result);
         }
 
         // Extract attestation report from SNP journal (Step 1)

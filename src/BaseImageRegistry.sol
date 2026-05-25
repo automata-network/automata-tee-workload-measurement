@@ -58,11 +58,13 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     ///      (§14.2 documented resolution) so operator tooling that resubmits a full
     ///      PlatformProfile struct alongside new variants keeps working.
     error PlatformProfileAlreadyExists(bytes32 profileId);
-    error ArrayLengthMismatch();
-    error InvalidSignature();
-    error Unauthorized();
-    error SignatureExpired();
-    error InvalidPcrOrder();
+    error ArrayLengthMismatch(uint256 platformProfilesLen, uint256 measurementVariantsLen);
+    error InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint);
+    error Unauthorized(bytes32 actualOwner, bytes32 expectedOwner);
+    error SignatureExpired(uint64 expireAt, uint64 nowTs);
+    /// @notice PCR spec list is not sorted strictly ascending by pcrIndex.
+    ///         prevIndex sits at i-1 and thisIndex at i in the input array.
+    error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
     error DuplicateAttributeKey(bytes32 key);
@@ -123,12 +125,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Validate parallel array invariant
         uint256 platformCount = platformProfiles.length;
         if (platformCount != measurementVariants.length) {
-            revert ArrayLengthMismatch();
+            revert ArrayLengthMismatch(platformCount, measurementVariants.length);
         }
 
         // Check signature expiration
         if (block.timestamp > expireAt) {
-            revert SignatureExpired();
+            revert SignatureExpired(expireAt, uint64(block.timestamp));
         }
 
         // Validate PCR ordering for profiles and variants
@@ -173,7 +175,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
+            revert InvalidSignature(message, ownerFingerprint);
         }
 
         // Store base image
@@ -238,7 +240,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     ) external {
         // Check signature expiration
         if (block.timestamp > expireAt) {
-            revert SignatureExpired();
+            revert SignatureExpired(expireAt, uint64(block.timestamp));
         }
 
         // Check exists and active
@@ -252,7 +254,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Compute owner fingerprint and verify ownership
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         if (_baseImages[baseImageId].owner != ownerFingerprint) {
-            revert Unauthorized();
+            revert Unauthorized(ownerFingerprint, _baseImages[baseImageId].owner);
         }
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
@@ -261,7 +263,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
+            revert InvalidSignature(message, ownerFingerprint);
         }
 
         // Deactivate
@@ -282,12 +284,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Validate parallel array invariant
         uint256 platformCount = platformProfiles.length;
         if (platformCount != measurementVariants.length) {
-            revert ArrayLengthMismatch();
+            revert ArrayLengthMismatch(platformCount, measurementVariants.length);
         }
 
         // Check signature expiration
         if (block.timestamp > expireAt) {
-            revert SignatureExpired();
+            revert SignatureExpired(expireAt, uint64(block.timestamp));
         }
 
         // Check exists and active
@@ -301,7 +303,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Compute owner fingerprint and verify ownership
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         if (_baseImages[baseImageId].owner != ownerFingerprint) {
-            revert Unauthorized();
+            revert Unauthorized(ownerFingerprint, _baseImages[baseImageId].owner);
         }
 
         // Validate PCR ordering and attribute uniqueness for all profiles and variants
@@ -331,7 +333,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         );
 
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
+            revert InvalidSignature(message, ownerFingerprint);
         }
 
         // Append-only: existing profile and variant ids cannot be overwritten.
@@ -533,7 +535,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 revert PcrIndexOutOfRange(idx);
             }
             if (i > 0 && idx <= prevIdx) {
-                revert InvalidPcrOrder();
+                revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
             // DYNAMIC variants with empty matchData would accept any reported
             // event log (subset of nothing is always nothing) or trivially

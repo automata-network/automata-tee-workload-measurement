@@ -24,10 +24,10 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
     error EmptyIssuerHash();
 
     /// @notice notAfter is in the past at submission time
-    error NotAfterInPast();
+    error NotAfterInPast(uint64 notAfter, uint64 nowTs);
 
     /// @notice Attempted to revoke a kid that was never registered
-    error KidNotRegistered();
+    error KidNotRegistered(bytes32 kidHash);
 
     // ============================================================================
     // Storage
@@ -65,7 +65,7 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
     {
         if (pkcs1Pubkey.length == 0) revert EmptyPubkey();
         if (issuerHash == bytes32(0)) revert EmptyIssuerHash();
-        if (notAfter < block.timestamp) revert NotAfterInPast();
+        if (notAfter < block.timestamp) revert NotAfterInPast(notAfter, uint64(block.timestamp));
 
         _keys[kidHash] =
             MaaSigningKey({pkcs1Pubkey: pkcs1Pubkey, issuerHash: issuerHash, notAfter: notAfter, revoked: false});
@@ -75,7 +75,7 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
 
     /// @inheritdoc IMaaKeyRegistry
     function revokeMaaSigningKey(bytes32 kidHash) external onlyOwner {
-        if (_keys[kidHash].pkcs1Pubkey.length == 0) revert KidNotRegistered();
+        if (_keys[kidHash].pkcs1Pubkey.length == 0) revert KidNotRegistered(kidHash);
         _keys[kidHash].revoked = true;
         emit MaaSigningKeyRevoked(kidHash);
     }

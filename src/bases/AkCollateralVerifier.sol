@@ -45,41 +45,62 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice AK collateral type is not supported
-    error UnsupportedAkCollateralType();
+    error UnsupportedAkCollateralType(AkPubCollateralType actual);
 
     /// @notice HCLAkPub JWK field extraction from hclVarData failed
     error AzureJwkParsingFailed();
 
-    /// @notice JWT could not be split into three base64url parts, or a part failed to decode
-    error MaaJwtMalformed();
+    /// @notice JWT could not be split into three base64url parts (header.claims.sig).
+    ///         segmentCount is the number of '.'-separated non-empty parts observed.
+    error MaaJwtStructureInvalid(uint8 segmentCount);
+
+    /// @notice Base64url decode of a JWT segment produced zero bytes.
+    ///         segment: 0=header, 1=claims, 2=signature.
+    error MaaJwtBase64DecodeFailed(uint8 segment);
 
     /// @notice JWT header `alg` is not "RS256"
-    error MaaJwtAlgUnsupported();
+    error MaaJwtAlgUnsupported(bytes32 algHash);
 
-    /// @notice JWT header is missing a required field
-    error MaaJwtHeaderClaimMissing();
+    /// @notice JWT header is missing a required field. fieldNameHash = keccak256(name).
+    ///         See FIELD_HASH_* constants for the canonical mapping.
+    error MaaJwtHeaderClaimMissing(bytes32 fieldNameHash);
 
-    /// @notice JWT claims is missing a required field
-    error MaaJwtClaimMissing();
+    /// @notice JWT claims object is missing a required field. fieldNameHash = keccak256(name).
+    error MaaJwtClaimMissing(bytes32 fieldNameHash);
 
     /// @notice kidHash lookup returned an empty / revoked / expired key
-    error MaaKidNotRegistered();
+    error MaaKidNotRegistered(bytes32 kidHash);
 
     /// @notice `iss` claim hash does not equal the registered issuerHash
-    error MaaJwtIssuerMismatch();
+    error MaaJwtIssuerMismatch(bytes32 actual, bytes32 expected);
 
-    /// @notice `x-ms-attestation-type` or `x-ms-compliance-status` claim values failed
-    error MaaJwtComplianceFailed();
+    /// @notice `x-ms-attestation-type` claim is neither "tdxvm" nor "sevsnpvm"
+    error MaaJwtAttestationTypeUnsupported(bytes32 attestationTypeHash);
 
-    /// @notice report_data claim is malformed (wrong length, non-hex chars, or non-zero padding)
-    error MaaJwtReportDataMalformed();
+    /// @notice `x-ms-compliance-status` claim is not "azure-compliant-cvm"
+    error MaaJwtComplianceFailed(bytes32 complianceStatusHash);
+
+    /// @notice report_data claim is malformed. badCharOffset is the index of the
+    ///         first non-hex character, or type(uint256).max if length itself is wrong.
+    error MaaJwtReportDataMalformed(uint256 length, uint256 badCharOffset);
 
     /// @notice RS256 signature over header || "." || claims did not verify against the
     ///         registered MAA signing key
-    error MaaJwtSignatureInvalid();
+    error MaaJwtSignatureInvalid(bytes32 kidHash);
 
     /// @notice sha256(hclVarData) did not equal the JWT report_data claim prefix
-    error MaaJwtBindingMismatch();
+    error MaaJwtBindingMismatch(bytes32 measured, bytes32 expected);
+
+    // ─── Field-name hashes (canonical mapping for the *Missing errors) ───
+    // Solidity 0.8.x folds keccak256 of a literal at compile time, so off-chain decoders
+    // can map the hash in the error back to the field name.
+    bytes32 internal constant FIELD_HASH_ALG = keccak256("alg");
+    bytes32 internal constant FIELD_HASH_KID = keccak256("kid");
+    bytes32 internal constant FIELD_HASH_ISS = keccak256("iss");
+    bytes32 internal constant FIELD_HASH_ATTESTATION_TYPE = keccak256("x-ms-attestation-type");
+    bytes32 internal constant FIELD_HASH_COMPLIANCE_STATUS = keccak256("x-ms-compliance-status");
+    bytes32 internal constant FIELD_HASH_TDX_REPORT_DATA = keccak256("tdx_report_data");
+    bytes32 internal constant FIELD_HASH_SNP_REPORT_DATA = keccak256("x-ms-sevsnpvm-reportdata");
 
     /// @notice Verifies AK collateral and extracts the AK public key
     /// @param collateral The AK collateral to verify (Azure MAA JWT bundle or GCP cert chain)
@@ -94,7 +115,7 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         } else if (collateral.akPubCollateralType == AkPubCollateralType.GcpCertChain) {
             return _verifyGcpAkCollateral(collateral.data);
         } else {
-            revert UnsupportedAkCollateralType();
+            revert UnsupportedAkCollateralType(collateral.akPubCollateralType);
         }
     }
 
@@ -114,12 +135,16 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         (bytes memory jwt, bytes memory hclVarData) = abi.decode(data, (bytes, bytes));
 
         // Split JWT on '.' into header, claims, signature parts (all base64url).
+        // segmentCount counts the non-empty segments observed so far so the error
+        // can distinguish "no dots", "one dot", "trailing dot empty" etc.
         string memory jwtStr = string(jwt);
         uint256 firstDot = LibString.indexOf(jwtStr, ".");
-        if (firstDot == type(uint256).max || firstDot == 0) revert MaaJwtMalformed();
+        if (firstDot == type(uint256).max) revert MaaJwtStructureInvalid(1);
+        if (firstDot == 0) revert MaaJwtStructureInvalid(0);
         uint256 secondDot = LibString.indexOf(jwtStr, ".", firstDot + 1);
-        if (secondDot == type(uint256).max || secondDot == firstDot + 1) revert MaaJwtMalformed();
-        if (secondDot + 1 >= bytes(jwtStr).length) revert MaaJwtMalformed();
+        if (secondDot == type(uint256).max) revert MaaJwtStructureInvalid(2);
+        if (secondDot == firstDot + 1) revert MaaJwtStructureInvalid(1);
+        if (secondDot + 1 >= bytes(jwtStr).length) revert MaaJwtStructureInvalid(2);
 
         string memory headerB64Url = LibString.slice(jwtStr, 0, firstDot);
         string memory claimsB64Url = LibString.slice(jwtStr, firstDot + 1, secondDot);
@@ -127,19 +152,19 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
 
         // ── Header: extract kid, validate alg ────────────────────────────────────
         bytes memory headerBytes = Base64.decode(headerB64Url);
-        if (headerBytes.length == 0) revert MaaJwtMalformed();
+        if (headerBytes.length == 0) revert MaaJwtBase64DecodeFailed(0);
         string memory header = string(headerBytes);
 
-        string memory alg = _jsonExtractStringRequired(header, "alg", true);
-        if (!LibString.eq(alg, "RS256")) revert MaaJwtAlgUnsupported();
+        string memory alg = _jsonExtractStringRequired(header, "alg", FIELD_HASH_ALG, true);
+        if (!LibString.eq(alg, "RS256")) revert MaaJwtAlgUnsupported(keccak256(bytes(alg)));
 
-        string memory kid = _jsonExtractStringRequired(header, "kid", true);
+        string memory kid = _jsonExtractStringRequired(header, "kid", FIELD_HASH_KID, true);
 
         // ── MAA signing key lookup ────────────────────────────────────────────────
         bytes32 kidHash = keccak256(bytes(kid));
         MaaSigningKey memory key = maaKeyRegistry.getMaaSigningKey(kidHash);
         if (key.pkcs1Pubkey.length == 0 || key.revoked || block.timestamp > key.notAfter) {
-            revert MaaKidNotRegistered();
+            revert MaaKidNotRegistered(kidHash);
         }
 
         // ── Signature: verify RS256 over header || "." || claims ─────────────────
@@ -148,42 +173,59 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         string memory signingInput = LibString.slice(jwtStr, 0, secondDot);
         bytes32 message = sha256(bytes(signingInput));
         bytes memory sig = Base64.decode(sigB64Url);
-        if (sig.length == 0) revert MaaJwtMalformed();
+        if (sig.length == 0) revert MaaJwtBase64DecodeFailed(2);
 
         PublicIdentity memory maaIdentity = PublicIdentity({typeId: ALGO_ID_RS256, key: key.pkcs1Pubkey});
         if (!signatureVerifier.verify(maaIdentity, message, sig)) {
-            revert MaaJwtSignatureInvalid();
+            revert MaaJwtSignatureInvalid(kidHash);
         }
 
         // ── Claims: iss / attestation-type / compliance-status / report_data ─────
         bytes memory claimsBytes = Base64.decode(claimsB64Url);
-        if (claimsBytes.length == 0) revert MaaJwtMalformed();
+        if (claimsBytes.length == 0) revert MaaJwtBase64DecodeFailed(1);
         string memory claims = string(claimsBytes);
 
         // iss
-        string memory iss = _jsonExtractStringRequired(claims, "iss", false);
-        if (keccak256(bytes(iss)) != key.issuerHash) revert MaaJwtIssuerMismatch();
+        string memory iss = _jsonExtractStringRequired(claims, "iss", FIELD_HASH_ISS, false);
+        bytes32 issHash = keccak256(bytes(iss));
+        if (issHash != key.issuerHash) revert MaaJwtIssuerMismatch(issHash, key.issuerHash);
 
         // x-ms-attestation-type: must be "tdxvm" or "sevsnpvm". The report_data claim name
         // differs accordingly.
-        string memory attestationType = _jsonExtractStringRequired(claims, "x-ms-attestation-type", false);
+        string memory attestationType =
+            _jsonExtractStringRequired(claims, "x-ms-attestation-type", FIELD_HASH_ATTESTATION_TYPE, false);
         bool isTdx = LibString.eq(attestationType, "tdxvm");
         bool isSnp = LibString.eq(attestationType, "sevsnpvm");
-        if (!isTdx && !isSnp) revert MaaJwtComplianceFailed();
+        if (!isTdx && !isSnp) revert MaaJwtAttestationTypeUnsupported(keccak256(bytes(attestationType)));
 
         // x-ms-compliance-status must be "azure-compliant-cvm"
-        string memory complianceStatus = _jsonExtractStringRequired(claims, "x-ms-compliance-status", false);
-        if (!LibString.eq(complianceStatus, "azure-compliant-cvm")) revert MaaJwtComplianceFailed();
+        string memory complianceStatus =
+            _jsonExtractStringRequired(claims, "x-ms-compliance-status", FIELD_HASH_COMPLIANCE_STATUS, false);
+        if (!LibString.eq(complianceStatus, "azure-compliant-cvm")) {
+            revert MaaJwtComplianceFailed(keccak256(bytes(complianceStatus)));
+        }
 
         // report_data: 128-char hex = 64 bytes. First 32 bytes = bindingHash;
         // next 32 bytes must be zero.
-        string memory reportDataKey = isTdx ? "tdx_report_data" : "x-ms-sevsnpvm-reportdata";
-        string memory reportDataHex = _jsonExtractStringRequired(claims, reportDataKey, false);
+        string memory reportDataKey;
+        bytes32 reportDataKeyHash;
+        if (isTdx) {
+            reportDataKey = "tdx_report_data";
+            reportDataKeyHash = FIELD_HASH_TDX_REPORT_DATA;
+        } else {
+            reportDataKey = "x-ms-sevsnpvm-reportdata";
+            reportDataKeyHash = FIELD_HASH_SNP_REPORT_DATA;
+        }
+        string memory reportDataHex = _jsonExtractStringRequired(claims, reportDataKey, reportDataKeyHash, false);
         (bytes32 bindingHash, bool paddingZero) = _hexToReportData(reportDataHex);
-        if (!paddingZero) revert MaaJwtReportDataMalformed();
+        if (!paddingZero) {
+            // length already validated; non-zero padding is the only path to here
+            revert MaaJwtReportDataMalformed(bytes(reportDataHex).length, type(uint256).max);
+        }
 
         // ── Binding check: sha256(hclVarData) must equal bindingHash ─────────────
-        if (sha256(hclVarData) != bindingHash) revert MaaJwtBindingMismatch();
+        bytes32 measuredBinding = sha256(hclVarData);
+        if (measuredBinding != bindingHash) revert MaaJwtBindingMismatch(measuredBinding, bindingHash);
 
         // ── AK extraction: parse HCLAkPub from hclVarData via §14.3-scoped parser ─
         PublicIdentity memory akPub = _parseAzureJwkAkPub(hclVarData);
@@ -200,26 +242,29 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
     ///      none of them sit inside a nested object — so this naive search is sufficient.
     /// @param json Flat JSON string
     /// @param fieldKey The key to search for (without quotes)
+    /// @param fieldKeyHash keccak256(fieldKey) — reported in the missing-field error so the
+    ///        caller can decode which field went missing (see FIELD_HASH_* constants).
     /// @param headerNotClaims Selects which error to revert with on a missing field
-    function _jsonExtractStringRequired(string memory json, string memory fieldKey, bool headerNotClaims)
-        private
-        pure
-        returns (string memory)
-    {
+    function _jsonExtractStringRequired(
+        string memory json,
+        string memory fieldKey,
+        bytes32 fieldKeyHash,
+        bool headerNotClaims
+    ) private pure returns (string memory) {
         // Search for the literal pattern: "fieldKey":"
         string memory needle = string(abi.encodePacked('"', fieldKey, '":"'));
         uint256 pos = LibString.indexOf(json, needle);
         if (pos == type(uint256).max) {
-            if (headerNotClaims) revert MaaJwtHeaderClaimMissing();
-            revert MaaJwtClaimMissing();
+            if (headerNotClaims) revert MaaJwtHeaderClaimMissing(fieldKeyHash);
+            revert MaaJwtClaimMissing(fieldKeyHash);
         }
         uint256 valStart = pos + bytes(needle).length;
         // Find the closing quote of the value (no escape handling — claims we read are
         // simple ASCII strings without embedded backslashes or quotes).
         uint256 valEnd = LibString.indexOf(json, '"', valStart);
         if (valEnd == type(uint256).max) {
-            if (headerNotClaims) revert MaaJwtHeaderClaimMissing();
-            revert MaaJwtClaimMissing();
+            if (headerNotClaims) revert MaaJwtHeaderClaimMissing(fieldKeyHash);
+            revert MaaJwtClaimMissing(fieldKeyHash);
         }
         return LibString.slice(json, valStart, valEnd);
     }
@@ -231,30 +276,31 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
     ///      reverts with the same error code).
     function _hexToReportData(string memory hexStr) private pure returns (bytes32 bindingHash, bool paddingZero) {
         bytes memory s = bytes(hexStr);
-        if (s.length != 128) revert MaaJwtReportDataMalformed();
+        if (s.length != 128) revert MaaJwtReportDataMalformed(s.length, type(uint256).max);
 
         uint256 acc;
         // First 64 chars → bindingHash
         for (uint256 i = 0; i < 64; i++) {
-            acc = (acc << 4) | _hexDigit(uint8(s[i]));
+            acc = (acc << 4) | _hexDigit(uint8(s[i]), s.length, i);
         }
         bindingHash = bytes32(acc);
 
         // Next 64 chars → must decode to zero
         uint256 padAcc;
         for (uint256 i = 64; i < 128; i++) {
-            padAcc = (padAcc << 4) | _hexDigit(uint8(s[i]));
+            padAcc = (padAcc << 4) | _hexDigit(uint8(s[i]), s.length, i);
         }
         paddingZero = (padAcc == 0);
     }
 
-    /// @dev Returns the numeric value (0-15) of a single ASCII hex digit. Reverts on non-hex.
-    function _hexDigit(uint8 c) private pure returns (uint256) {
+    /// @dev Returns the numeric value (0-15) of a single ASCII hex digit. Reverts on non-hex,
+    ///      reporting the position of the offending character so callers can pinpoint it.
+    function _hexDigit(uint8 c, uint256 strLen, uint256 pos) private pure returns (uint256) {
         unchecked {
             if (c >= 0x30 && c <= 0x39) return c - 0x30; // '0'-'9'
             if (c >= 0x61 && c <= 0x66) return c - 0x57; // 'a'-'f' → 10..15
             if (c >= 0x41 && c <= 0x46) return c - 0x37; // 'A'-'F' → 10..15
-            revert MaaJwtReportDataMalformed();
+            revert MaaJwtReportDataMalformed(strLen, pos);
         }
     }
 
