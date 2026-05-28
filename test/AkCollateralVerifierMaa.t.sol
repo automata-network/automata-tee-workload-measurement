@@ -122,7 +122,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _composeJwt(header, claims, hex"deadbeef");
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaJwtAlgUnsupported.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaJwtAlgUnsupported.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -138,7 +138,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _composeJwt(header, claims, hex"deadbeef");
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaKidNotRegistered.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaKidNotRegistered.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -155,7 +155,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaKidNotRegistered.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaKidNotRegistered.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -178,7 +178,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _buildJwt(claims);
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaJwtIssuerMismatch.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaJwtIssuerMismatch.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -201,7 +201,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _buildJwt(claims);
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaJwtComplianceFailed.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaJwtComplianceFailed.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -220,7 +220,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaJwtSignatureInvalid.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaJwtSignatureInvalid.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -235,7 +235,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaJwtBindingMismatch.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaJwtBindingMismatch.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -250,7 +250,7 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = _buildJwt(_tdxClaims(reportData));
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaJwtReportDataMalformed.selector);
+        vm.expectPartialRevert(AkCollateralVerifier.MaaJwtReportDataMalformed.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 
@@ -260,7 +260,32 @@ contract AkCollateralVerifierMaaTest is Test {
         bytes memory jwt = bytes("aGVhZGVy.aGVsbG8");
         bytes memory data = abi.encode(jwt, hclVarData);
 
-        vm.expectRevert(AkCollateralVerifier.MaaJwtMalformed.selector);
+        // single-dot JWT triggers the "missing second dot" structural check
+        vm.expectRevert(abi.encodeWithSelector(AkCollateralVerifier.MaaJwtStructureInvalid.selector, uint8(2)));
+        verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+    }
+
+    function test_revert_when_attestation_type_unsupported() public {
+        bytes memory hclVarData = _buildHclVarData();
+        bytes32 bindingHash = sha256(hclVarData);
+        string memory reportData = string.concat(
+            _bytes32ToHex64Lower(bindingHash), "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+
+        // attestation-type is neither tdxvm nor sevsnpvm
+        string memory claims = string.concat(
+            '{"iss":"',
+            TEST_ISSUER_URL,
+            '","x-ms-attestation-type":"unknownvm",',
+            '"x-ms-compliance-status":"azure-compliant-cvm",',
+            '"tdx_report_data":"',
+            reportData,
+            '"}'
+        );
+        bytes memory jwt = _buildJwt(claims);
+        bytes memory data = abi.encode(jwt, hclVarData);
+
+        vm.expectPartialRevert(AkCollateralVerifier.MaaJwtAttestationTypeUnsupported.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
     }
 

@@ -13,6 +13,16 @@ import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.
 import {PcrSpec, PcrVerifyType} from "../src/types/Common.sol";
 import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 
+// Re-declare the PCR errors here so tests can reference their selectors.
+// The actual definitions live on SessionRegistry but Solidity does not allow
+// referencing nested error declarations by name from a derived/external file
+// when the parent inherits them via `contract X is Y`. Keeping a parallel
+// declaration with matching signatures makes `vm.expectPartialRevert` work.
+error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
+error PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType);
+error PCRSubsetMemberNotAllowed(uint8 pcrIndex, uint256 eventIdx, bytes32 eventHash);
+error PCRSubsequenceLandmarkMissing(uint8 pcrIndex, uint256 matchedCount, uint256 expectedCount);
+
 /// @dev Harness exposing the internal PCR evaluator for direct testing without the
 ///      registerSession attestation pipeline.
 contract SessionRegistryHarness is SessionRegistry {
@@ -35,9 +45,6 @@ contract SessionRegistryHarness is SessionRegistry {
 contract PcrEvalEmptyEventLogTest is Test {
     SessionRegistryHarness internal harness;
 
-    // Pulled from SessionRegistry's error declarations
-    error PCRVerificationFailed();
-
     function setUp() public {
         harness = new SessionRegistryHarness();
     }
@@ -58,7 +65,7 @@ contract PcrEvalEmptyEventLogTest is Test {
     function testDynamicSubset_RevertsOnEmptyEventLog() public {
         PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         PcrValue memory measured = _measured(new bytes32[](0));
-        vm.expectRevert(PCRVerificationFailed.selector);
+        vm.expectRevert(abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSET));
         harness.evaluateSinglePcr(spec, measured);
     }
 
@@ -74,7 +81,9 @@ contract PcrEvalEmptyEventLogTest is Test {
         bytes32[] memory events = new bytes32[](1);
         events[0] = bytes32(uint256(0xdead));
         PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
-        vm.expectRevert(PCRVerificationFailed.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(PCRSubsetMemberNotAllowed.selector, uint8(0), uint256(0), bytes32(uint256(0xdead)))
+        );
         harness.evaluateSinglePcr(spec, _measured(events));
     }
 
@@ -84,7 +93,7 @@ contract PcrEvalEmptyEventLogTest is Test {
         PcrSpec memory spec =
             PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
         PcrValue memory measured = _measured(new bytes32[](0));
-        vm.expectRevert(PCRVerificationFailed.selector);
+        vm.expectRevert(abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSEQUENCE));
         harness.evaluateSinglePcr(spec, measured);
     }
 

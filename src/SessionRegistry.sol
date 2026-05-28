@@ -109,11 +109,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     // Errors
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice Invalid signature
-    error InvalidSignature();
+    /// @notice Owner / TPM-signed message signature failed verification
+    error InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint);
 
-    /// @notice Signature expired
-    error SignatureExpired();
+    /// @notice Signature has expired
+    error SignatureExpired(uint64 expireAt, uint64 nowTs);
 
     /// @notice Session already exists
     error SessionAlreadyExists();
@@ -127,38 +127,50 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice Session already revoked
     error SessionAlreadyRevoked();
 
-    /// @notice Unauthorized operation
-    error Unauthorized();
+    /// @notice Fingerprint mismatch (e.g. rotation / revoke ownership check)
+    error Unauthorized(bytes32 actualFingerprint, bytes32 expectedFingerprint);
 
-    /// @notice TEE verification failed
-    error TEEVerificationFailed();
+    /// @notice GCP cert-chain collateral with a TEE type that has no binding rule
+    error UnsupportedGcpTeeType(TEEType teeType);
 
-    /// @notice AK collateral verification failed
-    error AKCollateralVerificationFailed();
+    /// @notice AK collateral type fell through both Azure and GCP branches during binding
+    error UnsupportedAkCollateralForBinding(AkPubCollateralType collateralType);
 
-    /// @notice TEE-AK binding verification failed
-    error TEEAKBindingFailed();
+    /// @notice GCP-TDX binding: actual RTMR3 from the TDX quote differs from the value
+    ///         derived from sha384(zeros || UUID). Both values are 48 bytes (SHA-384 width).
+    error GcpTdxRtmr3Mismatch(bytes actualRtmr3, bytes expectedRtmr3);
 
-    /// @notice TPM quote verification failed
-    error TPMQuoteVerificationFailed();
+    /// @notice Session key delegation signature failed verification
+    error SessionKeyDelegationFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint);
 
-    /// @notice TPM certify verification failed
-    error TPMCertifyVerificationFailed();
+    /// @notice STATIC PCR measured value does not match the spec
+    error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
 
-    /// @notice Session key delegation verification failed
-    error SessionKeyDelegationFailed();
+    /// @notice DYNAMIC PCR spec rejected because the measured event log is empty
+    ///         (no event-hash chain to cross-check against the PCR value)
+    error PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType);
 
-    /// @notice PCR verification failed
-    error PCRVerificationFailed();
+    /// @notice DYNAMIC_SUBSET PCR: a measured event hash is not in the spec's allow-list
+    error PCRSubsetMemberNotAllowed(uint8 pcrIndex, uint256 eventIdx, bytes32 eventHash);
 
-    /// @notice PCR not found in quote
-    error PCRNotFound();
+    /// @notice DYNAMIC_SUBSEQUENCE PCR: not all landmarks from matchData appear in the
+    ///         measured event log, in order. matchData here is a list of landmarks per
+    ///         spec semantics, not the full expected log — only the count of unmatched
+    ///         landmarks is exposed (see docs/cvm-registry/workload-spec.md).
+    error PCRSubsequenceLandmarkMissing(uint8 pcrIndex, uint256 matchedCount, uint256 expectedCount);
+
+    /// @notice GCP PCR15 binding: measured PCR15 differs from the value derived
+    ///         from the TEE report (UUID for TDX, report_id for SNP)
+    error GcpPcr15Mismatch(bytes32 measured, bytes32 expected);
+
+    /// @notice Required PCR index from the spec is missing in the measured set
+    error PCRNotFound(uint8 pcrIndex);
 
     /// @notice Attribute not found
     error AttributeNotFound(bytes32 key);
 
-    /// @notice Attribute value not allowed
-    error AttributeValueNotAllowed(bytes32 key);
+    /// @notice Attribute value is not in the requirement's allow-list
+    error AttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
 
     /// @notice Workload not active
     error WorkloadNotActive(bytes32 workloadId);
@@ -658,21 +670,15 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         returns (AttestationResult memory result)
     {
         // ─────────────────────────────────────────────────────────────────────────────────
-        // STEP 2: TEE Report Verification
+        // STEP 2: TEE Report Verification (verifier reverts with rich errors on failure)
         // ─────────────────────────────────────────────────────────────────────────────────
         TeeVerificationResult memory teeResult = teeVerifier.verifyTeeReport(evidence.teeReport);
-        if (!teeResult.valid) {
-            revert TEEVerificationFailed();
-        }
 
         // ─────────────────────────────────────────────────────────────────────────────────
-        // STEP 3: AK Collateral + TEE↔vTPM Binding
+        // STEP 3: AK Collateral + TEE↔vTPM Binding (verifier reverts with rich errors)
         // ─────────────────────────────────────────────────────────────────────────────────
         AkCollateralVerificationResult memory akResult =
             akCollateralVerifier.verifyAkCollateral(evidence.akPubCollateral);
-        if (!akResult.valid) {
-            revert AKCollateralVerificationFailed();
-        }
 
         // Verify TEE-AK binding and get expected PCR15 for GCP
         bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence);
@@ -722,21 +728,21 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     {
         fingerprint = LibKey.computeKeyFingerprint(identity);
         if (fingerprint != expected) {
-            revert Unauthorized();
+            revert Unauthorized(fingerprint, expected);
         }
     }
 
     /// @dev Verifies signature
     function _requireSignature(PublicIdentity calldata signer, bytes32 message, bytes calldata signature) private view {
         if (!signatureVerifier.verify(signer, message, signature)) {
-            revert InvalidSignature();
+            revert InvalidSignature(message, LibKey.computeKeyFingerprint(signer));
         }
     }
 
     /// @dev Verifies signature expiry
     function _requireNotExpired(uint64 expireAt) private view {
         if (block.timestamp > expireAt) {
-            revert SignatureExpired();
+            revert SignatureExpired(expireAt, uint64(block.timestamp));
         }
     }
 
@@ -799,12 +805,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 expectedExtraData =
             keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce));
 
+        // verifyTpmQuote reverts with rich TpmVerifier errors on failure; valid is always true here.
         TpmQuoteVerificationResult memory quoteResult =
             verifyTpmQuote(tpmQuoteReport, akPub, abi.encodePacked(expectedExtraData));
-
-        if (!quoteResult.valid) {
-            revert TPMQuoteVerificationFailed();
-        }
 
         // Increment nonce immediately after successful verification to prevent replay attacks
         unchecked {
@@ -825,11 +828,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         view
         returns (PublicIdentity memory certifiedKey, bytes32 certifiedKeyFingerprint)
     {
+        // verifyTpmCertify reverts with rich TpmVerifier errors on failure; valid is always true here.
         TpmCertifyVerificationResult memory certifyResult = verifyTpmCertify(tpmCertifyReport, akPub);
-
-        if (!certifyResult.valid) {
-            revert TPMCertifyVerificationFailed();
-        }
 
         return (certifyResult.certifiedKey, certifyResult.certifiedKeyFingerprint);
     }
@@ -865,7 +865,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         );
 
         if (!signatureVerifier.verify(certifiedKey, delegationMessage, sessionKeySignature)) {
-            revert SessionKeyDelegationFailed();
+            revert SessionKeyDelegationFailed(delegationMessage, sessionKeyFingerprint);
         }
 
         return sessionKeyFingerprint;
@@ -961,7 +961,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
             // Verify PCR15 matches expected value
             if (measuredPcr15.value != expectedPcr15) {
-                revert PCRVerificationFailed();
+                revert GcpPcr15Mismatch(measuredPcr15.value, expectedPcr15);
             }
         }
 
@@ -1006,10 +1006,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 // GCP-SNP: compute expected PCR15 from report_id
                 return _verifyGcpSnpBinding(teeResult.reportData);
             } else {
-                revert TEEAKBindingFailed();
+                revert UnsupportedGcpTeeType(teeResult.teeType);
             }
         } else {
-            revert TEEAKBindingFailed();
+            revert UnsupportedAkCollateralForBinding(evidence.akPubCollateral.akPubCollateralType);
         }
     }
 
@@ -1036,7 +1036,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         );
 
         if (!LibBytes.equal(actualRtmr3, expectedRtmr3)) {
-            revert TEEAKBindingFailed();
+            revert GcpTdxRtmr3Mismatch(actualRtmr3.toBytes(), expectedRtmr3.toBytes());
         }
 
         // ── PCR15 Computation ────────────────────────────────────────────────
@@ -1156,12 +1156,12 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 }
             } else {
                 // Spec PCR missing from measured set
-                revert PCRNotFound();
+                revert PCRNotFound(specIdx);
             }
         }
 
         if (i < specsLen) {
-            revert PCRNotFound();
+            revert PCRNotFound(specs[i].pcrIndex);
         }
     }
 
@@ -1179,7 +1179,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 ++i;
             }
         }
-        revert PCRNotFound();
+        revert PCRNotFound(pcrIndex);
     }
 
     /// @dev Evaluates a single PCR spec against a measured PCR value
@@ -1189,7 +1189,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         if (spec.verifyType == PcrVerifyType.STATIC) {
             // STATIC: exact value match
             if (measured.value != spec.matchData[0]) {
-                revert PCRVerificationFailed();
+                revert PCRStaticMismatch(spec.pcrIndex, measured.value, spec.matchData[0]);
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSET) {
             // DYNAMIC_SUBSET: eventLogHashes ⊆ matchData, and eventLogHashes MUST be non-empty.
@@ -1202,7 +1202,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             // events from the allow-list"; zero events does not satisfy that intent.
             uint256 measuredLen = measured.eventLogHashes.length;
             if (measuredLen == 0) {
-                revert PCRVerificationFailed();
+                revert PCREventLogEmpty(spec.pcrIndex, PcrVerifyType.DYNAMIC_SUBSET);
             }
             uint256 matchLen = spec.matchData.length;
             for (uint256 i = 0; i < measuredLen;) {
@@ -1217,7 +1217,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                     }
                 }
                 if (!found) {
-                    revert PCRVerificationFailed();
+                    revert PCRSubsetMemberNotAllowed(spec.pcrIndex, i, measured.eventLogHashes[i]);
                 }
                 unchecked {
                     ++i;
@@ -1230,7 +1230,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             // non-empty (rejected at registration), but the explicit guard documents intent.
             uint256 measuredLen = measured.eventLogHashes.length;
             if (measuredLen == 0) {
-                revert PCRVerificationFailed();
+                revert PCREventLogEmpty(spec.pcrIndex, PcrVerifyType.DYNAMIC_SUBSEQUENCE);
             }
             uint256 matchLen = spec.matchData.length;
             uint256 matchIdx = 0;
@@ -1245,7 +1245,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 }
             }
             if (matchIdx != matchLen) {
-                revert PCRVerificationFailed();
+                // matchData is a list of landmarks, not the full expected log — only the
+                // count of unmatched landmarks is exposed. Do not surface matchData[matchIdx]
+                // as "the expected hash" (see workload-spec subsequence semantics).
+                revert PCRSubsequenceLandmarkMissing(spec.pcrIndex, matchIdx, matchLen);
             }
         }
     }
@@ -1353,7 +1356,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                     }
                 }
                 if (!valueAllowed) {
-                    revert AttributeValueNotAllowed(requirements[i].key);
+                    revert AttributeValueNotAllowed(requirements[i].key, attributeValue);
                 }
             }
             unchecked {

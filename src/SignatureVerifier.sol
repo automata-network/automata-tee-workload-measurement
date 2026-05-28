@@ -24,6 +24,9 @@ contract SignatureVerifier is ISignatureVerifier {
     /// @notice Thrown when an unsupported algorithm type is provided
     error UnsupportedAlgorithm(uint8 typeId);
 
+    /// @notice ECDSA r/s component is wider than 32 bytes after DER stripping
+    error InputTooLong(uint256 length);
+
     constructor(address p256VerifierAddress) {
         P256_VERIFIER_ADDRESS = p256VerifierAddress;
     }
@@ -161,7 +164,7 @@ contract SignatureVerifier is ISignatureVerifier {
     /// @return result Bytes32 representation
     function _bytesToBytes32(bytes memory b) internal pure returns (bytes32 result) {
         uint256 len = b.length;
-        require(len <= 32, "Input too long");
+        if (len > 32) revert InputTooLong(len);
 
         assembly ("memory-safe") {
             // Load 32 bytes starting from the data offset

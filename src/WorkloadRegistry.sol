@@ -29,10 +29,12 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error WorkloadAlreadyExists(bytes32 workloadId);
     error WorkloadNotFound(bytes32 workloadId);
     error WorkloadNotActive(bytes32 workloadId);
-    error InvalidSignature();
-    error Unauthorized();
-    error SignatureExpired();
-    error InvalidPcrOrder();
+    error InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint);
+    error Unauthorized(bytes32 actualOwner, bytes32 expectedOwner);
+    error SignatureExpired(uint64 expireAt, uint64 nowTs);
+    /// @notice PCR spec list is not sorted strictly ascending by pcrIndex.
+    ///         prevIndex sits at i-1 and thisIndex at i in the input array.
+    error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
     error DuplicateRequirementKey(bytes32 key);
@@ -88,7 +90,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     ) external returns (bytes32 workloadId) {
         // Check signature expiration
         if (block.timestamp > expireAt) {
-            revert SignatureExpired();
+            revert SignatureExpired(expireAt, uint64(block.timestamp));
         }
 
         _validatePcrSpecsSorted(spec.pcrs);
@@ -113,7 +115,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
+            revert InvalidSignature(message, ownerFingerprint);
         }
 
         // Store workload
@@ -139,7 +141,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     ) external {
         // Check signature expiration
         if (block.timestamp > expireAt) {
-            revert SignatureExpired();
+            revert SignatureExpired(expireAt, uint64(block.timestamp));
         }
 
         // Check exists and active
@@ -153,7 +155,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         // Compute owner fingerprint and verify ownership
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         if (_workloads[workloadId].owner != ownerFingerprint) {
-            revert Unauthorized();
+            revert Unauthorized(ownerFingerprint, _workloads[workloadId].owner);
         }
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
@@ -162,7 +164,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
-            revert InvalidSignature();
+            revert InvalidSignature(message, ownerFingerprint);
         }
 
         // Deactivate
@@ -268,7 +270,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
                 revert PcrIndexOutOfRange(idx);
             }
             if (i > 0 && idx <= prevIdx) {
-                revert InvalidPcrOrder();
+                revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
             PcrVerifyType vt = pcrs[i].verifyType;
             if (

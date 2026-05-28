@@ -58,25 +58,30 @@ abstract contract TpmVerifier is TpmBase {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice TPM report type does not match expected type for this operation
-    error UnexpectedTpmReportType();
+    error UnexpectedTpmReportType(TpmReportType actual, TpmReportType expected);
 
     /// @notice Verification backend type is not supported for TPM verification
-    error UnsupportedTpmBackendType();
+    error UnsupportedTpmBackendType(VerificationBackendType actual);
 
     /// @notice TPM quote extraData does not match expected nonce
-    error TpmQuoteExtraDataMismatch();
+    error TpmQuoteExtraDataMismatch(bytes32 measured, bytes32 expected);
 
-    /// @notice TPM quote PCR measurement check failed
-    error TpmQuotePcrCheckFailed();
+    /// @notice TPM quote PCR measurement check failed inside the TPM library.
+    ///         The library only reports a bool, so the count of PCRs in the quote
+    ///         is the most we can attach here. Pre-check the quote off-chain to
+    ///         identify the offending PCR.
+    error TpmQuotePcrCheckFailed(uint256 quotedPcrCount);
 
-    /// @notice TPM quote library verification failed
+    /// @notice TPM quote library verification failed (signature or attest decode)
     error TpmQuoteLibraryFailed();
 
-    /// @notice TPMA_OBJECT attributes contain forbidden bits
-    error TpmaObjectForbiddenBitsSet();
+    /// @notice TPMA_OBJECT attributes contain forbidden bits.
+    ///         `forbiddenBitsSet = actual & TPMA_OBJECT_REQUIRED_CLEAR` — the exact
+    ///         bits that violated the policy.
+    error TpmaObjectForbiddenBitsSet(uint32 actualAttrs, uint32 forbiddenBitsSet);
 
     /// @notice TPMT_PUBLIC structure is too short
-    error TpmtPublicTooShort();
+    error TpmtPublicTooShort(uint256 length);
 
     /// @notice Verifies a TPM Quote report (PCR snapshot with signature)
     /// @param tpmReport The TPM Quote report to verify
@@ -89,12 +94,12 @@ abstract contract TpmVerifier is TpmBase {
     {
         // Validate TPM report type
         if (tpmReport.tpmReportType != TpmReportType.TpmQuote) {
-            revert UnexpectedTpmReportType();
+            revert UnexpectedTpmReportType(tpmReport.tpmReportType, TpmReportType.TpmQuote);
         }
 
         // Only Solidity backend supported for now (ZK support planned)
         if (tpmReport.verificationBackendType != VerificationBackendType.Solidity) {
-            revert UnsupportedTpmBackendType();
+            revert UnsupportedTpmBackendType(tpmReport.verificationBackendType);
         }
 
         // Decode TPM quote report
@@ -112,15 +117,17 @@ abstract contract TpmVerifier is TpmBase {
         if (!success) revert TpmQuoteLibraryFailed();
 
         // Validate extraData matches expected nonce
-        if (keccak256(extraData) != keccak256(expectedExtraData)) {
-            revert TpmQuoteExtraDataMismatch();
+        bytes32 measuredExtra = keccak256(extraData);
+        bytes32 expectedExtra = keccak256(expectedExtraData);
+        if (measuredExtra != expectedExtra) {
+            revert TpmQuoteExtraDataMismatch(measuredExtra, expectedExtra);
         }
 
         // Check PCR measurements (library emits events, reverts on failure)
         (bool pcrSuccess,) = tpmAttestation.checkPcrMeasurements(quoteReport.tpm2bAttest, quoteReport.pcrValues);
 
         if (!pcrSuccess) {
-            revert TpmQuotePcrCheckFailed();
+            revert TpmQuotePcrCheckFailed(quoteReport.pcrValues.length);
         }
 
         return TpmQuoteVerificationResult({valid: true, pcrValues: quoteReport.pcrValues});
@@ -137,12 +144,12 @@ abstract contract TpmVerifier is TpmBase {
     {
         // Validate TPM report type
         if (tpmReport.tpmReportType != TpmReportType.TpmCertify) {
-            revert UnexpectedTpmReportType();
+            revert UnexpectedTpmReportType(tpmReport.tpmReportType, TpmReportType.TpmCertify);
         }
 
         // Only Solidity backend supported for now
         if (tpmReport.verificationBackendType != VerificationBackendType.Solidity) {
-            revert UnsupportedTpmBackendType();
+            revert UnsupportedTpmBackendType(tpmReport.verificationBackendType);
         }
 
         // Decode TPM certify report
@@ -177,7 +184,7 @@ abstract contract TpmVerifier is TpmBase {
     /// @dev Validates that forbidden TPMA_OBJECT attribute bits are not set
     /// @param tpmtPublic The TPMT_PUBLIC structure containing attributes at offset 4
     function _validateClearBits(bytes memory tpmtPublic) private pure {
-        if (tpmtPublic.length < 8) revert TpmtPublicTooShort();
+        if (tpmtPublic.length < 8) revert TpmtPublicTooShort(tpmtPublic.length);
 
         // Extract uint32 attributes from tpmtPublic[4:8] (big-endian)
         uint32 attributes;
@@ -189,8 +196,9 @@ abstract contract TpmVerifier is TpmBase {
         }
 
         // Check forbidden bits are not set
-        if ((attributes & TPMA_OBJECT_REQUIRED_CLEAR) != 0) {
-            revert TpmaObjectForbiddenBitsSet();
+        uint32 forbidden = attributes & TPMA_OBJECT_REQUIRED_CLEAR;
+        if (forbidden != 0) {
+            revert TpmaObjectForbiddenBitsSet(attributes, forbidden);
         }
     }
 }

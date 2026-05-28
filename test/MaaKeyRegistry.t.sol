@@ -136,13 +136,13 @@ contract MaaKeyRegistryTest is Test {
         // notAfter strictly less than block.timestamp reverts; equality is allowed
         // (covered by test_upsert_at_notAfter_boundary_accepted).
         vm.warp(100);
-        vm.expectRevert(MaaKeyRegistry.NotAfterInPast.selector);
+        vm.expectPartialRevert(MaaKeyRegistry.NotAfterInPast.selector);
         vm.prank(owner);
         registry.upsertMaaSigningKey(TEST_KID_HASH, TEST_PKCS1_PUBKEY, TEST_ISSUER_HASH, uint64(99));
     }
 
     function test_revert_when_revoking_unregistered_kid() public {
-        vm.expectRevert(MaaKeyRegistry.KidNotRegistered.selector);
+        vm.expectPartialRevert(MaaKeyRegistry.KidNotRegistered.selector);
         vm.prank(owner);
         registry.revokeMaaSigningKey(keccak256(bytes("never-registered")));
     }
