@@ -17,6 +17,8 @@ alloy::contract! {
     BaseImageRegistry => "./contract_artifacts/BaseImageRegistry.sol/BaseImageRegistry.json",
     TpmAttestation => "./contract_artifacts/TpmAttestation.sol/TpmAttestation.json",
     TpmVerifier => "./contract_artifacts/TpmVerifier.sol/TpmVerifier.json",
+    TeeVerifier => "./contract_artifacts/TeeVerifier.sol/TeeVerifier.json",
+    AkCollateralVerifier => "./contract_artifacts/AkCollateralVerifier.sol/AkCollateralVerifier.json",
 }
 
 // Define TpmQuoteReport for ABI decoding (not exported in SessionRegistry ABI)

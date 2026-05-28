@@ -2,11 +2,10 @@
 //! four registry functions.
 //!
 //! Inline `alloy::sol!` rather than wiring the contract artifact through
-//! `contract_artifacts/sync.sh` — the interface is 4 functions, so duplicating
-//! the signatures costs less than adding a build-order dependency on
-//! `forge build`. Update both this `sol!` block and
-//! `src/interfaces/registries/IMaaKeyRegistry.sol` together if the contract
-//! changes.
+//! `contract_artifacts/sync.sh` — the surface is small, so duplicating the
+//! signatures and revert reasons costs less than adding a build-order
+//! dependency on `forge build`. Keep this `sol!` block in sync with
+//! `src/MaaKeyRegistry.sol` if the contract's functions or errors change.
 
 use std::time::Duration;
 
@@ -37,8 +36,19 @@ alloy::sol! {
         function getMaaSigningKey(bytes32 kidHash) external view returns (MaaSigningKey memory);
 
         function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
+
+        // Revert reasons the registrar can hit. Mirrors src/MaaKeyRegistry.sol
+        // (custom errors) plus OwnableUpgradeable's owner gate. Kept in sync so
+        // send_ex/call_ex can decode reverts into a readable cause.
+        error EmptyPubkey();
+        error EmptyIssuerHash();
+        error NotAfterInPast(uint64 notAfter, uint64 nowTs);
+        error KidNotRegistered(bytes32 kidHash);
+        error OwnableUnauthorizedAccount(address account);
     }
 }
+
+alloy::register_contract_errors!(IMaaKeyRegistry);
 
 pub use IMaaKeyRegistry::MaaSigningKey;
 use IMaaKeyRegistry::IMaaKeyRegistryInstance;

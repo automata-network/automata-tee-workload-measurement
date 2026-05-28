@@ -10,3 +10,5 @@ sync_file SessionRegistry
 sync_file BaseImageRegistry
 sync_file TpmAttestation
 sync_file TpmVerifier
+sync_file TeeVerifier
+sync_file AkCollateralVerifier
