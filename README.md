@@ -69,12 +69,13 @@ test/                                   # Integration tests and benchmarks
 
 | Contract | Address |
 | --- | --- |
-| SessionRegistry | `0xD1860020870ffEd23a644d0CD4CA9E7b3Ff53D6c` |
-| BaseImageRegistry | `0x15A8F7A012b2dBad3fAD6020a0dF1F81E86F6171` |
-| WorkloadRegistry | `0xFA8Eb822594d7aA7221aBE3Cd7f3F17c3F16bA9E` |
-| TeeVerifier | `0x80c17Fb23a7f747174DCD29Ec94B8D5a7227F266` |
-| SignatureVerifier | `0x996eB4a6E1FEbF1788B027FA990643B2328A5E72` |
-| KeyResolver | `0x74Ee5a4c6e9207cFDa2Bb28E79bf97CcA42F18E4` |
+| SessionRegistry | `0xB247950fBBFCE245641e433AFd7d8884328CE5A1` |
+| BaseImageRegistry | `0xCbe56f9B73c822679Cf36DcF8D99434E0f1588Ca` |
+| WorkloadRegistry | `0xda6430E06385F7516963f8A3B4e87beBb89860F8` |
+| TeeVerifier | `0xCfC1B6Bb1A177d46271B3938f264a484b9F7559f` |
+| SignatureVerifier | `0xc52B7390DFb82CC4e2241B4a2586428532D76f18` |
+| KeyResolver | `0x77B4f0c3Ab93bF3c624E8B72EdD12736D6B36C51` |
+| MaaKeyRegistry | `0x8451786c90260Da9441A2847Fb1e3DD8E5B207c3` |
 
 ## Related Projects
 
