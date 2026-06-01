@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {TeeReport, TEEType, VerificationBackendType, ZkProof, TeeVerificationResult} from "./types/Evidence.sol";
+import {
+    TeeReport,
+    TEEType,
+    VerificationBackendType,
+    ZkProof,
+    SnpZkProof,
+    TeeVerificationResult
+} from "./types/Evidence.sol";
 import {IDcapAttestation} from "./interfaces/external/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/external/ISnpAttestation.sol";
 import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
@@ -94,6 +101,10 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice The upstream SNP verifier returned a non-Success VerificationResult.
     error SnpVerificationFailed(VerificationResult result);
+
+    /// @notice The supplied SNP raw report does not hash to the journal's reportHash.
+    ///         Indicates the report body was not the one the ZK proof attested to.
+    error SnpReportHashMismatch(bytes32 expected, bytes32 actual);
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -292,8 +303,9 @@ contract TeeVerifier is ITeeVerifier {
             revert UnsupportedBackendType(TEEType.AmdSevSnp, teeReport.verificationBackendType);
         }
 
-        // ZK proof verification
-        ZkProof memory zkProof = abi.decode(teeReport.data, (ZkProof));
+        // ZK proof verification. The SNP journal commits only to keccak256(report), so the full
+        // report body is carried separately in SnpZkProof.rawReport and bound to the proof below.
+        SnpZkProof memory zkProof = abi.decode(teeReport.data, (SnpZkProof));
 
         // Cast backend type to ZK coprocessor type (ordinals align after reordering)
         ISnpAttestation.ZkCoProcessorType zkType =
@@ -307,8 +319,15 @@ contract TeeVerifier is ITeeVerifier {
             revert SnpVerificationFailed(journal.result);
         }
 
-        // Extract attestation report from SNP journal (Step 1)
-        bytes memory attestationReport = extractSnpAttestationReport(journal.rawReport);
+        // Bind the supplied raw report to the proof. The journal only attests keccak256(report),
+        // so without this check a valid proof could be paired with a forged report body.
+        bytes32 computedHash = keccak256(zkProof.rawReport);
+        if (computedHash != journal.reportHash) {
+            revert SnpReportHashMismatch(journal.reportHash, computedHash);
+        }
+
+        // The bound raw report IS the full attestation report (Step 1)
+        bytes memory attestationReport = extractSnpAttestationReport(zkProof.rawReport);
 
         return TeeVerificationResult({valid: true, reportData: attestationReport, teeType: TEEType.AmdSevSnp});
     }
