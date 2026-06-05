@@ -34,6 +34,13 @@ alloy::sol! {
         bytes32 value;
         bytes32[] eventLogHashes;
     }
+
+    // Mirrors Evidence.sol `ZkProof`. SnpZkProof is ABI-forward-compatible (same first
+    // two fields), so this decodes both and `output` is read correctly either way.
+    struct ZkProof {
+        bytes output;
+        bytes proofBytes;
+    }
 }
 
 /// Algorithm ID for public key identity.
