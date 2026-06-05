@@ -1,7 +1,7 @@
 use alloy::{
     primitives::{Address, B256, Bytes, keccak256},
     signers::{Signer, local::PrivateKeySigner},
-    sol_types::SolValue,
+    sol_types::{SolType, SolValue, sol_data},
 };
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,8 @@ use std::sync::LazyLock;
 
 /// Domain constant for key fingerprint computation (must match Constants.sol)
 static KEY_DOMAIN: LazyLock<B256> = LazyLock::new(|| keccak256(b"KEY_RESOLVER_V1"));
+
+type KeyFingerprintArgs = (sol_data::FixedBytes<32>, sol_data::Uint<8>, sol_data::Bytes);
 
 alloy::contract! {
     WorkloadRegistry => "./contract_artifacts/WorkloadRegistry.sol/WorkloadRegistry.json",
@@ -105,28 +107,80 @@ impl PublicIdentity {
     /// Compute key fingerprint as defined in LibKey.sol:
     /// fingerprint = keccak256(abi.encode(KEY_DOMAIN, typeId, key))
     pub fn fingerprint(&self) -> B256 {
-        // abi.encode(bytes32 domain, uint8 typeId, bytes key)
-        // For dynamic types like bytes, abi.encode uses:
-        // - 32 bytes: domain
-        // - 32 bytes: typeId (right-aligned)
-        // - 32 bytes: offset to bytes data (= 96)
-        // - 32 bytes: bytes length
-        // - N bytes: bytes data (padded to 32-byte boundary)
-        let key_len = self.key.len();
-        let padded_key_len = ((key_len + 31) / 32) * 32;
-        let total_len = 32 + 32 + 32 + 32 + padded_key_len;
+        keccak256(KeyFingerprintArgs::abi_encode_params(&(
+            *KEY_DOMAIN,
+            self.type_id,
+            self.key.clone(),
+        )))
+    }
+}
 
-        let mut encoded = vec![0u8; total_len];
+#[cfg(test)]
+mod tests {
+    use super::{AlgoId, KEY_DOMAIN, PublicIdentity};
+    use alloy::{
+        primitives::{B256, Bytes, keccak256},
+        sol_types::{SolType, sol_data},
+    };
+
+    type TestKeyFingerprintArgs = (sol_data::FixedBytes<32>, sol_data::Uint<8>, sol_data::Bytes);
+
+    fn reference_fingerprint(type_id: u8, key: &[u8]) -> B256 {
+        // Manual ABI reference for `abi.encode(bytes32,uint8,bytes)`.
+        let key_len = key.len();
+        let padded_key_len = key_len.div_ceil(32) * 32;
+        let mut encoded = vec![0u8; 128 + padded_key_len];
+
         encoded[0..32].copy_from_slice(KEY_DOMAIN.as_slice());
-        encoded[63] = self.type_id as u8; // uint8 right-aligned in 32 bytes
-        // offset to bytes data = 96 (3 * 32)
+        encoded[63] = type_id;
         encoded[95] = 96;
-        // bytes length
-        encoded[127] = key_len as u8;
-        // bytes data
-        encoded[128..128 + key_len].copy_from_slice(&self.key);
+        encoded[120..128].copy_from_slice(&(key_len as u64).to_be_bytes());
+        encoded[128..128 + key_len].copy_from_slice(key);
 
         keccak256(&encoded)
+    }
+
+    #[test]
+    fn fingerprint_matches_abi_encoding_for_ec_key() {
+        let identity = PublicIdentity {
+            type_id: AlgoId::Es256K as u8,
+            key: Bytes::from(vec![0x04; 65]),
+        };
+
+        assert_eq!(
+            identity.fingerprint(),
+            reference_fingerprint(identity.type_id, &identity.key)
+        );
+    }
+
+    #[test]
+    fn fingerprint_matches_abi_encoding_for_256_byte_key() {
+        let identity = PublicIdentity {
+            type_id: AlgoId::Rs256 as u8,
+            key: Bytes::from((0u8..=255).collect::<Vec<_>>()),
+        };
+
+        let abi_encoded_hash = keccak256(TestKeyFingerprintArgs::abi_encode_params(&(
+            *KEY_DOMAIN,
+            identity.type_id,
+            identity.key.clone(),
+        )));
+        let old_single_byte_length_hash = {
+            let mut encoded = vec![0u8; 128 + identity.key.len()];
+            encoded[0..32].copy_from_slice(KEY_DOMAIN.as_slice());
+            encoded[63] = identity.type_id;
+            encoded[95] = 96;
+            encoded[127] = identity.key.len() as u8;
+            encoded[128..].copy_from_slice(&identity.key);
+            keccak256(&encoded)
+        };
+
+        assert_eq!(identity.fingerprint(), abi_encoded_hash);
+        assert_eq!(
+            identity.fingerprint(),
+            reference_fingerprint(identity.type_id, &identity.key)
+        );
+        assert_ne!(identity.fingerprint(), old_single_byte_length_hash);
     }
 }
 

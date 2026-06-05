@@ -4,7 +4,7 @@ use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum, ProviderEx};
 use alloy::primitives::{Address, B256, U256, keccak256};
 use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::sol_types::SolValue;
+use alloy::sol_types::{SolType, SolValue, sol_data};
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
@@ -13,6 +13,9 @@ use crate::stubs::{
     BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity, expire_at, sign_message,
 };
 use crate::types::AppRef;
+
+type MappingSlotArgs = (sol_data::FixedBytes<32>, sol_data::Uint<256>);
+type StorageSlotArg = (sol_data::Uint<256>,);
 
 #[derive(Debug, Clone)]
 pub struct BaseImageRegistry {
@@ -473,13 +476,11 @@ impl BaseImageRegistry {
 ///
 /// Solidity storage: `keccak256(abi.encode(key, slot))`
 fn mapping_struct_slot(key: B256, slot: U256) -> U256 {
-    let mut buf = [0u8; 64];
-    buf[..32].copy_from_slice(key.as_slice());
-    slot.to_be_bytes::<32>()
-        .iter()
-        .enumerate()
-        .for_each(|(i, &b)| buf[32 + i] = b);
-    U256::from_be_bytes(keccak256(buf).0)
+    U256::from_be_bytes(keccak256(MappingSlotArgs::abi_encode_params(&(key, slot))).0)
+}
+
+fn storage_array_data_start(length_slot: U256) -> U256 {
+    U256::from_be_bytes(keccak256(StorageSlotArg::abi_encode_params(&(length_slot,))).0)
 }
 
 /// Read a `bytes32[]` dynamic array from contract storage.
@@ -513,14 +514,8 @@ async fn read_bytes32_array(
         return Ok(vec![]);
     }
 
-    // Compute data start slot: keccak256(length_slot)
-    let mut slot_bytes = [0u8; 32];
-    length_slot
-        .to_be_bytes::<32>()
-        .iter()
-        .enumerate()
-        .for_each(|(i, &b)| slot_bytes[i] = b);
-    let data_start = U256::from_be_bytes(keccak256(slot_bytes).0);
+    // Compute data start slot: keccak256(abi.encode(length_slot))
+    let data_start = storage_array_data_start(length_slot);
 
     // Read each element
     let mut result = Vec::with_capacity(length as usize);
@@ -534,4 +529,35 @@ async fn read_bytes32_array(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mapping_struct_slot, storage_array_data_start};
+    use alloy::primitives::{B256, U256, keccak256};
+
+    #[test]
+    fn mapping_struct_slot_matches_solidity_storage_formula() {
+        let key = B256::repeat_byte(0xAB);
+        let slot = U256::from(7);
+
+        let mut encoded = [0u8; 64];
+        encoded[..32].copy_from_slice(key.as_slice());
+        encoded[32..].copy_from_slice(&slot.to_be_bytes::<32>());
+
+        assert_eq!(
+            mapping_struct_slot(key, slot),
+            U256::from_be_bytes(keccak256(encoded).0)
+        );
+    }
+
+    #[test]
+    fn storage_array_data_start_matches_solidity_storage_formula() {
+        let length_slot = U256::from(0x1234);
+
+        assert_eq!(
+            storage_array_data_start(length_slot),
+            U256::from_be_bytes(keccak256(length_slot.to_be_bytes::<32>()).0)
+        );
+    }
 }
