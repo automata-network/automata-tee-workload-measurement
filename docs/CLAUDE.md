@@ -87,6 +87,12 @@ forge script script/Config.s.sol --sig "enableBaseImageRegistryWhitelist(bool)" 
 
 Deployment addresses are saved to `deployment/<chain-id>.json`.
 
+**Dev-fork bootstrap:** `BaseImageRegistry` / `WorkloadRegistry` deploy paused (= whitelist enforced). Before publishes on a fresh fork, run `Config.s.sol::enable{BaseImage,Workload}RegistryWhitelist(false)`.
+
+## Debug
+
+- Decode a custom-error selector: `cast 4byte 0xXXXXXXXX` (4byte.directory). If unlisted, grep `src/` for `error <Name>(` then `cast sig "<Name>(<types>)"`.
+
 ## Architecture
 
 ### Three-Tier Registry System
