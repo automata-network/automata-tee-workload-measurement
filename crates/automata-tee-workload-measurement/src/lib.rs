@@ -1,9 +1,9 @@
-pub mod stubs;
 pub mod base_image_registry;
-pub mod session_registry;
-pub mod workload_registry;
 pub mod relay;
+pub mod session_registry;
+pub mod stubs;
 pub mod types;
+pub mod workload_registry;
 
 mod workload_measurement;
 pub use workload_measurement::{WorkloadMeasurement, WorkloadMeasurementConfig};

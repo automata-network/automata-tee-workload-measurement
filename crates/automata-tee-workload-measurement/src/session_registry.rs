@@ -8,12 +8,10 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::base_image_registry::BaseImageRegistry;
-use crate::stubs::SessionRegistry::{
-    CVMSession, SessionRegistryEvents, SessionRegistryInstance,
-};
+use crate::stubs::SessionRegistry::{CVMSession, SessionRegistryEvents, SessionRegistryInstance};
 use crate::stubs::{
-    AttestationEvidence, PublicIdentity, SessionRotationEvidence, TpmQuoteReport, expire_at,
-    sign_message,
+    AttestationEvidence, PublicIdentity, SessionRotationEvidence, TeeReport, TpmQuoteReport,
+    ZkProof, expire_at, sign_message,
 };
 use crate::types::{AppRef, RegisterSessionResponse, RotateSessionResponse};
 use crate::workload_registry::WorkloadRegistry;
@@ -76,12 +74,13 @@ impl SessionRegistry {
 
         // Get chain ID
         let chain_id = self.stub.provider().chain_id();
-        let session_id = compute_session_id_from_parts(
-            &evidence.tpm_quote_report.data,
-            &evidence.tee_report.data,
-        )?;
+        let session_id =
+            compute_session_id_from_parts(&evidence.tpm_quote_report.data, &evidence.tee_report)?;
         let workload_id = WorkloadRegistry::get_workload_id(&workload_ref);
         let base_image_id = BaseImageRegistry::get_image_id(&base_image_ref);
+        // sessionKeyFingerprint = LibKey.computeKeyFingerprint(evidence.sessionKey); the contract
+        // derives it internally and folds it into the owner-signature digest (see below).
+        let session_key_fingerprint = evidence.session_key.fingerprint();
 
         info!(
             address = %self.stub.address(),
@@ -92,8 +91,9 @@ impl SessionRegistry {
             "Submitting registerSession transaction"
         );
 
-        // Build and sign the message
-        // Message: sha256(abi.encode(SESSION_REGISTER_MSG, chainId, contractAddr, expireAt, sessionId))
+        // Build and sign the owner message. Must match SessionRegistry.registerSession exactly:
+        // sha256(abi.encode(SESSION_REGISTER_MSG, chainId, address(this), expireAt, sessionId,
+        //                   workloadId, baseImageId, platformProfileId, variantId, sessionKeyFingerprint))
         let sig_bytes = sign_message(
             &(
                 keccak256(b"CVM_MSG_SESSION_REGISTER_V1"),
@@ -101,6 +101,11 @@ impl SessionRegistry {
                 *self.stub.address(),
                 U256::from(expire_at),
                 session_id,
+                workload_id,
+                base_image_id,
+                platform_profile_id,
+                variant_id,
+                session_key_fingerprint,
             ),
             signer,
         )
@@ -205,10 +210,8 @@ impl SessionRegistry {
         owner_identity: PublicIdentity,
         owner_signature: Bytes,
     ) -> Result<RegisterSessionResponse> {
-        let session_id = compute_session_id_from_parts(
-            &evidence.tpm_quote_report.data,
-            &evidence.tee_report.data,
-        )?;
+        let session_id =
+            compute_session_id_from_parts(&evidence.tpm_quote_report.data, &evidence.tee_report)?;
 
         info!(
             address = %self.stub.address(),
@@ -395,44 +398,57 @@ impl SessionRegistry {
 
     /// Get the owner fingerprint of a session.
     pub async fn get_session_owner(&self, session_id: B256) -> Result<B256> {
-        let owner = self
-            .stub
-            .getSessionOwner(session_id)
-            .call_ex()
-            .await?;
+        let owner = self.stub.getSessionOwner(session_id).call_ex().await?;
         Ok(owner)
     }
 
     /// Check if a session is active (exists, not revoked, not expired).
     pub async fn is_session_active(&self, session_id: B256) -> Result<bool> {
-        let active = self
-            .stub
-            .isSessionActive(session_id)
-            .call_ex()
-            .await?;
+        let active = self.stub.isSessionActive(session_id).call_ex().await?;
         Ok(active)
     }
 
     /// Check if a session has expired.
     pub async fn is_session_expired(&self, session_id: B256) -> Result<bool> {
-        let expired = self
-            .stub
-            .isSessionExpired(session_id)
-            .call_ex()
-            .await?;
+        let expired = self.stub.isSessionExpired(session_id).call_ex().await?;
         Ok(expired)
     }
 }
 
-/// Compute sessionId from raw TPM quote report data and TEE report data.
+/// Compute the `teeReportBytesHash` exactly as `TeeVerifier.getTeeReportHash`
+/// (src/TeeVerifier.sol) — the value the contract feeds into the sessionId, which is
+/// NOT a plain keccak of the report data for the ZK backends:
+///   - `Solidity` (0)            -> `keccak256(data)`
+///   - `ZkRiscZero` (1) / `ZkSuccinct` (2) -> decode `data` as `ZkProof` and return the
+///     last 32 bytes of `output` (the journal-committed report hash). `SnpZkProof` is
+///     ABI-forward-compatible with `ZkProof`, so decoding it as `ZkProof` still reads
+///     `output` correctly.
+pub fn compute_tee_report_hash(verification_backend_type: u8, data: &Bytes) -> Result<B256> {
+    // VerificationBackendType.Solidity == 0 (Evidence.sol).
+    if verification_backend_type == 0 {
+        return Ok(keccak256(data));
+    }
+    let zk_proof =
+        ZkProof::abi_decode(data).context("Failed to decode ZkProof from teeReport.data")?;
+    let output = zk_proof.output;
+    if output.len() < 32 {
+        anyhow::bail!("ZkProof.output too short: {} < 32", output.len());
+    }
+    Ok(B256::from_slice(&output[output.len() - 32..]))
+}
+
+/// Compute sessionId from the raw TPM quote report data and the TEE report.
 ///
-/// This is useful when you have the raw bytes directly.
+/// This is useful when you have the raw bytes directly. `tee_report` is taken whole (not
+/// just its `data`) because the report hash is backend-dependent — see
+/// [`compute_tee_report_hash`].
 pub fn compute_session_id_from_parts(
     tpm_quote_report_data: &Bytes,
-    tee_report_data: &Bytes,
+    tee_report: &TeeReport,
 ) -> Result<B256> {
-    // 1. Hash teeReport.data
-    let tee_report_bytes_hash = keccak256(tee_report_data);
+    // 1. teeReportBytesHash = TeeVerifier.getTeeReportHash(teeReport)
+    let tee_report_bytes_hash =
+        compute_tee_report_hash(tee_report.verification_backend_type, &tee_report.data)?;
 
     // 2. Decode TpmQuoteReport and hash tpmSignature
     let quote_report = TpmQuoteReport::abi_decode(tpm_quote_report_data)
@@ -476,4 +492,76 @@ pub fn compute_new_session_id(
     );
 
     Ok(new_session_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_tee_report_hash;
+    use alloy::primitives::{Bytes, keccak256};
+    use alloy::sol;
+    use alloy::sol_types::SolValue;
+
+    sol! {
+        // Same layout as Evidence.sol SnpZkProof (the 3-field SNP container). teeReport.data
+        // for SEV-SNP is `abi.encode(SnpZkProof{output, proofBytes, rawReport})`.
+        struct SnpZkProof {
+            bytes output;
+            bytes proofBytes;
+            bytes rawReport;
+        }
+    }
+
+    /// For the ZK backends, `teeReportBytesHash` is the journal's trailing 32 bytes
+    /// (== keccak256(rawReport) for SNP), NOT `keccak256(teeReport.data)`. This is the
+    /// exact behaviour of `TeeVerifier.getTeeReportHash`, and a regression guard against
+    /// the stale `keccak256(data)` the SDK used to compute — which silently produced a
+    /// wrong sessionId for every ZK (SNP) registration.
+    #[test]
+    fn tee_report_hash_zk_uses_journal_tail_not_keccak_of_data() {
+        let raw_report = Bytes::from(vec![0xABu8; 1184]); // SNP report is 1184 bytes
+        let report_hash = keccak256(&raw_report); // journal binds keccak256(report)
+
+        // Journal output: arbitrary prefix, then the trailing 32-byte report hash.
+        let mut output = vec![0x11u8; 96];
+        output.extend_from_slice(report_hash.as_slice());
+
+        // teeReport.data = abi.encode(SnpZkProof{...}) — 3 fields; decoded on-chain as the
+        // 2-field ZkProof (ABI-forward-compatible), so `output` is still read correctly.
+        let data: Bytes = SnpZkProof {
+            output: output.into(),
+            proofBytes: Bytes::from(vec![0x22u8; 260]),
+            rawReport: raw_report.clone(),
+        }
+        .abi_encode()
+        .into();
+
+        // ZkRiscZero (1) and ZkSuccinct (2) both take the journal tail.
+        for backend in [1u8, 2u8] {
+            let h = compute_tee_report_hash(backend, &data).unwrap();
+            assert_eq!(
+                h, report_hash,
+                "ZK backend {backend} must return the journal tail"
+            );
+            assert_ne!(
+                h,
+                keccak256(&data),
+                "ZK hash must NOT be keccak256(teeReport.data)"
+            );
+        }
+
+        // Solidity (0) keeps keccak256(data).
+        assert_eq!(compute_tee_report_hash(0, &data).unwrap(), keccak256(&data));
+    }
+
+    #[test]
+    fn tee_report_hash_zk_rejects_short_output() {
+        let data: Bytes = SnpZkProof {
+            output: Bytes::from(vec![0u8; 8]), // < 32 bytes
+            proofBytes: Bytes::new(),
+            rawReport: Bytes::new(),
+        }
+        .abi_encode()
+        .into();
+        assert!(compute_tee_report_hash(2, &data).is_err());
+    }
 }

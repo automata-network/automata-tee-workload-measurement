@@ -39,6 +39,22 @@ struct ZkProof {
     bytes proofBytes;
 }
 
+/// @notice SEV-SNP zero-knowledge proof container
+/// @dev Used by TeeReport.data for AMD SEV-SNP. The SNP verifier journal only commits to
+///      keccak256(report) (see ISnpAttestation.VerifierJournal.reportHash), so the full report
+///      body — needed on-chain to extract REPORT_DATA / report_id — must be supplied alongside
+///      the proof. TeeVerifier asserts keccak256(rawReport) == journal.reportHash before use.
+///      Layout is ABI-forward-compatible with ZkProof (same first two fields), so getTeeReportHash
+///      can decode it as ZkProof and still read `output` correctly.
+struct SnpZkProof {
+    /// @dev Public outputs (journal/public values) - visible on-chain
+    bytes output;
+    /// @dev Cryptographic proof blob (SNARK/STARK proof bytes)
+    bytes proofBytes;
+    /// @dev Full SEV-SNP attestation report (1184 bytes); bound to the proof via reportHash
+    bytes rawReport;
+}
+
 /// @notice Attestation Key (AK) public key collateral format
 enum AkPubCollateralType {
     /// @dev Azure: abi.encode((bytes jwt, bytes hclVarData))
