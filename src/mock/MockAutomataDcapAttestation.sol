@@ -19,6 +19,12 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
     // V5 body header: u16 bodyType + u32 size
     uint256 private constant V5_BODY_HEADER_SIZE = 6;
 
+    uint8 public tcbStatus = 1;
+
+    function setTcbStatus(uint8 _tcbStatus) external {
+        tcbStatus = _tcbStatus;
+    }
+
     function getBp() external pure returns (uint16) {
         return 0;
     }
@@ -78,7 +84,7 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
         bytes memory output = abi.encodePacked(
             quoteVersion, // actual version (BE)
             quoteBodyType, // quoteBodyType (BE)
-            uint8(1), // tcbStatus
+            tcbStatus,
             bytes6(0), // fmspcBytes
             quoteBody
         );
