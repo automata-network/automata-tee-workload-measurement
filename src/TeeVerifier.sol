@@ -54,8 +54,21 @@ contract TeeVerifier is ITeeVerifier {
     /// @dev Offset of quote body in DCAP output (2+2+1+6 byte header)
     uint256 private constant DCAP_QUOTE_BODY_OFFSET = 11;
 
+    /// @dev Offset of tcbStatus in DCAP output (2-byte version + 2-byte quoteBodyType)
+    uint256 private constant DCAP_TCB_STATUS_OFFSET = 4;
+
+    /// @dev Accepted DCAP TCB statuses: OK and TCB_SW_HARDENING_NEEDED.
+    uint8 private constant TCB_STATUS_OK = 0;
+    uint8 private constant TCB_STATUS_SW_HARDENING_NEEDED = 1;
+
     /// @dev Size of reportData field in bytes
     uint256 private constant REPORT_DATA_SIZE = 64;
+
+    /// @dev Offset of tdAttributes within TD10/TD15 quote body
+    uint256 private constant TD_ATTRIBUTES_OFFSET = 120;
+
+    /// @dev TD_ATTRIBUTES.DEBUG is bit 0.
+    uint8 private constant TD_ATTRIBUTES_DEBUG_MASK = 0x01;
 
     /// @dev Offset of reportData within quote body
     uint256 private constant DCAP_REPORT_DATA_START = 520;
@@ -221,6 +234,21 @@ contract TeeVerifier is ITeeVerifier {
         }
     }
 
+    /// @dev Returns true only for TCB statuses considered acceptable for production workloads.
+    function isAcceptedDcapTcbStatus(bytes memory output) private pure returns (bool) {
+        if (output.length <= DCAP_TCB_STATUS_OFFSET) {
+            return false;
+        }
+
+        uint8 tcbStatus = uint8(output[DCAP_TCB_STATUS_OFFSET]);
+        return tcbStatus == TCB_STATUS_OK || tcbStatus == TCB_STATUS_SW_HARDENING_NEEDED;
+    }
+
+    /// @dev Checks TDX TD_ATTRIBUTES.DEBUG from the little-endian TD attributes bit field.
+    function isTdxDebugEnabled(bytes memory quoteBody) private pure returns (bool) {
+        return (uint8(quoteBody[TD_ATTRIBUTES_OFFSET]) & TD_ATTRIBUTES_DEBUG_MASK) != 0;
+    }
+
     /// @dev Extracts the full SNP attestation report from journal
     /// @param rawReport The SNP raw report bytes from VerifierJournal (already the full report)
     /// @return attestationReport The attestation report (validated and returned directly)
@@ -288,8 +316,16 @@ contract TeeVerifier is ITeeVerifier {
             revert DcapVerificationFailed(output);
         }
 
+        if (!isAcceptedDcapTcbStatus(output)) {
+            return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.IntelTDX});
+        }
+
         // Extract quote body from DCAP output (Step 1)
         bytes memory quoteBody = extractDcapQuoteBody(output);
+
+        if (isTdxDebugEnabled(quoteBody)) {
+            return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.IntelTDX});
+        }
 
         return TeeVerificationResult({valid: true, reportData: quoteBody, teeType: TEEType.IntelTDX});
     }
