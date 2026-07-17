@@ -13,8 +13,8 @@ use crate::{
     session_registry::SessionRegistry,
     stubs::PublicIdentity,
     types::{
-        RegisterSessionRequest, RegisterSessionResponse, RotateSessionRequest,
-        RotateSessionResponse,
+        LifecycleSessionResponse, RecoverSessionRequest, RegisterSessionRequest,
+        RegisterSessionResponse, RenewSessionRequest, RotateKeyRequest, RotateKeyResponse,
     },
     workload_registry::WorkloadRegistry,
 };
@@ -102,10 +102,10 @@ impl WorkloadMeasurement {
                 )
             })?;
 
-        let ttl = if spec.ttl == 0 {
+        let ttl = if spec.sessionTtl == 0 {
             30 * 86400 // default to 30 days if not set
         } else {
-            spec.ttl
+            spec.sessionTtl
         };
         Ok(ttl)
     }
@@ -122,7 +122,7 @@ impl WorkloadMeasurement {
                 req.base_image_id,
                 req.platform_profile_id,
                 req.variant_id,
-                req.expire_at,
+                req.op_expires_at,
                 req.owner_identity.into(),
                 req.owner_signature,
             )
@@ -130,18 +130,57 @@ impl WorkloadMeasurement {
         Ok(response)
     }
 
-    pub async fn rotate_session(&self, req: RotateSessionRequest) -> Result<RotateSessionResponse> {
+    pub async fn rotate_key(&self, req: RotateKeyRequest) -> Result<RotateKeyResponse> {
         let response = self
             .session_registry
-            .rotate_session_presigned(
+            .rotate_key_presigned(
                 req.old_session_id,
                 req.tee_report_bytes_hash,
                 req.rotation_evidence.into(),
-                req.expire_at,
+                req.op_expires_at,
                 req.owner_identity.into(),
                 req.owner_signature,
             )
             .await?;
         Ok(response)
+    }
+
+    pub async fn renew_session(
+        &self,
+        req: RenewSessionRequest,
+    ) -> Result<LifecycleSessionResponse> {
+        self.session_registry
+            .renew_session_presigned(
+                req.old_session_id,
+                req.new_evidence,
+                req.workload_id,
+                req.base_image_id,
+                req.platform_profile_id,
+                req.measurement_variant_id,
+                req.renewal_authorization,
+                req.op_expires_at,
+                req.owner_identity,
+                req.owner_signature,
+            )
+            .await
+    }
+
+    pub async fn recover_session(
+        &self,
+        req: RecoverSessionRequest,
+    ) -> Result<LifecycleSessionResponse> {
+        self.session_registry
+            .recover_session_presigned(
+                req.old_session_id,
+                req.new_evidence,
+                req.workload_id,
+                req.base_image_id,
+                req.platform_profile_id,
+                req.measurement_variant_id,
+                req.op_expires_at,
+                req.owner_identity,
+                req.owner_signature,
+            )
+            .await
     }
 }

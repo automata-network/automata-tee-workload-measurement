@@ -9,7 +9,7 @@ pragma solidity ^0.8.27;
 enum PcrVerifyType {
     /// @dev Exact match: PCR final value must equal matchData[0]
     STATIC,
-    /// @dev Event subset: PCR events must be a subset of matchData (any order)
+    /// @dev Required subset: matchData must occur in PCR events (any order)
     DYNAMIC_SUBSET,
     /// @dev Event subsequence: PCR events must contain matchData as an ordered subsequence
     DYNAMIC_SUBSEQUENCE
@@ -41,13 +41,13 @@ struct PublicIdentity {
 struct PcrSpec {
     /// @dev PCR index (0-23 per TPM 2.0 specification)
     uint8 pcrIndex;
-    /// @dev Verification strategy: STATIC (exact match), DYNAMIC_SUBSET (allowed events), DYNAMIC_SUBSEQUENCE (ordered sequence)
+    /// @dev Verification strategy: STATIC (exact match), DYNAMIC_SUBSET (required unordered landmarks), DYNAMIC_SUBSEQUENCE (ordered landmarks)
     PcrVerifyType verifyType;
     /// @dev Match data interpretation depends on verifyType:
     ///      - STATIC: matchData[0] = expected PCR final value
-    ///      - DYNAMIC_SUBSET: matchData = set of allowed event hashes. Reported event log must be
-    ///        a non-empty subset (empty event log is rejected — no cumulative-hash verification
-    ///        occurs when events are empty, so empty would bypass the policy entirely).
+    ///      - DYNAMIC_SUBSET: matchData = set of required event hashes. Every matchData entry must
+    ///        occur in the non-empty reported event log in any order; additional events are
+    ///        permitted. Empty logs are rejected because no cumulative-hash verification occurs.
     ///      - DYNAMIC_SUBSEQUENCE: matchData = required event sequence (must appear in order in
     ///        a non-empty event log; empty event log is rejected for the same reason).
     bytes32[] matchData;
@@ -121,8 +121,8 @@ struct WorkloadSpec {
     string name;
     /// @dev Semantic version (e.g., "2.1.0")
     string version;
-    /// @dev Time-to-live in seconds (0 means using the default TTL of 30 days in SessionRegistry)
-    uint64 ttl;
+    /// @dev Session lifetime in seconds (0 means the SessionRegistry default of 30 days)
+    uint64 sessionTtl;
     /// @dev Access control mode for base images:
     ///      - ANY: No restrictions (baseImageIds ignored)
     ///      - BLACKLIST: baseImageIds contains blocked base images
@@ -156,5 +156,5 @@ struct CVMSession {
 
     // Lifecycle
     uint64 registeredAt; // Registration timestamp
-    uint64 expiresAt; // Expiration timestamp
+    uint64 sessionExpiresAt; // Absolute session expiration timestamp
 }

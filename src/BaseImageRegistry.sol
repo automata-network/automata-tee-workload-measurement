@@ -61,7 +61,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error ArrayLengthMismatch(uint256 platformProfilesLen, uint256 measurementVariantsLen);
     error InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint);
     error Unauthorized(bytes32 actualOwner, bytes32 expectedOwner);
-    error SignatureExpired(uint64 expireAt, uint64 nowTs);
+    error SignatureExpired(uint64 opExpiresAt, uint64 nowTs);
     /// @notice PCR spec list is not sorted strictly ascending by pcrIndex.
     ///         prevIndex sits at i-1 and thisIndex at i in the input array.
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
@@ -118,7 +118,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         BaseImageSpec calldata spec,
         PlatformProfile[] calldata platformProfiles,
         MeasurementVariant[][] calldata measurementVariants,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 baseImageId) {
@@ -129,8 +129,8 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
 
         // Check signature expiration
-        if (block.timestamp > expireAt) {
-            revert SignatureExpired(expireAt, uint64(block.timestamp));
+        if (block.timestamp > opExpiresAt) {
+            revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
         // Validate PCR ordering for profiles and variants
@@ -166,7 +166,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 BASEIMAGE_REGISTER_MSG,
                 block.chainid,
                 address(this),
-                expireAt,
+                opExpiresAt,
                 spec,
                 platformProfiles,
                 measurementVariants
@@ -234,13 +234,13 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     /// @inheritdoc IBaseImageRegistry
     function deactivateBaseImage(
         bytes32 baseImageId,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external {
         // Check signature expiration
-        if (block.timestamp > expireAt) {
-            revert SignatureExpired(expireAt, uint64(block.timestamp));
+        if (block.timestamp > opExpiresAt) {
+            revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
         // Check exists and active
@@ -259,7 +259,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
         bytes32 message =
-            sha256(abi.encode(BASEIMAGE_DEACTIVATE_MSG, block.chainid, address(this), expireAt, baseImageId));
+            sha256(abi.encode(BASEIMAGE_DEACTIVATE_MSG, block.chainid, address(this), opExpiresAt, baseImageId));
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
@@ -277,7 +277,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         bytes32 baseImageId,
         PlatformProfile[] calldata platformProfiles,
         MeasurementVariant[][] calldata measurementVariants,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external {
@@ -288,8 +288,8 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
 
         // Check signature expiration
-        if (block.timestamp > expireAt) {
-            revert SignatureExpired(expireAt, uint64(block.timestamp));
+        if (block.timestamp > opExpiresAt) {
+            revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
         // Check exists and active
@@ -325,7 +325,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 BASEIMAGE_UPDATE_MSG,
                 block.chainid,
                 address(this),
-                expireAt,
+                opExpiresAt,
                 baseImageId,
                 platformProfiles,
                 measurementVariants

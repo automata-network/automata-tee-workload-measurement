@@ -2,7 +2,12 @@
 pragma solidity ^0.8.27;
 
 import {CVMSession, PublicIdentity} from "../../types/Common.sol";
-import {AttestationEvidence, TpmReport, SessionRotationEvidence} from "../../types/Evidence.sol";
+import {
+    AttestationEvidence,
+    TpmReport,
+    SessionKeyRotationEvidence,
+    SessionRenewalAuthorization
+} from "../../types/Evidence.sol";
 
 struct CVMSessionStorage {
     bool exists;
@@ -48,19 +53,25 @@ interface ISessionRegistry {
     /// @param revoker Owner fingerprint that revoked the session
     event SessionRevoked(bytes32 indexed sessionId, bytes32 indexed revoker);
 
-    /// @notice Emitted when a session is rotated
-    /// @param oldSessionId The session being rotated
+    /// @notice Emitted when a session's TPM and application keys are rotated
+    /// @param oldSessionId The predecessor session
     /// @param newSessionId The newly created session
     /// @param owner Owner fingerprint that authorized the rotation
     /// @param newTpmSigningKeyFingerprint Fingerprint of the new TPM signing key
     /// @param newSessionKeyFingerprint Fingerprint of the new session key
-    event SessionRotated(
+    event SessionKeyRotated(
         bytes32 indexed oldSessionId,
         bytes32 indexed newSessionId,
         bytes32 indexed owner,
         bytes32 newTpmSigningKeyFingerprint,
         bytes32 newSessionKeyFingerprint
     );
+
+    /// @notice Emitted when complete successor attestation renews an active session
+    event SessionRenewed(bytes32 indexed oldSessionId, bytes32 indexed newSessionId, bytes32 indexed owner);
+
+    /// @notice Emitted when an owner recovers from an existing session into a fully attested successor
+    event SessionRecovered(bytes32 indexed oldSessionId, bytes32 indexed newSessionId, bytes32 indexed owner);
 
     // ============================================================================
     // Functions
@@ -72,7 +83,7 @@ interface ISessionRegistry {
     /// @param baseImageId The base image identifier
     /// @param platformProfileId The platform profile identifier
     /// @param variantId The measurement variant identifier
-    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
+    /// @param opExpiresAt Operation-signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the session owner
     /// @param ownerSignature Signature over the session registration data by ownerIdentity
     /// @return sessionId The unique identifier for the registered session
@@ -82,7 +93,7 @@ interface ISessionRegistry {
         bytes32 baseImageId,
         bytes32 platformProfileId,
         bytes32 variantId,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 sessionId);
@@ -98,12 +109,12 @@ interface ISessionRegistry {
 
     /// @notice Revoke a session (only by owner)
     /// @param sessionId The session identifier
-    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
+    /// @param opExpiresAt Operation-signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the session owner
     /// @param ownerSignature Signature over the revocation request by ownerIdentity
     function revokeSession(
         bytes32 sessionId,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external;
@@ -123,19 +134,46 @@ interface ISessionRegistry {
     /// @return nonce The current nonce value
     function getNonce(bytes32 ownerFingerprint) external view returns (uint256 nonce);
 
-    /// @notice Rotate a session's TPM signing key and session key
+    /// @notice Rotate a session's TPM signing key and session key without extending its lifetime
     /// @param oldSessionId The session to rotate
     /// @param teeReportBytesHash keccak256(teeReport.data) from the original attestation
-    /// @param rotationEvidence The rotation evidence bundle (TPM reports, signatures, keys)
-    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
+    /// @param rotationEvidence The key-rotation evidence bundle (TPM reports, signatures, keys)
+    /// @param opExpiresAt Operation-signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The session owner's public key
     /// @param ownerSignature Signature over the rotation message by the owner
     /// @return newSessionId The derived identifier for the new rotated session
-    function rotateSession(
+    function rotateKey(
         bytes32 oldSessionId,
         bytes32 teeReportBytesHash,
-        SessionRotationEvidence calldata rotationEvidence,
-        uint64 expireAt,
+        SessionKeyRotationEvidence calldata rotationEvidence,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 newSessionId);
+
+    /// @notice Fully attest a successor and prove lineage with the active predecessor TPM key
+    function renewSession(
+        bytes32 oldSessionId,
+        AttestationEvidence calldata newEvidence,
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId,
+        SessionRenewalAuthorization calldata renewalAuthorization,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 newSessionId);
+
+    /// @notice Fully attest a successor and revoke an existing owner-controlled predecessor
+    function recoverSession(
+        bytes32 oldSessionId,
+        AttestationEvidence calldata newEvidence,
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 newSessionId);

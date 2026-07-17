@@ -42,6 +42,11 @@ import {
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
     WORKLOAD_DOMAIN,
+    SESSION_ROTATE_KEY_DOMAIN,
+    SESSION_RENEW_DOMAIN,
+    SESSION_ROTATE_KEY_MSG,
+    SESSION_RENEW_MSG,
+    SESSION_RECOVER_MSG,
     ALGO_ID_ES256K,
     KEY_DOMAIN
 } from "../src/types/Constants.sol";
@@ -65,12 +70,20 @@ contract SessionRegistryTest is Test {
     // Test data: owner identity (ES256K)
     PublicIdentity ownerIdentity;
 
+    function testSessionLifecycleDomainVectors() public pure {
+        assertEq(SESSION_ROTATE_KEY_DOMAIN, 0x55997df232b2d66bd3186581c7f2e14645eaab4f3f2639094d98fcec722262bb);
+        assertEq(SESSION_RENEW_DOMAIN, 0x37c7a989c0f449c8a96b989e27657c5da4e742cd5b0e3dc9d7cb92e21176570e);
+        assertEq(SESSION_ROTATE_KEY_MSG, 0x35bc7dbc6065f16ec1a121e394b4def21af016a19a4807eae353231a7b644326);
+        assertEq(SESSION_RENEW_MSG, 0xaf6e7c37d438349d2dd85f2d2507703ad2f6893900bae598146eec2dfb6746e8);
+        assertEq(SESSION_RECOVER_MSG, 0x1382594f92a7140bab1abb4fa585ff7bcd5c3f416a89a7538e819666e0e0d37a);
+    }
+
     function setUp() public {
         _deployP256();
 
         // Warp to a timestamp valid for the GCP vTPM AK leaf cert embedded in
         // test/fixtures/session_register.hex (issued 2026-05-20, ~1779285600).
-        // Sits just before the session expireAt of 1779285919 so all expiry
+        // Sits just before the session opExpiresAt of 1779285919 so all expiry
         // checks pass at this single timestamp.
         vm.warp(1779285800);
 
@@ -231,14 +244,14 @@ contract SessionRegistryTest is Test {
         measurementVariants[1][0] = _createC3Standard4Variant();
 
         // SignatureVerifier.verify is mocked to true in setUp, so the signature
-        // bytes here are filler; expireAt just has to be in the future relative
+        // bytes here are filler; opExpiresAt just has to be in the future relative
         // to the test's block.timestamp set in setUp.
-        uint64 expireAt = 1900000000;
+        uint64 opExpiresAt = 1900000000;
         bytes memory signature =
             hex"e51236c453cad477b48d11c448cdcab96fe6e94ed306fd02ee7d0251e6dc37264ba08f0ac5823adf62f0d7746fde131c52d7ba954886e98848cd11f37753d7c51b";
 
         baseImageId = baseImageRegistry.registerBaseImage(
-            spec, platformProfiles, measurementVariants, expireAt, ownerIdentity, signature
+            spec, platformProfiles, measurementVariants, opExpiresAt, ownerIdentity, signature
         );
     }
 
@@ -353,18 +366,18 @@ contract SessionRegistryTest is Test {
         WorkloadSpec memory spec = WorkloadSpec({
             name: "fedora-oci",
             version: "v0.0.9",
-            ttl: 0,
+            sessionTtl: 0,
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: baseImageIds,
             requirements: new AttributeRequirement[](0),
             pcrs: new PcrSpec[](0)
         });
 
-        uint64 expireAt = 1900000000;
+        uint64 opExpiresAt = 1900000000;
         bytes memory signature =
             hex"4517531794e04ee1f950e7b1bd016ea460e1fe06e5c222469676642080f01d3b4b0f9090064717d49708001bf77958490bec3e3c18dc11f385932d9aca0a88311c";
 
-        workloadId = workloadRegistry.registerWorkload(spec, expireAt, ownerIdentity, signature);
+        workloadId = workloadRegistry.registerWorkload(spec, opExpiresAt, ownerIdentity, signature);
     }
 
     /// @notice Register session using raw calldata (decodes and calls)
@@ -384,7 +397,7 @@ contract SessionRegistryTest is Test {
             bytes32 baseImageId,
             bytes32 platformProfileId,
             bytes32 variantId,
-            uint64 expireAt,
+            uint64 opExpiresAt,
             PublicIdentity memory decodedOwnerIdentity,
             bytes memory ownerSignature
         ) = abi.decode(params, (AttestationEvidence, bytes32, bytes32, bytes32, bytes32, uint64, PublicIdentity, bytes));
@@ -399,7 +412,7 @@ contract SessionRegistryTest is Test {
             baseImageId,
             platformProfileId,
             variantId,
-            expireAt,
+            opExpiresAt,
             decodedOwnerIdentity,
             ownerSignature
         );
@@ -467,15 +480,15 @@ contract SessionRegistryTest is Test {
     // _isSessionActive must fail-closed when the underlying workload or baseimage is
     // revoked, even if the session row itself is still alive (exists, !isRevoked,
     // !expired). Without this, a compromised baseimage's live sessions would keep
-    // producing valid signatures until expiresAt.
+    // producing valid signatures until sessionExpiresAt.
     //
     // To exercise the gate without re-capturing the registerSession fixture, these
     // tests inject a synthetic session row via vm.store. CVMSessionStorage layout
     // (slot 0 of struct): exists(byte0) + isRevoked(byte1) packed in slot +0; owner
-    // at +1; CVMSession at +2..+9; expiresAt is the high 8 bytes of slot +9.
+    // at +1; CVMSession at +2..+9; sessionExpiresAt is the high 8 bytes of slot +9.
     // ─────────────────────────────────────────────────────────────────────────────────
 
-    function _seedActiveSession(bytes32 baseImageId, bytes32 workloadId, uint64 expiresAt)
+    function _seedActiveSession(bytes32 baseImageId, bytes32 workloadId, uint64 sessionExpiresAt)
         internal
         returns (bytes32 sessionId)
     {
@@ -487,8 +500,8 @@ contract SessionRegistryTest is Test {
         // CVMSession.baseImageId at +5, CVMSession.workloadId at +6
         vm.store(address(sessionRegistry), bytes32(base + 5), baseImageId);
         vm.store(address(sessionRegistry), bytes32(base + 6), workloadId);
-        // CVMSession.registeredAt | expiresAt packed at +9 (uint64+uint64)
-        uint256 packed = (uint256(expiresAt) << 64) | uint64(block.timestamp);
+        // CVMSession.registeredAt | sessionExpiresAt packed at +9 (uint64+uint64)
+        uint256 packed = (uint256(sessionExpiresAt) << 64) | uint64(block.timestamp);
         vm.store(address(sessionRegistry), bytes32(base + 9), bytes32(packed));
     }
 

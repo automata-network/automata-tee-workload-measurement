@@ -165,7 +165,8 @@ struct AttestationEvidence {
     PublicIdentity sessionKey;
 }
 
-struct SessionRotationEvidence {
+/// @notice Evidence for cheap session-key rotation without fresh TEE verification.
+struct SessionKeyRotationEvidence {
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
     bytes sessionKeySignature;
@@ -173,4 +174,10 @@ struct SessionRotationEvidence {
     bytes rotationSignature;
     PublicIdentity oldTpmSigningKey;
     PublicIdentity akPub;
+}
+
+/// @notice Predecessor TPM authorization for a fully attested session renewal.
+struct SessionRenewalAuthorization {
+    bytes signature;
+    PublicIdentity oldTpmSigningKey;
 }

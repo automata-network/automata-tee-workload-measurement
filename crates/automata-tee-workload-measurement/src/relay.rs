@@ -18,7 +18,7 @@ use crate::session_registry::{
 use crate::stubs::PublicIdentity;
 
 use crate::types::{
-    RegisterSessionRequest, RegisterSessionResponse, RotateSessionRequest, RotateSessionResponse,
+    RegisterSessionRequest, RegisterSessionResponse, RotateKeyRequest, RotateKeyResponse,
 };
 
 // ============================================================================
@@ -116,7 +116,7 @@ impl Relay {
                 base_image_id,
                 platform_profile_id,
                 variant_id,
-                request.expire_at,
+                request.op_expires_at,
                 owner_identity,
                 owner_signature,
             )
@@ -128,10 +128,7 @@ impl Relay {
     /// Rotate a session from JSON request.
     ///
     /// The caller must provide a pre-signed owner signature.
-    pub async fn rotate_session(
-        &self,
-        request: RotateSessionRequest,
-    ) -> Result<RotateSessionResponse> {
+    pub async fn rotate_key(&self, request: RotateKeyRequest) -> Result<RotateKeyResponse> {
         // Decode IDs
         let old_session_id = request.old_session_id;
         let tee_report_bytes_hash = request.tee_report_bytes_hash;
@@ -157,17 +154,17 @@ impl Relay {
         info!(
             old_session_id = %old_session_id,
             new_session_id = %new_session_id,
-            "Relay: submitting rotateSession"
+            "Relay: submitting rotateKey"
         );
 
         // Submit transaction
         let response = self
             .registry
-            .rotate_session_presigned(
+            .rotate_key_presigned(
                 old_session_id,
                 tee_report_bytes_hash,
                 rotation_evidence,
-                request.expire_at,
+                request.op_expires_at,
                 owner_identity,
                 owner_signature,
             )
@@ -185,10 +182,10 @@ impl Relay {
     }
 
     /// Rotate a session from JSON string.
-    pub async fn rotate_session_json(&self, json: &str) -> Result<String> {
-        let request: RotateSessionRequest =
-            serde_json::from_str(json).context("Failed to parse RotateSessionRequest")?;
-        let response = self.rotate_session(request).await?;
-        serde_json::to_string(&response).context("Failed to serialize RotateSessionResponse")
+    pub async fn rotate_key_json(&self, json: &str) -> Result<String> {
+        let request: RotateKeyRequest =
+            serde_json::from_str(json).context("Failed to parse RotateKeyRequest")?;
+        let response = self.rotate_key(request).await?;
+        serde_json::to_string(&response).context("Failed to serialize RotateKeyResponse")
     }
 }

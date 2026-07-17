@@ -10,10 +10,10 @@ use tracing::info;
 use crate::base_image_registry::BaseImageRegistry;
 use crate::stubs::SessionRegistry::{CVMSession, SessionRegistryEvents, SessionRegistryInstance};
 use crate::stubs::{
-    AttestationEvidence, PublicIdentity, SessionRotationEvidence, TeeReport, TpmQuoteReport,
-    ZkProof, expire_at, sign_message,
+    AttestationEvidence, PublicIdentity, SessionKeyRotationEvidence, SessionRenewalAuthorization,
+    TeeReport, TpmQuoteReport, ZkProof, op_expires_at, sign_message,
 };
-use crate::types::{AppRef, RegisterSessionResponse, RotateSessionResponse};
+use crate::types::{AppRef, LifecycleSessionResponse, RegisterSessionResponse, RotateKeyResponse};
 use crate::workload_registry::WorkloadRegistry;
 
 pub struct SessionRegistry {
@@ -66,11 +66,11 @@ impl SessionRegistry {
         base_image_ref: AppRef,
         platform_profile_id: B256,
         variant_id: B256,
-        expire_offset_secs: u64,
+        op_expiry_seconds: u64,
     ) -> Result<RegisterSessionResponse> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         // Get chain ID
         let chain_id = self.stub.provider().chain_id();
@@ -87,19 +87,19 @@ impl SessionRegistry {
             session_id = %session_id,
             workload_id = %workload_id,
             base_image_id = %base_image_id,
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             "Submitting registerSession transaction"
         );
 
         // Build and sign the owner message. Must match SessionRegistry.registerSession exactly:
-        // sha256(abi.encode(SESSION_REGISTER_MSG, chainId, address(this), expireAt, sessionId,
+        // sha256(abi.encode(SESSION_REGISTER_MSG, chainId, address(this), opExpiresAt, sessionId,
         //                   workloadId, baseImageId, platformProfileId, variantId, sessionKeyFingerprint))
         let sig_bytes = sign_message(
             &(
                 keccak256(b"CVM_MSG_SESSION_REGISTER_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 session_id,
                 workload_id,
                 base_image_id,
@@ -118,7 +118,7 @@ impl SessionRegistry {
                 base_image_id,
                 platform_profile_id,
                 variant_id,
-                expire_at,
+                op_expires_at,
                 owner_identity.into(),
                 sig_bytes,
             )
@@ -135,17 +135,17 @@ impl SessionRegistry {
     /// 3. Signs the message with the provided private key
     /// 4. Submits the transaction and waits for confirmation
     /// 5. Returns the newSessionId from the emitted event
-    pub async fn rotate_session(
+    pub async fn rotate_key(
         &self,
         signer: &PrivateKeySigner,
         old_session_id: B256,
         tee_report_bytes_hash: B256,
-        rotation_evidence: SessionRotationEvidence,
-        expire_offset_secs: u64,
-    ) -> Result<RotateSessionResponse> {
+        rotation_evidence: SessionKeyRotationEvidence,
+        op_expiry_seconds: u64,
+    ) -> Result<RotateKeyResponse> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         // Get chain ID
         let chain_id = self.stub.provider().chain_id();
@@ -160,18 +160,18 @@ impl SessionRegistry {
             address = %self.stub.address(),
             old_session_id = %old_session_id,
             new_session_id = %new_session_id,
-            expire_at = expire_at,
-            "Submitting rotateSession transaction"
+            op_expires_at = op_expires_at,
+            "Submitting rotateKey transaction"
         );
 
         // Build and sign the message
-        // Message: sha256(abi.encode(SESSION_ROTATE_MSG, chainId, contractAddr, expireAt, oldSessionId, newSessionId))
+        // Message: sha256(abi.encode(SESSION_ROTATE_KEY_MSG, chainId, contractAddr, opExpiresAt, oldSessionId, newSessionId))
         let sig_bytes = sign_message(
             &(
-                keccak256(b"CVM_MSG_SESSION_ROTATE_V1"),
+                keccak256(b"CVM_MSG_SESSION_ROTATE_KEY_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 old_session_id,
                 new_session_id,
             ),
@@ -180,11 +180,11 @@ impl SessionRegistry {
         .await?;
 
         let response = self
-            .rotate_session_presigned(
+            .rotate_key_presigned(
                 old_session_id,
                 tee_report_bytes_hash,
                 rotation_evidence,
-                expire_at,
+                op_expires_at,
                 owner_identity,
                 sig_bytes,
             )
@@ -206,7 +206,7 @@ impl SessionRegistry {
         base_image_id: B256,
         platform_profile_id: B256,
         variant_id: B256,
-        expire_at: u64,
+        op_expires_at: u64,
         owner_identity: PublicIdentity,
         owner_signature: Bytes,
     ) -> Result<RegisterSessionResponse> {
@@ -218,7 +218,7 @@ impl SessionRegistry {
             session_id = %session_id,
             workload_id = %workload_id,
             base_image_id = %base_image_id,
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             "Submitting registerSession (presigned)"
         );
 
@@ -231,7 +231,7 @@ impl SessionRegistry {
                 base_image_id,
                 platform_profile_id,
                 variant_id,
-                expire_at,
+                op_expires_at,
                 owner_identity.into(),
                 owner_signature,
             )
@@ -263,15 +263,15 @@ impl SessionRegistry {
     /// The owner must sign the rotation message externally.
     ///
     /// Returns (new_session_id, tx_hash).
-    pub async fn rotate_session_presigned(
+    pub async fn rotate_key_presigned(
         &self,
         old_session_id: B256,
         tee_report_bytes_hash: B256,
-        rotation_evidence: SessionRotationEvidence,
-        expire_at: u64,
+        rotation_evidence: SessionKeyRotationEvidence,
+        op_expires_at: u64,
         owner_identity: PublicIdentity,
         owner_signature: Bytes,
-    ) -> Result<RotateSessionResponse> {
+    ) -> Result<RotateKeyResponse> {
         // Pre-compute newSessionId
         let new_session_id = compute_new_session_id(
             tee_report_bytes_hash,
@@ -282,18 +282,18 @@ impl SessionRegistry {
             address = %self.stub.address(),
             old_session_id = %old_session_id,
             new_session_id = %new_session_id,
-            expire_at = expire_at,
-            "Submitting rotateSession (presigned)"
+            op_expires_at = op_expires_at,
+            "Submitting rotateKey (presigned)"
         );
 
         // Call the contract
         let pending = self
             .stub
-            .rotateSession(
+            .rotateKey(
                 old_session_id,
                 tee_report_bytes_hash,
                 rotation_evidence.into(),
-                expire_at,
+                op_expires_at,
                 owner_identity.into(),
                 owner_signature,
             )
@@ -302,8 +302,8 @@ impl SessionRegistry {
 
         info!(tx_hash = %pending.tx_hash(), "Rotation transaction submitted");
 
-        let mut tx = PendingTxAccum::new(pending, |event, result: &mut RotateSessionResponse| {
-            if let SessionRegistryEvents::SessionRotated(msg) = event {
+        let mut tx = PendingTxAccum::new(pending, |event, result: &mut RotateKeyResponse| {
+            if let SessionRegistryEvents::SessionKeyRotated(msg) = event {
                 result.new_session_id = msg.newSessionId;
             }
         });
@@ -318,16 +318,105 @@ impl SessionRegistry {
         Ok(response)
     }
 
+    /// Submit a fully attested renewal with caller-supplied predecessor and
+    /// owner authorizations.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn renew_session_presigned(
+        &self,
+        old_session_id: B256,
+        new_evidence: AttestationEvidence,
+        workload_id: B256,
+        base_image_id: B256,
+        platform_profile_id: B256,
+        measurement_variant_id: B256,
+        renewal_authorization: SessionRenewalAuthorization,
+        op_expires_at: u64,
+        owner_identity: PublicIdentity,
+        owner_signature: Bytes,
+    ) -> Result<LifecycleSessionResponse> {
+        let pending = self
+            .stub
+            .renewSession(
+                old_session_id,
+                new_evidence.into(),
+                workload_id,
+                base_image_id,
+                platform_profile_id,
+                measurement_variant_id,
+                renewal_authorization.into(),
+                op_expires_at,
+                owner_identity.into(),
+                owner_signature,
+            )
+            .send_ex()
+            .await?;
+
+        let mut tx =
+            PendingTxAccum::new(pending, |event, result: &mut LifecycleSessionResponse| {
+                if let SessionRegistryEvents::SessionRenewed(message) = event {
+                    result.new_session_id = message.newSessionId;
+                }
+            });
+        let mut response = tx.result().await.context("Failed to get renewal receipt")?;
+        response.tx_hash = tx.tx_hash();
+        Ok(response)
+    }
+
+    /// Submit a fully attested recovery with caller-supplied owner
+    /// authorization. No predecessor TPM key is required.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn recover_session_presigned(
+        &self,
+        old_session_id: B256,
+        new_evidence: AttestationEvidence,
+        workload_id: B256,
+        base_image_id: B256,
+        platform_profile_id: B256,
+        measurement_variant_id: B256,
+        op_expires_at: u64,
+        owner_identity: PublicIdentity,
+        owner_signature: Bytes,
+    ) -> Result<LifecycleSessionResponse> {
+        let pending = self
+            .stub
+            .recoverSession(
+                old_session_id,
+                new_evidence.into(),
+                workload_id,
+                base_image_id,
+                platform_profile_id,
+                measurement_variant_id,
+                op_expires_at,
+                owner_identity.into(),
+                owner_signature,
+            )
+            .send_ex()
+            .await?;
+
+        let mut tx =
+            PendingTxAccum::new(pending, |event, result: &mut LifecycleSessionResponse| {
+                if let SessionRegistryEvents::SessionRecovered(message) = event {
+                    result.new_session_id = message.newSessionId;
+                }
+            });
+        let mut response = tx
+            .result()
+            .await
+            .context("Failed to get recovery receipt")?;
+        response.tx_hash = tx.tx_hash();
+        Ok(response)
+    }
+
     /// Revoke a session in the SessionRegistry contract.
     pub async fn revoke_session(
         &self,
         signer: &PrivateKeySigner,
         session_id: B256,
-        expire_offset_secs: u64,
+        op_expiry_seconds: u64,
     ) -> Result<B256> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         let chain_id = self.stub.provider().chain_id();
 
@@ -336,7 +425,7 @@ impl SessionRegistry {
                 keccak256(b"CVM_MSG_SESSION_REVOKE_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 session_id,
             ),
             signer,
@@ -346,13 +435,13 @@ impl SessionRegistry {
         info!(
             address = %self.stub.address(),
             session_id = %session_id,
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             "Submitting revokeSession transaction"
         );
 
         let pending = self
             .stub
-            .revokeSession(session_id, expire_at, owner_identity.into(), sig_bytes)
+            .revokeSession(session_id, op_expires_at, owner_identity.into(), sig_bytes)
             .send_ex()
             .await?;
 

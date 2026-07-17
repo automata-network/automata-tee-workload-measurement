@@ -9,7 +9,7 @@ use tracing::{debug, info};
 use crate::stubs::WorkloadRegistry::{
     WorkloadRegistryEvents, WorkloadRegistryInstance, WorkloadSpec,
 };
-use crate::stubs::{PublicIdentity, expire_at, sign_message};
+use crate::stubs::{PublicIdentity, op_expires_at, sign_message};
 use crate::types::AppRef;
 
 pub struct WorkloadRegistry {
@@ -43,17 +43,17 @@ impl WorkloadRegistry {
         &self,
         signer: &PrivateKeySigner,
         spec: WorkloadSpec,
-        expire_offset_secs: u64,
+        op_expiry_seconds: u64,
     ) -> Result<B256> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         let workload_id = Self::get_workload_id(&AppRef::new(&spec.name, &spec.version));
 
         info!(
             address = %self.stub.address(),
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             workload_name = %spec.name,
             workload_version = %spec.version,
             workload_id = %workload_id,
@@ -64,13 +64,13 @@ impl WorkloadRegistry {
         let chain_id = self.stub.provider().chain_id();
 
         // Build and sign the message
-        // Message: sha256(abi.encode(WORKLOAD_REGISTER_MSG, chainId, contractAddr, expireAt, spec))
+        // Message: sha256(abi.encode(WORKLOAD_REGISTER_MSG, chainId, contractAddr, opExpiresAt, spec))
         let sig_bytes = sign_message(
             &(
                 keccak256(b"CVM_MSG_WORKLOAD_REGISTER_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 spec.clone(),
             ),
             signer,
@@ -78,14 +78,14 @@ impl WorkloadRegistry {
         .await?;
 
         debug!("spec: {:?}", spec);
-        debug!("expire_at: {}", expire_at);
+        debug!("op_expires_at: {}", op_expires_at);
         debug!("owner_identity: {:?}", owner_identity);
         debug!("sig_bytes: {:?}", sig_bytes);
 
         // Call the contract
         let pending = self
             .stub
-            .registerWorkload(spec, expire_at, owner_identity.into(), sig_bytes)
+            .registerWorkload(spec, op_expires_at, owner_identity.into(), sig_bytes)
             .send_ex()
             .await?;
 
@@ -112,11 +112,11 @@ impl WorkloadRegistry {
         &self,
         signer: &PrivateKeySigner,
         workload_id: B256,
-        expire_offset_secs: u64,
+        op_expiry_seconds: u64,
     ) -> Result<B256> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         let chain_id = self.stub.provider().chain_id();
 
@@ -125,7 +125,7 @@ impl WorkloadRegistry {
                 keccak256(b"CVM_MSG_WORKLOAD_DEACTIVATE_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 workload_id,
             ),
             signer,
@@ -135,13 +135,13 @@ impl WorkloadRegistry {
         info!(
             address = %self.stub.address(),
             workload_id = %workload_id,
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             "Submitting deactivateWorkload transaction"
         );
 
         let pending = self
             .stub
-            .deactivateWorkload(workload_id, expire_at, owner_identity.into(), sig_bytes)
+            .deactivateWorkload(workload_id, op_expires_at, owner_identity.into(), sig_bytes)
             .send_ex()
             .await?;
 

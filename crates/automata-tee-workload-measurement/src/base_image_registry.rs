@@ -10,7 +10,7 @@ use tracing::{debug, info};
 
 use crate::stubs::BaseImageRegistry::{BaseImageRegistryEvents, BaseImageRegistryInstance};
 use crate::stubs::{
-    BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity, expire_at, sign_message,
+    BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity, op_expires_at, sign_message,
 };
 use crate::types::AppRef;
 
@@ -160,7 +160,7 @@ impl BaseImageRegistry {
         spec: BaseImageSpec,
         platform_profiles: Vec<PlatformProfile>,
         measurement_variants: Vec<Vec<MeasurementVariant>>,
-        expire_offset_secs: u64,
+        op_expiry_seconds: u64,
     ) -> Result<BaseImageResult> {
         let image_id = Self::get_image_id(&AppRef::new(&spec.name, &spec.version));
         for item in &platform_profiles {
@@ -179,11 +179,11 @@ impl BaseImageRegistry {
         }
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         info!(
             address = %self.stub.address(),
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             "Submitting registerBaseImage transaction"
         );
 
@@ -191,13 +191,13 @@ impl BaseImageRegistry {
         let chain_id = self.stub.provider().chain_id();
 
         // Build and sign the message
-        // Message: sha256(abi.encode(domain, chainId, contractAddr, expireAt, spec, profiles, variants))
+        // Message: sha256(abi.encode(domain, chainId, contractAddr, opExpiresAt, spec, profiles, variants))
         let sig_bytes = sign_message(
             &(
                 keccak256(b"CVM_MSG_BASEIMAGE_REGISTER_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 spec.clone(),
                 platform_profiles.clone(),
                 measurement_variants.clone(),
@@ -209,7 +209,7 @@ impl BaseImageRegistry {
         debug!("spec: {:?}", spec);
         debug!("platform_profiles: {:?}", platform_profiles);
         debug!("measurement_variants: {:?}", measurement_variants);
-        debug!("expire_at: {}", expire_at);
+        debug!("op_expires_at: {}", op_expires_at);
         debug!("owner_identity: {:?}", owner_identity);
         debug!("sig_bytes: {:?}", sig_bytes);
 
@@ -218,7 +218,7 @@ impl BaseImageRegistry {
             spec,
             platform_profiles,
             measurement_variants,
-            expire_at,
+            op_expires_at,
             owner_identity.into(),
             sig_bytes,
         );
@@ -261,11 +261,11 @@ impl BaseImageRegistry {
         &self,
         signer: &PrivateKeySigner,
         base_image_id: B256,
-        expire_offset_secs: u64,
+        op_expiry_seconds: u64,
     ) -> Result<B256> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         let chain_id = self.stub.provider().chain_id();
 
@@ -274,7 +274,7 @@ impl BaseImageRegistry {
                 keccak256(b"CVM_MSG_BASEIMAGE_DEACTIVATE_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 base_image_id,
             ),
             signer,
@@ -284,13 +284,18 @@ impl BaseImageRegistry {
         info!(
             address = %self.stub.address(),
             base_image_id = %base_image_id,
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             "Submitting deactivateBaseImage transaction"
         );
 
         let pending = self
             .stub
-            .deactivateBaseImage(base_image_id, expire_at, owner_identity.into(), sig_bytes)
+            .deactivateBaseImage(
+                base_image_id,
+                op_expires_at,
+                owner_identity.into(),
+                sig_bytes,
+            )
             .send_ex()
             .await?;
 
@@ -325,21 +330,21 @@ impl BaseImageRegistry {
         base_image_id: B256,
         platform_profiles: Vec<PlatformProfile>,
         measurement_variants: Vec<Vec<MeasurementVariant>>,
-        expire_offset_secs: u64,
+        op_expiry_seconds: u64,
     ) -> Result<BaseImageResult> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
-        let expire_at = expire_at(expire_offset_secs);
+        let op_expires_at = op_expires_at(op_expiry_seconds);
 
         let chain_id = self.stub.provider().chain_id();
 
-        // Message: sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainId, contractAddr, expireAt, baseImageId, profiles, variants))
+        // Message: sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainId, contractAddr, opExpiresAt, baseImageId, profiles, variants))
         let sig_bytes = sign_message(
             &(
                 keccak256(b"CVM_MSG_BASEIMAGE_UPDATE_V1"),
                 U256::from(chain_id),
                 *self.stub.address(),
-                U256::from(expire_at),
+                U256::from(op_expires_at),
                 base_image_id,
                 platform_profiles.clone(),
                 measurement_variants.clone(),
@@ -351,7 +356,7 @@ impl BaseImageRegistry {
         info!(
             address = %self.stub.address(),
             base_image_id = %base_image_id,
-            expire_at = expire_at,
+            op_expires_at = op_expires_at,
             "Submitting addPlatformVariants transaction"
         );
 
@@ -361,7 +366,7 @@ impl BaseImageRegistry {
                 base_image_id,
                 platform_profiles,
                 measurement_variants,
-                expire_at,
+                op_expires_at,
                 owner_identity.into(),
                 sig_bytes,
             )

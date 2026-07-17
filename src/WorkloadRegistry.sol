@@ -31,7 +31,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error WorkloadNotActive(bytes32 workloadId);
     error InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint);
     error Unauthorized(bytes32 actualOwner, bytes32 expectedOwner);
-    error SignatureExpired(uint64 expireAt, uint64 nowTs);
+    error SignatureExpired(uint64 opExpiresAt, uint64 nowTs);
     /// @notice PCR spec list is not sorted strictly ascending by pcrIndex.
     ///         prevIndex sits at i-1 and thisIndex at i in the input array.
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
@@ -84,13 +84,13 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     /// @inheritdoc IWorkloadRegistry
     function registerWorkload(
         WorkloadSpec calldata spec,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 workloadId) {
         // Check signature expiration
-        if (block.timestamp > expireAt) {
-            revert SignatureExpired(expireAt, uint64(block.timestamp));
+        if (block.timestamp > opExpiresAt) {
+            revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
         _validatePcrSpecsSorted(spec.pcrs);
@@ -111,7 +111,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         _checkRegistrationAllowed(ownerFingerprint);
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
-        bytes32 message = sha256(abi.encode(WORKLOAD_REGISTER_MSG, block.chainid, address(this), expireAt, spec));
+        bytes32 message = sha256(abi.encode(WORKLOAD_REGISTER_MSG, block.chainid, address(this), opExpiresAt, spec));
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
@@ -135,13 +135,13 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     /// @inheritdoc IWorkloadRegistry
     function deactivateWorkload(
         bytes32 workloadId,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external {
         // Check signature expiration
-        if (block.timestamp > expireAt) {
-            revert SignatureExpired(expireAt, uint64(block.timestamp));
+        if (block.timestamp > opExpiresAt) {
+            revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
         // Check exists and active
@@ -160,7 +160,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
         bytes32 message =
-            sha256(abi.encode(WORKLOAD_DEACTIVATE_MSG, block.chainid, address(this), expireAt, workloadId));
+            sha256(abi.encode(WORKLOAD_DEACTIVATE_MSG, block.chainid, address(this), opExpiresAt, workloadId));
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
