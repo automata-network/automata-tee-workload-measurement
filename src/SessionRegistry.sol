@@ -28,16 +28,20 @@ import {
     TpmReport,
     AkPubCollateralType,
     TEEType,
-    SessionRotationEvidence
+    SessionKeyRotationEvidence,
+    SessionRenewalAuthorization
 } from "./types/Evidence.sol";
 import {
     SESSION_DOMAIN,
     DELEGATION_DOMAIN,
-    ROTATION_DOMAIN,
+    SESSION_ROTATE_KEY_DOMAIN,
     SESSION_NONCE_DOMAIN,
     SESSION_REGISTER_MSG,
     SESSION_REVOKE_MSG,
-    SESSION_ROTATE_MSG
+    SESSION_ROTATE_KEY_MSG,
+    SESSION_RENEW_DOMAIN,
+    SESSION_RENEW_MSG,
+    SESSION_RECOVER_MSG
 } from "./types/Constants.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {LibBytes, Bytes48} from "./lib/LibBytes.sol";
@@ -113,7 +117,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     error InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint);
 
     /// @notice Signature has expired
-    error SignatureExpired(uint64 expireAt, uint64 nowTs);
+    error SignatureExpired(uint64 opExpiresAt, uint64 nowTs);
 
     /// @notice Session already exists
     error SessionAlreadyExists();
@@ -150,8 +154,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     ///         (no event-hash chain to cross-check against the PCR value)
     error PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType);
 
-    /// @notice DYNAMIC_SUBSET PCR: a measured event hash is not in the spec's allow-list
-    error PCRSubsetMemberNotAllowed(uint8 pcrIndex, uint256 eventIdx, bytes32 eventHash);
+    /// @notice DYNAMIC_SUBSET PCR: a required unordered landmark from matchData
+    ///         is absent from the measured event log
+    error PCRSubsetLandmarkMissing(uint8 pcrIndex, uint256 matchIdx, bytes32 matchHash);
 
     /// @notice DYNAMIC_SUBSEQUENCE PCR: not all landmarks from matchData appear in the
     ///         measured event log, in order. matchData here is a list of landmarks per
@@ -225,124 +230,32 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 baseImageId,
         bytes32 platformProfileId,
         bytes32 variantId,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 sessionId) {
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // Preliminary: Signature Expiry Check
-        // ─────────────────────────────────────────────────────────────────────────────────
-        _requireNotExpired(expireAt);
-
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // Pre-compute owner fingerprint
-        // ─────────────────────────────────────────────────────────────────────────────────
+        _requireNotExpired(opExpiresAt);
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        FullSessionResult memory result =
+            _prepareFullSession(evidence, workloadId, baseImageId, platformProfileId, variantId, ownerFingerprint);
+        sessionId = result.sessionId;
 
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // STEP 1: Policy Lookup
-        // ─────────────────────────────────────────────────────────────────────────────────
-        PolicyContext memory policyCtx = _lookupPolicy(workloadId, baseImageId, platformProfileId, variantId);
-
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // STEPS 2-5: Attestation Verification Chain
-        // ─────────────────────────────────────────────────────────────────────────────────
-        AttestationResult memory attestationResult = _verifyAttestation(evidence, ownerFingerprint);
-
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // STEP 6: Session ID Computation + Session Key Delegation
-        // ─────────────────────────────────────────────────────────────────────────────────
-        bytes32 teeReportBytesHash = teeVerifier.getTeeReportHash(evidence.teeReport);
-        sessionId = _computeSessionId(attestationResult.tpmSignatureHash, teeReportBytesHash);
-
-        if (_sessions[sessionId].exists) {
-            revert SessionAlreadyExists();
-        }
-
-        bytes32 sessionKeyFingerprint = _verifySessionKeyDelegation(
-            attestationResult.certifiedKey,
-            evidence.sessionKeySignature,
-            evidence.sessionKey,
-            baseImageId,
-            workloadId,
-            sessionId
-        );
-
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // STEPS 7-8: Policy Evaluation (PCR + Attributes)
-        // ─────────────────────────────────────────────────────────────────────────────────
-        _evaluatePolicy(
-            attestationResult.pcrValues,
-            policyCtx.platformProfile,
-            policyCtx.variant,
-            policyCtx.workloadSpec,
-            attestationResult.expectedPcr15
-        );
-
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // STEP 9: Owner Signature Verification + Session Creation
-        // ─────────────────────────────────────────────────────────────────────────────────
-
-        // Verify owner signature over the full session-registration tuple. The owner sig
-        // explicitly authorizes (sessionId, workloadId, baseImageId, platformProfileId,
-        // variantId, sessionKeyFingerprint) — not just an opaque sessionId. Without those
-        // fields in the digest, a compromised in-CVM agent could ask the TPM to sign a
-        // delegation for a different (W, B) tuple and submit on behalf of the operator
-        // while the operator's wallet thought it was authorizing the legitimate workload.
-        // sessionKeyFingerprint is also covered by the delegation signature (defense in
-        // depth).
         bytes32 message = sha256(
             abi.encode(
                 SESSION_REGISTER_MSG,
                 block.chainid,
                 address(this),
-                expireAt,
+                opExpiresAt,
                 sessionId,
                 workloadId,
                 baseImageId,
                 platformProfileId,
                 variantId,
-                sessionKeyFingerprint
+                result.sessionKeyFingerprint
             )
         );
         _requireSignature(ownerIdentity, message, ownerSignature);
-
-        // Create session with TTL handling (default: 30 days)
-        uint64 expiresAt = policyCtx.workloadSpec.ttl == 0
-            ? uint64(block.timestamp) + DEFAULT_CVM_TTL
-            : uint64(block.timestamp) + policyCtx.workloadSpec.ttl;
-
-        _createSession(
-            SessionParams({
-                sessionId: sessionId,
-                ownerFingerprint: attestationResult.ownerFingerprint,
-                akPubKeyFingerprint: attestationResult.akPubFingerprint,
-                tpmSigningKeyFingerprint: attestationResult.tpmSigningKeyFingerprint,
-                sessionKeyFingerprint: sessionKeyFingerprint,
-                baseImageId: baseImageId,
-                workloadId: workloadId,
-                platformProfileId: platformProfileId,
-                measurementVariantId: variantId,
-                expiresAt: expiresAt
-            })
-        );
-
-        // Emit events
-        emit SessionRegistered(
-            sessionId,
-            attestationResult.ownerFingerprint,
-            workloadId,
-            baseImageId,
-            attestationResult.akPubFingerprint,
-            attestationResult.tpmSigningKeyFingerprint,
-            sessionKeyFingerprint
-        );
-
-        emit AttestationKeysRevealed(
-            sessionId, attestationResult.akPub, attestationResult.certifiedKey, evidence.sessionKey
-        );
-
-        return sessionId;
+        _finalizeFullSession(result, workloadId, baseImageId, platformProfileId, variantId, evidence.sessionKey);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -352,12 +265,12 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @inheritdoc ISessionRegistry
     function revokeSession(
         bytes32 sessionId,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external {
         // Check expiry first
-        _requireNotExpired(expireAt);
+        _requireNotExpired(opExpiresAt);
 
         // Check session exists
         CVMSessionStorage storage sessionStorage = _sessions[sessionId];
@@ -374,7 +287,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 ownerFingerprint = _requireFingerprint(ownerIdentity, sessionStorage.owner);
 
         // Verify signature
-        bytes32 message = sha256(abi.encode(SESSION_REVOKE_MSG, block.chainid, address(this), expireAt, sessionId));
+        bytes32 message = sha256(abi.encode(SESSION_REVOKE_MSG, block.chainid, address(this), opExpiresAt, sessionId));
         _requireSignature(ownerIdentity, message, ownerSignature);
 
         // Revoke session
@@ -388,17 +301,115 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc ISessionRegistry
-    function rotateSession(
+    function rotateKey(
         bytes32 oldSessionId,
         bytes32 teeReportBytesHash,
-        SessionRotationEvidence calldata rotationEvidence,
-        uint64 expireAt,
+        SessionKeyRotationEvidence calldata rotationEvidence,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 newSessionId) {
-        return _rotateSession(
-            oldSessionId, teeReportBytesHash, rotationEvidence, expireAt, ownerIdentity, ownerSignature
+        return _rotateKey(
+            oldSessionId, teeReportBytesHash, rotationEvidence, opExpiresAt, ownerIdentity, ownerSignature
         );
+    }
+
+    /// @inheritdoc ISessionRegistry
+    function renewSession(
+        bytes32 oldSessionId,
+        AttestationEvidence calldata newEvidence,
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId,
+        SessionRenewalAuthorization calldata renewalAuthorization,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 newSessionId) {
+        _requireNotExpired(opExpiresAt);
+        CVMSessionStorage storage predecessor = _sessions[oldSessionId];
+        if (!predecessor.exists) revert SessionNotFound();
+        if (!_isSessionActive(predecessor)) revert SessionNotActive();
+
+        bytes32 ownerFingerprint = _requireFingerprint(ownerIdentity, predecessor.owner);
+        _requireFingerprint(renewalAuthorization.oldTpmSigningKey, predecessor.session.tpmSigningKeyFingerprint);
+
+        FullSessionResult memory result = _prepareFullSession(
+            newEvidence, workloadId, baseImageId, platformProfileId, measurementVariantId, ownerFingerprint
+        );
+        newSessionId = result.sessionId;
+
+        bytes32 evidenceHash = keccak256(abi.encode(newEvidence));
+        bytes32 renewalMessage = keccak256(
+            abi.encode(SESSION_RENEW_DOMAIN, block.chainid, address(this), oldSessionId, newSessionId, evidenceHash)
+        );
+        _requireSignature(renewalAuthorization.oldTpmSigningKey, renewalMessage, renewalAuthorization.signature);
+        _requireLifecycleOwnerSignature(
+            SESSION_RENEW_MSG,
+            oldSessionId,
+            newSessionId,
+            workloadId,
+            baseImageId,
+            platformProfileId,
+            measurementVariantId,
+            result.sessionKeyFingerprint,
+            opExpiresAt,
+            ownerIdentity,
+            ownerSignature
+        );
+
+        predecessor.isRevoked = true;
+        emit SessionRevoked(oldSessionId, ownerFingerprint);
+        _finalizeFullSession(
+            result, workloadId, baseImageId, platformProfileId, measurementVariantId, newEvidence.sessionKey
+        );
+        emit SessionRenewed(oldSessionId, newSessionId, ownerFingerprint);
+    }
+
+    /// @inheritdoc ISessionRegistry
+    function recoverSession(
+        bytes32 oldSessionId,
+        AttestationEvidence calldata newEvidence,
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 newSessionId) {
+        _requireNotExpired(opExpiresAt);
+        CVMSessionStorage storage predecessor = _sessions[oldSessionId];
+        if (!predecessor.exists) revert SessionNotFound();
+        bytes32 ownerFingerprint = _requireFingerprint(ownerIdentity, predecessor.owner);
+
+        FullSessionResult memory result = _prepareFullSession(
+            newEvidence, workloadId, baseImageId, platformProfileId, measurementVariantId, ownerFingerprint
+        );
+        newSessionId = result.sessionId;
+        _requireLifecycleOwnerSignature(
+            SESSION_RECOVER_MSG,
+            oldSessionId,
+            newSessionId,
+            workloadId,
+            baseImageId,
+            platformProfileId,
+            measurementVariantId,
+            result.sessionKeyFingerprint,
+            opExpiresAt,
+            ownerIdentity,
+            ownerSignature
+        );
+
+        if (!predecessor.isRevoked) {
+            predecessor.isRevoked = true;
+            emit SessionRevoked(oldSessionId, ownerFingerprint);
+        }
+        _finalizeFullSession(
+            result, workloadId, baseImageId, platformProfileId, measurementVariantId, newEvidence.sessionKey
+        );
+        emit SessionRecovered(oldSessionId, newSessionId, ownerFingerprint);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -437,7 +448,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         if (!sessionStorage.exists) {
             return false;
         }
-        return block.timestamp > sessionStorage.session.expiresAt;
+        return block.timestamp > sessionStorage.session.sessionExpiresAt;
     }
 
     /// @inheritdoc ISessionRegistry
@@ -486,7 +497,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 workloadId;
         bytes32 platformProfileId;
         bytes32 measurementVariantId;
-        uint64 expiresAt;
+        uint64 sessionExpiresAt;
     }
 
     /// @dev Internal struct to pass attestation results between internal functions
@@ -501,6 +512,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 tpmSignatureHash; // Hash of TPM quote signature (for session ID computation)
     }
 
+    struct FullSessionResult {
+        AttestationResult attestation;
+        bytes32 sessionId;
+        bytes32 sessionKeyFingerprint;
+        uint64 sessionExpiresAt;
+    }
+
     /// @dev Rotation context derived from the old session
     struct RotationContext {
         bytes32 ownerFingerprint;
@@ -508,18 +526,119 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 workloadId;
         bytes32 platformProfileId;
         bytes32 measurementVariantId;
-        uint64 expiresAt;
+        uint64 sessionExpiresAt;
+    }
+
+    function _prepareFullSession(
+        AttestationEvidence calldata evidence,
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId,
+        bytes32 ownerFingerprint
+    ) private returns (FullSessionResult memory result) {
+        PolicyContext memory policyCtx = _lookupPolicy(workloadId, baseImageId, platformProfileId, measurementVariantId);
+        result.attestation = _verifyAttestation(evidence, ownerFingerprint);
+        result.sessionId =
+            _computeSessionId(result.attestation.tpmSignatureHash, teeVerifier.getTeeReportHash(evidence.teeReport));
+        if (_sessions[result.sessionId].exists) revert SessionAlreadyExists();
+
+        result.sessionKeyFingerprint = _verifySessionKeyDelegation(
+            result.attestation.certifiedKey,
+            evidence.sessionKeySignature,
+            evidence.sessionKey,
+            baseImageId,
+            workloadId,
+            result.sessionId
+        );
+        _evaluatePolicy(
+            result.attestation.pcrValues,
+            policyCtx.platformProfile,
+            policyCtx.variant,
+            policyCtx.workloadSpec,
+            result.attestation.expectedPcr15
+        );
+        result.sessionExpiresAt = policyCtx.workloadSpec.sessionTtl == 0
+            ? uint64(block.timestamp) + DEFAULT_CVM_TTL
+            : uint64(block.timestamp) + policyCtx.workloadSpec.sessionTtl;
+    }
+
+    function _finalizeFullSession(
+        FullSessionResult memory result,
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId,
+        PublicIdentity calldata sessionKey
+    ) private {
+        _createSession(
+            SessionParams({
+                sessionId: result.sessionId,
+                ownerFingerprint: result.attestation.ownerFingerprint,
+                akPubKeyFingerprint: result.attestation.akPubFingerprint,
+                tpmSigningKeyFingerprint: result.attestation.tpmSigningKeyFingerprint,
+                sessionKeyFingerprint: result.sessionKeyFingerprint,
+                baseImageId: baseImageId,
+                workloadId: workloadId,
+                platformProfileId: platformProfileId,
+                measurementVariantId: measurementVariantId,
+                sessionExpiresAt: result.sessionExpiresAt
+            })
+        );
+        emit SessionRegistered(
+            result.sessionId,
+            result.attestation.ownerFingerprint,
+            workloadId,
+            baseImageId,
+            result.attestation.akPubFingerprint,
+            result.attestation.tpmSigningKeyFingerprint,
+            result.sessionKeyFingerprint
+        );
+        emit AttestationKeysRevealed(
+            result.sessionId, result.attestation.akPub, result.attestation.certifiedKey, sessionKey
+        );
+    }
+
+    function _requireLifecycleOwnerSignature(
+        bytes32 domain,
+        bytes32 oldSessionId,
+        bytes32 newSessionId,
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId,
+        bytes32 sessionKeyFingerprint,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) private view {
+        bytes32 message = sha256(
+            abi.encode(
+                domain,
+                block.chainid,
+                address(this),
+                opExpiresAt,
+                oldSessionId,
+                newSessionId,
+                workloadId,
+                baseImageId,
+                platformProfileId,
+                measurementVariantId,
+                sessionKeyFingerprint
+            )
+        );
+        _requireSignature(ownerIdentity, message, ownerSignature);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Internal - Session Rotation Helpers
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    function _rotateSession(
+    function _rotateKey(
         bytes32 oldSessionId,
         bytes32 teeReportBytesHash,
-        SessionRotationEvidence calldata evidence,
-        uint64 expireAt,
+        SessionKeyRotationEvidence calldata evidence,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) private returns (bytes32 newSessionId) {
@@ -571,7 +690,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             sessionKeyFingerprint,
             newTpmSigningKey,
             ctx,
-            expireAt,
+            opExpiresAt,
             ownerIdentity,
             ownerSignature,
             evidence.akPub,
@@ -596,7 +715,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             revert SessionAlreadyRevoked();
         }
 
-        if (block.timestamp > oldSessionStorage.session.expiresAt) {
+        if (block.timestamp > oldSessionStorage.session.sessionExpiresAt) {
             revert SessionNotActive();
         }
 
@@ -610,7 +729,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             workloadId: oldSessionStorage.session.workloadId,
             platformProfileId: oldSessionStorage.session.platformProfileId,
             measurementVariantId: oldSessionStorage.session.measurementVariantId,
-            expiresAt: oldSessionStorage.session.expiresAt
+            sessionExpiresAt: oldSessionStorage.session.sessionExpiresAt
         });
     }
 
@@ -621,19 +740,21 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 sessionKeyFingerprint,
         PublicIdentity memory newTpmSigningKey,
         RotationContext memory ctx,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature,
         PublicIdentity calldata akPub,
         PublicIdentity calldata sessionKey
     ) private {
-        _requireNotExpired(expireAt);
+        _requireNotExpired(opExpiresAt);
 
-        bytes32 message =
-            sha256(abi.encode(SESSION_ROTATE_MSG, block.chainid, address(this), expireAt, oldSessionId, newSessionId));
+        bytes32 message = sha256(
+            abi.encode(SESSION_ROTATE_KEY_MSG, block.chainid, address(this), opExpiresAt, oldSessionId, newSessionId)
+        );
         _requireSignature(ownerIdentity, message, ownerSignature);
 
         _sessions[oldSessionId].isRevoked = true;
+        emit SessionRevoked(oldSessionId, ctx.ownerFingerprint);
 
         _createSession(
             SessionParams({
@@ -646,11 +767,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 workloadId: ctx.workloadId,
                 platformProfileId: ctx.platformProfileId,
                 measurementVariantId: ctx.measurementVariantId,
-                expiresAt: ctx.expiresAt
+                sessionExpiresAt: ctx.sessionExpiresAt
             })
         );
 
-        emit SessionRotated(
+        emit SessionKeyRotated(
             oldSessionId, newSessionId, ctx.ownerFingerprint, newTpmSigningKeyFingerprint, sessionKeyFingerprint
         );
 
@@ -740,9 +861,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     }
 
     /// @dev Verifies signature expiry
-    function _requireNotExpired(uint64 expireAt) private view {
-        if (block.timestamp > expireAt) {
-            revert SignatureExpired(expireAt, uint64(block.timestamp));
+    function _requireNotExpired(uint64 opExpiresAt) private view {
+        if (block.timestamp > opExpiresAt) {
+            revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
     }
 
@@ -750,10 +871,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @dev Cascades through the underlying workload + baseimage revocation flags: revoking either
     ///      flips every dependent session inactive on the next read (fail-closed). Without this,
     ///      live sessions on a compromised baseimage/workload would keep producing valid signatures
-    ///      until their own expiresAt or explicit per-session revoke.
+    ///      until their own sessionExpiresAt or explicit per-session revoke.
     function _isSessionActive(CVMSessionStorage storage sessionStorage) private view returns (bool) {
         if (!sessionStorage.exists || sessionStorage.isRevoked) return false;
-        if (block.timestamp > sessionStorage.session.expiresAt) return false;
+        if (block.timestamp > sessionStorage.session.sessionExpiresAt) return false;
         if (workloadRegistry.isWorkloadRevoked(sessionStorage.session.workloadId)) return false;
         if (baseImageRegistry.isBaseImageRevoked(sessionStorage.session.baseImageId)) return false;
         return true;
@@ -888,7 +1009,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     ) private view {
         bytes32 rotationMessage = keccak256(
             abi.encode(
-                ROTATION_DOMAIN,
+                SESSION_ROTATE_KEY_DOMAIN,
                 block.chainid,
                 address(this),
                 oldSessionId,
@@ -917,7 +1038,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 platformProfileId: params.platformProfileId,
                 measurementVariantId: params.measurementVariantId,
                 registeredAt: uint64(block.timestamp),
-                expiresAt: params.expiresAt
+                sessionExpiresAt: params.sessionExpiresAt
             })
         });
 
@@ -1192,23 +1313,19 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 revert PCRStaticMismatch(spec.pcrIndex, measured.value, spec.matchData[0]);
             }
         } else if (spec.verifyType == PcrVerifyType.DYNAMIC_SUBSET) {
-            // DYNAMIC_SUBSET: eventLogHashes ⊆ matchData, and eventLogHashes MUST be non-empty.
-            //
-            // An empty event log would trivially satisfy "subset of anything" under set theory,
-            // but it bypasses the policy entirely: the TPM lib only cross-checks the PCR value
-            // against the event hash chain when events are present, so an attacker can submit
-            // any `value` with `eventLogHashes = []` and the cumulative measurement is never
-            // verified. DYNAMIC_SUBSET semantically means "this PCR is extended at runtime with
-            // events from the allow-list"; zero events does not satisfy that intent.
+            // DYNAMIC_SUBSET: matchData ⊆ eventLogHashes. matchData is a set of
+            // required unordered landmarks; additional measured events are permitted.
+            // The measured log MUST be non-empty so the TPM library cross-checks the
+            // cumulative event-hash chain against the quoted PCR value.
             uint256 measuredLen = measured.eventLogHashes.length;
             if (measuredLen == 0) {
                 revert PCREventLogEmpty(spec.pcrIndex, PcrVerifyType.DYNAMIC_SUBSET);
             }
             uint256 matchLen = spec.matchData.length;
-            for (uint256 i = 0; i < measuredLen;) {
+            for (uint256 i = 0; i < matchLen;) {
                 bool found = false;
-                for (uint256 j = 0; j < matchLen;) {
-                    if (measured.eventLogHashes[i] == spec.matchData[j]) {
+                for (uint256 j = 0; j < measuredLen;) {
+                    if (spec.matchData[i] == measured.eventLogHashes[j]) {
                         found = true;
                         break;
                     }
@@ -1217,7 +1334,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                     }
                 }
                 if (!found) {
-                    revert PCRSubsetMemberNotAllowed(spec.pcrIndex, i, measured.eventLogHashes[i]);
+                    revert PCRSubsetLandmarkMissing(spec.pcrIndex, i, spec.matchData[i]);
                 }
                 unchecked {
                     ++i;

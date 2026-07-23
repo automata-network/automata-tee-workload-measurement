@@ -20,7 +20,7 @@ import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.s
 // declaration with matching signatures makes `vm.expectPartialRevert` work.
 error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
 error PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType);
-error PCRSubsetMemberNotAllowed(uint8 pcrIndex, uint256 eventIdx, bytes32 eventHash);
+error PCRSubsetLandmarkMissing(uint8 pcrIndex, uint256 matchIdx, bytes32 matchHash);
 error PCRSubsequenceLandmarkMissing(uint8 pcrIndex, uint256 matchedCount, uint256 expectedCount);
 
 /// @dev Harness exposing the internal PCR evaluator for direct testing without the
@@ -69,20 +69,23 @@ contract PcrEvalEmptyEventLogTest is Test {
         harness.evaluateSinglePcr(spec, measured);
     }
 
-    function testDynamicSubset_AcceptsNonEmptySubset() public view {
-        bytes32[] memory events = new bytes32[](2);
-        events[0] = bytes32(uint256(0xa1));
+    function testDynamicSubset_AcceptsRequiredLandmarksWithExtraEventsInAnyOrder() public view {
+        bytes32[] memory events = new bytes32[](4);
+        events[0] = bytes32(uint256(0xdead));
         events[1] = bytes32(uint256(0xa2));
+        events[2] = bytes32(uint256(0xbeef));
+        events[3] = bytes32(uint256(0xa1));
         PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         harness.evaluateSinglePcr(spec, _measured(events)); // no revert
     }
 
-    function testDynamicSubset_RevertsOnEventOutsideMatchSet() public {
-        bytes32[] memory events = new bytes32[](1);
+    function testDynamicSubset_RevertsWhenRequiredLandmarkIsMissing() public {
+        bytes32[] memory events = new bytes32[](2);
         events[0] = bytes32(uint256(0xdead));
+        events[1] = bytes32(uint256(0xa1));
         PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         vm.expectRevert(
-            abi.encodeWithSelector(PCRSubsetMemberNotAllowed.selector, uint8(0), uint256(0), bytes32(uint256(0xdead)))
+            abi.encodeWithSelector(PCRSubsetLandmarkMissing.selector, uint8(0), uint256(1), bytes32(uint256(0xa2)))
         );
         harness.evaluateSinglePcr(spec, _measured(events));
     }

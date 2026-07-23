@@ -152,7 +152,7 @@ TpmBase (abstract)
 | Mode | Semantics |
 |---|---|
 | `STATIC` | Exact match: `actual == expected` |
-| `DYNAMIC_SUBSET` | Each PCR event hash must appear in `matchData` (order irrelevant) |
+| `DYNAMIC_SUBSET` | Every `matchData` hash must appear in the PCR events (order irrelevant; extra events permitted) |
 | `DYNAMIC_SUBSEQUENCE` | `matchData` values must appear as subsequence in PCR events (order matters) |
 
 ## ID Derivation Scheme

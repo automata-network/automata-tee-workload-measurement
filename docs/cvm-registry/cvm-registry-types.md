@@ -9,7 +9,7 @@ Core data structures shared across all registries.
 ```solidity
 enum PcrVerifyType {
     STATIC,               // Exact match: actual == expected
-    DYNAMIC_SUBSET,       // Each event hash must be in matchData (unordered)
+    DYNAMIC_SUBSET,       // matchData must occur in events (unordered)
     DYNAMIC_SUBSEQUENCE   // matchData must appear as subsequence in events (ordered)
 }
 

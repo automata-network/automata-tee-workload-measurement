@@ -219,7 +219,7 @@ Actions:
     NOTE: SessionRegistry does not enforce a hard platform-vs-workload PCR index split; it evaluates whatever sorted specs the registries provide
   - For each PCR spec:
     STATIC: pcrValue.value == matchData[0]
-    DYNAMIC_SUBSET: pcrValue.eventLogHashes must be non-empty AND every entry must be in matchData set
+    DYNAMIC_SUBSET: pcrValue.eventLogHashes must be non-empty AND every matchData entry must occur in the event log (order irrelevant; extra observed events permitted)
       (empty event log is rejected — the TPM lib skips the value↔events hash-chain check when
       events are empty, so accepting empty would let an attacker submit any `value` and bypass
       the policy)

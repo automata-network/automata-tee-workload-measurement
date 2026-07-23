@@ -11,8 +11,10 @@ bytes32 constant KEY_DOMAIN = keccak256("KEY_RESOLVER_V1");
 bytes32 constant SESSION_DOMAIN = keccak256("CVM_SESSION_V1");
 /// @dev Domain separator for session key delegation signatures (TPM key → session key)
 bytes32 constant DELEGATION_DOMAIN = keccak256("CVM_SESSION_KEY_DELEGATION");
-/// @dev Domain separator for session key rotation authorization (old TPM key → new keys)
-bytes32 constant ROTATION_DOMAIN = keccak256("CVM_SESSION_KEY_ROTATION");
+/// @dev Domain separator for cheap session key rotation authorization (old TPM key → new keys)
+bytes32 constant SESSION_ROTATE_KEY_DOMAIN = keccak256("CVM_SESSION_ROTATE_KEY_V1");
+/// @dev Domain separator for full session renewal authorization (old TPM key → successor evidence)
+bytes32 constant SESSION_RENEW_DOMAIN = keccak256("CVM_SESSION_RENEW_V1");
 /// @dev Domain separator for base image ID computation
 bytes32 constant BASEIMAGE_DOMAIN = keccak256("CVM_BASEIMAGE_V1");
 /// @dev Domain separator for platform profile ID computation
@@ -39,8 +41,12 @@ bytes32 constant WORKLOAD_DEACTIVATE_MSG = keccak256("CVM_MSG_WORKLOAD_DEACTIVAT
 bytes32 constant SESSION_REGISTER_MSG = keccak256("CVM_MSG_SESSION_REGISTER_V1");
 /// @dev Message separator for session revocation message signatures
 bytes32 constant SESSION_REVOKE_MSG = keccak256("CVM_MSG_SESSION_REVOKE_V1");
-/// @dev Message separator for session rotation message signatures
-bytes32 constant SESSION_ROTATE_MSG = keccak256("CVM_MSG_SESSION_ROTATE_V1");
+/// @dev Message separator for cheap session-key rotation owner signatures
+bytes32 constant SESSION_ROTATE_KEY_MSG = keccak256("CVM_MSG_SESSION_ROTATE_KEY_V1");
+/// @dev Message separator for full session renewal owner signatures
+bytes32 constant SESSION_RENEW_MSG = keccak256("CVM_MSG_SESSION_RENEW_V1");
+/// @dev Message separator for owner-authorized recovery signatures
+bytes32 constant SESSION_RECOVER_MSG = keccak256("CVM_MSG_SESSION_RECOVER_V1");
 
 // ============================================================================
 // Algorithm Constants (JWT Standard Names - RFC 7518)

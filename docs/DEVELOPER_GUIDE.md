@@ -451,13 +451,13 @@ matchData[0] must exactly equal the PCR final value
 
 Use for deterministic measurements that never change (e.g., firmware hash, bootloader hash). The PCR value is computed as a sequential hash chain of events, producing a single final value that must match exactly.
 
-### DYNAMIC_SUBSET — Event Subset
+### DYNAMIC_SUBSET — Required Unordered Landmarks
 
 ```
-All measured PCR event hashes must be members of matchData (any order)
+All matchData hashes must occur in the measured PCR events (any order)
 ```
 
-Use for configurations where a known set of events can occur in any combination. For example, a platform that allows different optional kernel modules — each module produces an event, and all events must be from the allowed set, but not all allowed events need to be present.
+Use for configurations with required landmarks whose order is not stable. Extra measured events are permitted, but every required `matchData` hash must occur at least once.
 
 ### DYNAMIC_SUBSEQUENCE — Ordered Event Sequence
 

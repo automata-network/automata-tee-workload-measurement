@@ -83,7 +83,7 @@ interface IBaseImageRegistry {
     /// @param spec Base image specification (name, version, uri, profileIds)
     /// @param platformProfiles Platform-specific profiles (invariants, attributes, variantIds) - must match spec.profileIds length
     /// @param measurementVariants Machine-type-specific PCR overrides - measurementVariants[i].length must equal platformProfiles[i].variantIds.length
-    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
+    /// @param opExpiresAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the base image owner
     /// @param ownerSignature Signature over the base image registration data by ownerIdentity
     /// @return baseImageId The unique identifier for the registered base image (domain-separated hash)
@@ -91,19 +91,19 @@ interface IBaseImageRegistry {
         BaseImageSpec calldata spec,
         PlatformProfile[] calldata platformProfiles,
         MeasurementVariant[][] calldata measurementVariants,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 baseImageId);
 
     /// @notice Deactivate a base image (soft delete)
     /// @param baseImageId The base image identifier
-    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
+    /// @param opExpiresAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the base image owner
     /// @param ownerSignature Signature over the deactivation request by ownerIdentity
     function deactivateBaseImage(
         bytes32 baseImageId,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external;
@@ -114,14 +114,14 @@ interface IBaseImageRegistry {
     /// @param baseImageId The base image identifier to update
     /// @param platformProfiles Platform-specific profiles to add/update
     /// @param measurementVariants Machine-type-specific PCR overrides - measurementVariants[i].length corresponds to platformProfiles[i]
-    /// @param expireAt Signature expiration timestamp (must be >= block.timestamp)
+    /// @param opExpiresAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the base image owner
     /// @param ownerSignature Signature over the update data by ownerIdentity
     function addPlatformVariants(
         bytes32 baseImageId,
         PlatformProfile[] calldata platformProfiles,
         MeasurementVariant[][] calldata measurementVariants,
-        uint64 expireAt,
+        uint64 opExpiresAt,
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external;

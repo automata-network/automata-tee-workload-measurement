@@ -133,7 +133,7 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 
 **PCR Verification Types:**
 - `STATIC` - Exact PCR value match (fixed measurement)
-- `DYNAMIC_SUBSET` - PCR events must be subset of allowed events (any order)
+- `DYNAMIC_SUBSET` - required `matchData` hashes must occur in PCR events (any order; extra events permitted)
 - `DYNAMIC_SUBSEQUENCE` - PCR events must contain required sequence (ordered)
 
 ### Contract Inheritance Hierarchy

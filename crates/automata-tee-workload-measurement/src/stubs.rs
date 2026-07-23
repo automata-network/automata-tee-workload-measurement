@@ -249,7 +249,7 @@ where
 }
 
 /// Compute expiration timestamp as `now + offset_secs`.
-pub fn expire_at(offset_secs: u64) -> u64 {
+pub fn op_expires_at(offset_secs: u64) -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -322,7 +322,7 @@ impl From<AkPubCollateral> for SessionRegistry::AkPubCollateral {
 /// Session rotation evidence for JSON serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionRotationEvidence {
+pub struct SessionKeyRotationEvidence {
     pub tpm_quote_report: TpmReport,
     pub tpm_certify_report: TpmReport,
     pub session_key_signature: Bytes,
@@ -332,8 +332,22 @@ pub struct SessionRotationEvidence {
     pub ak_pub: PublicIdentity,
 }
 
-impl From<SessionRotationEvidence> for SessionRegistry::SessionRotationEvidence {
-    fn from(data: SessionRotationEvidence) -> Self {
+impl From<SessionKeyRotationEvidence> for SessionRegistry::SessionKeyRotationEvidence {
+    fn from(data: SessionKeyRotationEvidence) -> Self {
+        unsafe { std::mem::transmute(data) }
+    }
+}
+
+/// Predecessor TPM-key authorization for a full session renewal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRenewalAuthorization {
+    pub signature: Bytes,
+    pub old_tpm_signing_key: PublicIdentity,
+}
+
+impl From<SessionRenewalAuthorization> for SessionRegistry::SessionRenewalAuthorization {
+    fn from(data: SessionRenewalAuthorization) -> Self {
         unsafe { std::mem::transmute(data) }
     }
 }

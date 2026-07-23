@@ -5,7 +5,9 @@ use alloy::{
 use anyhow::ensure;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-use crate::stubs::{AttestationEvidence, PublicIdentity, SessionRotationEvidence};
+use crate::stubs::{
+    AttestationEvidence, PublicIdentity, SessionKeyRotationEvidence, SessionRenewalAuthorization,
+};
 
 #[derive(Clone, Debug)]
 pub struct AppRef {
@@ -84,7 +86,7 @@ pub struct RegisterSessionRequest {
     /// Measurement variant ID (bytes32 hex)
     pub variant_id: B256,
     /// Signature expiration timestamp (unix seconds)
-    pub expire_at: u64,
+    pub op_expires_at: u64,
     /// Owner's public identity
     pub owner_identity: PublicIdentity,
     /// Owner's signature over the registration message (pre-signed)
@@ -101,30 +103,68 @@ pub struct RegisterSessionResponse {
     pub tx_hash: B256,
 }
 
-/// Request for rotateSession
+/// Request for rotateKey
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RotateSessionRequest {
+pub struct RotateKeyRequest {
     /// Old session ID to rotate from
     pub old_session_id: B256,
     /// Hash of the original TEE report data (keccak256)
     pub tee_report_bytes_hash: B256,
     /// Rotation evidence from CVM agent
-    pub rotation_evidence: SessionRotationEvidence,
+    pub rotation_evidence: SessionKeyRotationEvidence,
     /// Signature expiration timestamp (unix seconds)
-    pub expire_at: u64,
+    pub op_expires_at: u64,
     /// Owner's public identity
     pub owner_identity: PublicIdentity,
     /// Owner's signature over the rotation message (pre-signed)
     pub owner_signature: Bytes,
 }
 
-/// Response from rotateSession
+/// Response from rotateKey
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RotateSessionResponse {
+pub struct RotateKeyResponse {
     /// The new session ID after rotation
     pub new_session_id: B256,
     /// Transaction hash
+    pub tx_hash: B256,
+}
+
+/// Request for renewSession.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenewSessionRequest {
+    pub old_session_id: B256,
+    pub new_evidence: AttestationEvidence,
+    pub workload_id: B256,
+    pub base_image_id: B256,
+    pub platform_profile_id: B256,
+    pub measurement_variant_id: B256,
+    pub renewal_authorization: SessionRenewalAuthorization,
+    pub op_expires_at: u64,
+    pub owner_identity: PublicIdentity,
+    pub owner_signature: Bytes,
+}
+
+/// Request for recoverSession.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverSessionRequest {
+    pub old_session_id: B256,
+    pub new_evidence: AttestationEvidence,
+    pub workload_id: B256,
+    pub base_image_id: B256,
+    pub platform_profile_id: B256,
+    pub measurement_variant_id: B256,
+    pub op_expires_at: u64,
+    pub owner_identity: PublicIdentity,
+    pub owner_signature: Bytes,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleSessionResponse {
+    pub new_session_id: B256,
     pub tx_hash: B256,
 }
