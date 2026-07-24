@@ -13,9 +13,8 @@ struct AkCollateralVerificationResult {
     /// @dev Fingerprint of the AK public key (for session binding)
     bytes32 akPubFingerprint;
     /// @dev Expected binding hash from the TEE report (provider-specific).
-    ///      Azure: sha256(hclVarData) -- already cross-checked inside AkCollateralVerifier
-    ///             against the MAA JWT's tdx_report_data / x-ms-sevsnpvm-reportdata claim, so the
-    ///             downstream caller does not need to re-check it against the on-chain teeReport.
+    ///      Azure: sha256(hclVarData), cross-checked inside AkCollateralVerifier against the MAA
+    ///             JWT claim. SessionRegistry must also match it against the verified teeReport.
     ///      GCP:   bytes32(0). Binding is enforced via PCR15 by SessionRegistry step 7.
     bytes32 bindingHash;
 }

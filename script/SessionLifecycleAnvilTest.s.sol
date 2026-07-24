@@ -77,8 +77,9 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
     function verifyTeeReport(TeeReport memory) external view returns (TeeVerificationResult memory result) {
         if (_rejection == 1) revert TdxMigrationServiceTdNotSupported();
         if (_rejection == 2) revert SnpMigrationAgentNotSupported();
+        bytes memory reportData = _teeType == TEEType.IntelTDX ? new bytes(584) : new bytes(1184);
         return TeeVerificationResult({
-            valid: _valid, reportData: "", teeType: _teeType, enabledTeeAttributes: _enabledTeeAttributes
+            valid: _valid, reportData: reportData, teeType: _teeType, enabledTeeAttributes: _enabledTeeAttributes
         });
     }
 

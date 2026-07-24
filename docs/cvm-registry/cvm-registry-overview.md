@@ -196,7 +196,10 @@ message = sha256(abi.encode(MSG_SEPARATOR, block.chainid, address(this), expireA
 | Intel TDX | GCP | Certificate chain via `ITpmAttestation.verifyCertChain` | `sha256(bytes32(0) || bytes16(0) || UUID)`; RTMR3 = `sha384(bytes48(0) || bytes32(0) || UUID)` |
 | AMD SEV-SNP | GCP | Certificate chain | `sha256(bytes32(0) || report_id)` |
 
-Azure binding (both TDX and SNP) runs entirely inside `_verifyAzureAkCollateral` via the MAA JWT path. `_verifyTeeAkBinding` returns `expectedPcr15 = bytes32(0)` for Azure; no `REPORT_DATA` extraction is performed in `_verifyTeeAkBinding` for the Azure branch.
+For Azure TDX and Azure SEV-SNP, `_verifyAzureAkCollateral` returns the
+MAA-signed `sha256(hclVarData)` as `bindingHash`. `_verifyTeeAkBinding` then
+requires the independently verified raw TEE report's `REPORT_DATA` to equal
+`bindingHash || bytes32(0)`. Azure does not use PCR15 for this binding.
 
 ## Signature Algorithm Support
 

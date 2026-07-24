@@ -256,7 +256,8 @@ struct AkCollateralVerificationResult {
     bytes32 akPubFingerprint;
     bytes32 bindingHash;   // Azure: sha256(hclVarData) (asserted equal to MAA JWT's
                            //   tdx_report_data / x-ms-sevsnpvm-reportdata claim prefix
-                           //   inside verifyAkCollateral; not re-checked downstream)
+                           //   inside verifyAkCollateral, then matched against the
+                           //   verified raw TEE report by SessionRegistry)
                            // GCP: bytes32(0) (binding via PCR15 in SessionRegistry step 7)
 }
 ```

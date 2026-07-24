@@ -752,6 +752,155 @@ contract SessionLifecycleTest is Test {
         }
     }
 
+    function testAzureReportDataMustMatchMaaBindingHashForTdxAndSnp() public {
+        for (uint256 teeIndex = 0; teeIndex < 2; teeIndex++) {
+            TEEType teeType = teeIndex == 0 ? TEEType.IntelTDX : TEEType.AmdSevSnp;
+            AttestationEvidence memory evidence =
+                _fullEvidence(uint8(0xb0 + teeIndex), _identity(ALGO_ID_ES256K, uint8(0xb2 + teeIndex)));
+            evidence.teeReport.teeType = teeType;
+            bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+            bytes32 expectedBindingHash = keccak256(abi.encode("expected Azure HCL binding", teeIndex));
+            bytes32 actualBindingHash = keccak256(abi.encode("different Azure HCL binding", teeIndex));
+            bytes memory reportData = _azureReportData(teeType, actualBindingHash, bytes32(0));
+            _mockFullEvidenceWithBindingResult(
+                evidence,
+                ownerFingerprint,
+                sessionRegistry.getNonce(ownerFingerprint),
+                oldAk,
+                oldTpmSigningKey,
+                keccak256(evidence.teeReport.data),
+                TeeVerificationResult({valid: true, reportData: reportData, teeType: teeType, enabledTeeAttributes: 0}),
+                expectedBindingHash
+            );
+
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    SessionRegistry.AzureTeeReportDataMismatch.selector,
+                    actualBindingHash,
+                    expectedBindingHash,
+                    bytes32(0)
+                )
+            );
+            sessionRegistry.registerSession(
+                evidence,
+                oldPolicy.workloadId,
+                oldPolicy.baseImageId,
+                oldPolicy.platformProfileId,
+                oldPolicy.measurementVariantId,
+                uint64(block.timestamp + 5 minutes),
+                ownerIdentity,
+                hex"01"
+            );
+        }
+    }
+
+    function testAzureReportDataAcceptsMaaBindingHashForTdxAndSnp() public {
+        for (uint256 teeIndex = 0; teeIndex < 2; teeIndex++) {
+            TEEType teeType = teeIndex == 0 ? TEEType.IntelTDX : TEEType.AmdSevSnp;
+            AttestationEvidence memory evidence =
+                _fullEvidence(uint8(0xc0 + teeIndex), _identity(ALGO_ID_ES256K, uint8(0xc2 + teeIndex)));
+            evidence.teeReport.teeType = teeType;
+            bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+            bytes32 bindingHash = keccak256(abi.encode("Azure HCL binding", teeIndex));
+            _mockFullEvidenceWithBindingResult(
+                evidence,
+                ownerFingerprint,
+                sessionRegistry.getNonce(ownerFingerprint),
+                oldAk,
+                oldTpmSigningKey,
+                keccak256(evidence.teeReport.data),
+                TeeVerificationResult({
+                    valid: true,
+                    reportData: _azureReportData(teeType, bindingHash, bytes32(0)),
+                    teeType: teeType,
+                    enabledTeeAttributes: 0
+                }),
+                bindingHash
+            );
+
+            bytes32 sessionId = sessionRegistry.registerSession(
+                evidence,
+                oldPolicy.workloadId,
+                oldPolicy.baseImageId,
+                oldPolicy.platformProfileId,
+                oldPolicy.measurementVariantId,
+                uint64(block.timestamp + 5 minutes),
+                ownerIdentity,
+                hex"01"
+            );
+            assertTrue(sessionRegistry.isSessionActive(sessionId));
+        }
+    }
+
+    function testAzureReportDataRejectsNonzeroPadding() public {
+        AttestationEvidence memory evidence = _fullEvidence(0xd0, _identity(ALGO_ID_ES256K, 0xd2));
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        bytes32 bindingHash = keccak256("Azure HCL binding");
+        bytes32 padding = bytes32(uint256(1));
+        _mockFullEvidenceWithBindingResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            TeeVerificationResult({
+                valid: true,
+                reportData: _azureReportData(TEEType.IntelTDX, bindingHash, padding),
+                teeType: TEEType.IntelTDX,
+                enabledTeeAttributes: 0
+            }),
+            bindingHash
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SessionRegistry.AzureTeeReportDataMismatch.selector, bindingHash, bindingHash, padding
+            )
+        );
+        sessionRegistry.registerSession(
+            evidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+    }
+
+    function testAzureReportDataRejectsShortVerifiedResult() public {
+        AttestationEvidence memory evidence = _fullEvidence(0xd4, _identity(ALGO_ID_ES256K, 0xd6));
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        _mockFullEvidenceWithBindingResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            TeeVerificationResult({
+                valid: true, reportData: hex"00", teeType: TEEType.IntelTDX, enabledTeeAttributes: 0
+            }),
+            bytes32(0)
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SessionRegistry.AzureTeeReportDataTooShort.selector, uint256(1), uint256(584))
+        );
+        sessionRegistry.registerSession(
+            evidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+    }
+
     function _assertVariantOverride(bytes32 key, uint256 profileMode, uint256 variantMode, bool actual) private {
         PolicyIds memory policy = _registerTeePolicy(key, profileMode, 2, variantMode, 0);
         AttestationEvidence memory evidence =
@@ -969,6 +1118,27 @@ contract SessionLifecycleTest is Test {
         bytes32 teeReportHash,
         TeeVerificationResult memory teeResult
     ) private {
+        _mockFullEvidenceWithBindingResult(
+            evidence, ownerFingerprint, nonce, akPub, certifiedTpmSigningKey, teeReportHash, teeResult, bytes32(0)
+        );
+    }
+
+    function _mockFullEvidenceWithBindingResult(
+        AttestationEvidence memory evidence,
+        bytes32 ownerFingerprint,
+        uint256 nonce,
+        PublicIdentity memory akPub,
+        PublicIdentity memory certifiedTpmSigningKey,
+        bytes32 teeReportHash,
+        TeeVerificationResult memory teeResult,
+        bytes32 bindingHash
+    ) private {
+        if (
+            teeResult.valid && teeResult.reportData.length == 0
+                && evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt
+        ) {
+            teeResult.reportData = _azureReportData(teeResult.teeType, bindingHash, bytes32(0));
+        }
         vm.mockCall(
             TEE_VERIFIER, abi.encodeCall(ITeeVerifier.verifyTeeReport, (evidence.teeReport)), abi.encode(teeResult)
         );
@@ -983,12 +1153,26 @@ contract SessionLifecycleTest is Test {
                     valid: true,
                     akPub: akPub,
                     akPubFingerprint: LibKey.computeKeyFingerprint(akPub),
-                    bindingHash: bytes32(0)
+                    bindingHash: bindingHash
                 })
             )
         );
         _mockQuote(ownerFingerprint, nonce);
         _mockCertifiedKey(certifiedTpmSigningKey);
+    }
+
+    function _azureReportData(TEEType teeType, bytes32 bindingHash, bytes32 padding)
+        private
+        pure
+        returns (bytes memory reportData)
+    {
+        uint256 reportSize = teeType == TEEType.IntelTDX ? 584 : 1184;
+        uint256 reportDataOffset = teeType == TEEType.IntelTDX ? 520 : 0x50;
+        reportData = new bytes(reportSize);
+        assembly ("memory-safe") {
+            mstore(add(add(reportData, 0x20), reportDataOffset), bindingHash)
+            mstore(add(add(reportData, 0x40), reportDataOffset), padding)
+        }
     }
 
     function _mockQuote(bytes32 ownerFingerprint, uint256 nonce) private {

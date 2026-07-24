@@ -155,7 +155,7 @@ Actions:
   - Revert AKCollateralVerificationFailed if !result.valid
   - Platform-specific binding:
     Azure (AzureMaaJwt):
-      - All binding work is performed inside verifyAkCollateral (§8.3.1):
+      - verifyAkCollateral (§8.3.1):
         - abi.decode (bytes jwt, bytes hclVarData) from collateral.data
         - Verify the MAA-signed RS256 JWT against the per-region signing key
           looked up by JWT header `kid` in the MAA Signing Key Registry (§10.3)
@@ -165,10 +165,11 @@ Actions:
           x-ms-sevsnpvm-reportdata (SNP); next 32 bytes must be zero
         - Assert sha256(hclVarData) equals those 32 bytes
         - Parse HCLAkPub from hclVarData using the §14.3-scoped JWK parser
-      - akResult.bindingHash = sha256(hclVarData); on-chain teeReport
-        REPORT_DATA is NOT separately checked (MAA already attested to it)
-      - Return expectedPcr15 = bytes32(0); no TEE-type dispatch is required
-        for the Azure branch
+      - akResult.bindingHash = sha256(hclVarData)
+      - For TDX, extract the 64-byte REPORT_DATA at quote-body offset 520
+      - For SNP, extract the 64-byte REPORT_DATA at report offset 0x50
+      - Require REPORT_DATA = akResult.bindingHash || bytes32(0)
+      - Return expectedPcr15 = bytes32(0)
     GCP (GcpCertChain) + TDX:
       - Extract UUID (16 bytes) from quoteBody at offset 520
       - Verify RTMR3 (at offset 472) == sha384(bytes48(0) || (bytes32(0) || UUID))
@@ -362,6 +363,9 @@ function verifySessionSignature(
 | `TEEVerificationFailed()` | TEE report invalid |
 | `AKCollateralVerificationFailed()` | AK collateral invalid |
 | `TEEAKBindingFailed()` | TEE-AK binding mismatch |
+| `UnsupportedAzureTeeType(TEEType teeType)` | Azure collateral is paired with an unsupported TEE |
+| `AzureTeeReportDataTooShort(uint256 actualLength, uint256 minRequired)` | Verified Azure TEE result cannot contain the 64-byte `REPORT_DATA` |
+| `AzureTeeReportDataMismatch(bytes32 actualBindingHash, bytes32 expectedBindingHash, bytes32 actualPadding)` | Verified Azure TEE report does not contain the MAA-signed HCL binding followed by 32 zero bytes |
 | `TPMQuoteVerificationFailed()` | TPM quote invalid |
 | `TPMCertifyVerificationFailed()` | TPM certify invalid |
 | `SessionKeyDelegationFailed()` | Delegation signature invalid |

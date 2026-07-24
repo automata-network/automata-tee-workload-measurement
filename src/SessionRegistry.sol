@@ -72,6 +72,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     uint256 private constant DCAP_RTMR3_SIZE = 48;
     /// @dev Offset of reportData UUID in TDX quote body
     uint256 private constant DCAP_REPORT_DATA_OFFSET = 520;
+    /// @dev Offset of report_data in an SNP attestation report
+    uint256 private constant SNP_REPORT_DATA_OFFSET = 0x50;
     /// @dev Offset of report_id in SNP attestation report
     uint256 private constant SNP_REPORT_ID_OFFSET = 0x140;
     /// @dev Size of report_id field
@@ -143,6 +145,15 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     /// @notice GCP cert-chain collateral with a TEE type that has no binding rule
     error UnsupportedGcpTeeType(TEEType teeType);
+
+    /// @notice Azure MAA collateral with a TEE type that has no binding rule
+    error UnsupportedAzureTeeType(TEEType teeType);
+
+    /// @notice Azure raw TEE report_data does not contain the MAA-signed HCL binding
+    error AzureTeeReportDataMismatch(bytes32 actualBindingHash, bytes32 expectedBindingHash, bytes32 actualPadding);
+
+    /// @notice Azure verified TEE result is too short to contain the 64-byte report_data
+    error AzureTeeReportDataTooShort(uint256 actualLength, uint256 minRequired);
 
     /// @notice AK collateral type fell through both Azure and GCP branches during binding
     error UnsupportedAkCollateralForBinding(AkPubCollateralType collateralType);
@@ -833,7 +844,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             akCollateralVerifier.verifyAkCollateral(evidence.akPubCollateral);
 
         // Verify TEE-AK binding and get expected PCR15 for GCP
-        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence);
+        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence, akResult.bindingHash);
 
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 4: TPM Quote Verification
@@ -1137,19 +1148,31 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @dev Verifies TEE-AK binding based on cloud provider and TEE type
     /// @param teeResult TEE verification result (contains reportData)
     /// @param evidence Attestation evidence bundle
+    /// @param bindingHash MAA-signed sha256(hclVarData) for Azure; zero for GCP
     /// @return expectedPcr15 Expected PCR15 value for GCP binding (zero for Azure)
-    function _verifyTeeAkBinding(TeeVerificationResult memory teeResult, AttestationEvidence calldata evidence)
-        private
-        pure
-        returns (bytes32 expectedPcr15)
-    {
+    function _verifyTeeAkBinding(
+        TeeVerificationResult memory teeResult,
+        AttestationEvidence calldata evidence,
+        bytes32 bindingHash
+    ) private pure returns (bytes32 expectedPcr15) {
         if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt) {
-            // Azure binding is anchored end-to-end inside verifyAkCollateral (§8.3.1, §14.9):
-            // the MAA-signed JWT covers `tdx_report_data` / `x-ms-sevsnpvm-reportdata` which
-            // commits to sha256(hclVarData), and verifyAkCollateral has already cross-checked
-            // sha256(hclVarData) against that claim. The on-chain teeReport is independently
-            // verified for hardware signature in Step 2; we do NOT re-check its REPORT_DATA
-            // against akResult.bindingHash here. No PCR15 binding for Azure.
+            uint256 reportDataOffset;
+            if (teeResult.teeType == TEEType.IntelTDX) {
+                reportDataOffset = DCAP_REPORT_DATA_OFFSET;
+            } else if (teeResult.teeType == TEEType.AmdSevSnp) {
+                reportDataOffset = SNP_REPORT_DATA_OFFSET;
+            } else {
+                revert UnsupportedAzureTeeType(teeResult.teeType);
+            }
+            uint256 minRequired = reportDataOffset + 64;
+            if (teeResult.reportData.length < minRequired) {
+                revert AzureTeeReportDataTooShort(teeResult.reportData.length, minRequired);
+            }
+            bytes32 actualBindingHash = LibBytes.readBytes32(teeResult.reportData, reportDataOffset);
+            bytes32 actualPadding = LibBytes.readBytes32(teeResult.reportData, reportDataOffset + 32);
+            if (actualBindingHash != bindingHash || actualPadding != bytes32(0)) {
+                revert AzureTeeReportDataMismatch(actualBindingHash, bindingHash, actualPadding);
+            }
             return bytes32(0);
         } else if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.GcpCertChain) {
             // GCP binding: different logic based on TEE type

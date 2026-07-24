@@ -285,7 +285,10 @@ Verification steps:
 8. Assert `sha256(hclVarData) == bindingHash`.
 9. Parse `HCLAkPub` from `hclVarData` using the §14.3-scoped JWK parser, construct `PublicIdentity` with `typeId = ALGO_ID_RS256`.
 
-Binding: `sha256(hclVarData)` returned as `bindingHash` field. The on-chain `teeReport`'s `REPORT_DATA` is NOT separately verified against this hash — MAA's `tdx_report_data` / `x-ms-sevsnpvm-reportdata` claim is the on-chain binding to the TEE attestation.
+Binding: `sha256(hclVarData)` is returned as `bindingHash`. `SessionRegistry`
+requires the verified Intel TDX or AMD SEV-SNP report's 64-byte `REPORT_DATA`
+to equal `bindingHash || bytes32(0)`. This joins the independently verified raw
+TEE report to the MAA-signed HCL data and prevents report splicing.
 
 #### GcpCertChain
 GCP provides X.509 certificate chain:
