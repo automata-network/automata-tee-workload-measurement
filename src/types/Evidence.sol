@@ -94,6 +94,11 @@ struct TeeVerificationResult {
     bytes reportData;
     /// @dev TEE technology type (Intel TDX or AMD SEV-SNP)
     TEEType teeType;
+    /// @dev Stable bit set for verified Boolean TEE security attributes.
+    ///      Bit 0: Intel TDX DEBUG.
+    ///      Bit 1: AMD SEV-SNP POLICY.DEBUG.
+    ///      Bit 2: AMD SEV-SNP POLICY.MIGRATE_MA.
+    uint256 enabledTeeAttributes;
 }
 
 /// @notice TPM report for platform binding verification

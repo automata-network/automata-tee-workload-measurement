@@ -12,6 +12,11 @@ import {
 import {IDcapAttestation} from "./interfaces/external/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/external/ISnpAttestation.sol";
 import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
+import {
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT
+} from "./types/Constants.sol";
 
 /// @title TeeVerifier
 /// @notice Standalone contract for verifying TEE attestation reports across multiple backends
@@ -23,7 +28,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Contract version
-    string public constant TEE_VERIFIER_VERSION = "1.0.0";
+    string public constant TEE_VERIFIER_VERSION = "1.1.0";
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
@@ -70,6 +75,15 @@ contract TeeVerifier is ITeeVerifier {
     /// @dev TD_ATTRIBUTES.DEBUG is bit 0.
     uint8 private constant TD_ATTRIBUTES_DEBUG_MASK = 0x01;
 
+    /// @dev TD_ATTRIBUTES.SEPT_VE_DISABLE is bit 28.
+    uint8 private constant TD_ATTRIBUTES_SEPT_VE_DISABLE_MASK = 0x10;
+
+    /// @dev Offset of MR_SERVICETD in a TD15 quote body.
+    uint256 private constant TD15_MR_SERVICETD_OFFSET = 600;
+
+    /// @dev Size of MR_SERVICETD.
+    uint256 private constant TD15_MR_SERVICETD_SIZE = 48;
+
     /// @dev Offset of reportData within quote body
     uint256 private constant DCAP_REPORT_DATA_START = 520;
 
@@ -83,8 +97,17 @@ contract TeeVerifier is ITeeVerifier {
     /// @dev Offset of REPORT_DATA in AMD SEV-SNP raw report (per AMD spec)
     uint256 private constant SNP_REPORT_DATA_OFFSET = 0x50; // 80 decimal
 
-    /// @dev Minimum valid SNP report length (must contain REPORT_DATA)
-    uint256 private constant SNP_MIN_REPORT_LEN = 144; // 80 + 64
+    /// @dev Required AMD SEV-SNP attestation report length.
+    uint256 private constant SNP_REPORT_SIZE = 1184;
+
+    uint256 private constant SNP_VERSION_OFFSET = 0x00;
+    uint256 private constant SNP_POLICY_OFFSET = 0x08;
+    uint256 private constant SNP_VMPL_OFFSET = 0x30;
+    uint256 private constant SNP_REPORT_ID_MA_OFFSET = 0x160;
+    uint256 private constant SNP_REPORT_ID_MA_SIZE = 32;
+    uint64 private constant SNP_POLICY_RESERVED_ONE = uint64(1) << 17;
+    uint64 private constant SNP_POLICY_MIGRATE_MA = uint64(1) << 18;
+    uint64 private constant SNP_POLICY_DEBUG = uint64(1) << 19;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors
@@ -105,12 +128,21 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice DCAP report-data slice would read past the end of the quote body
     error DcapReportDataOob(uint256 length, uint256 minRequired);
 
-    /// @notice SNP raw report bytes are shorter than the minimum required to contain REPORT_DATA
-    error SnpReportTooShort(uint256 length, uint256 minRequired);
-
     /// @notice The upstream DCAP verifier returned !success. The full output is included
     ///         so off-chain decoders can surface the underlying reason.
     error DcapVerificationFailed(bytes output);
+
+    /// @notice The DCAP verifier returned a trusted computing base status that policy rejects.
+    error DcapTcbStatusNotAccepted(uint8 actual);
+
+    /// @notice Reserved Intel TDX TD_ATTRIBUTES bits are set.
+    error InvalidTdxAttributes(bytes8 actual);
+
+    /// @notice Intel TDX TD_ATTRIBUTES.SEPT_VE_DISABLE is not set.
+    error TdxSeptVeDisableRequired();
+
+    /// @notice Intel TDX 1.5 MR_SERVICETD is nonzero.
+    error TdxMigrationServiceTdNotSupported();
 
     /// @notice The upstream SNP verifier returned a non-Success VerificationResult.
     error SnpVerificationFailed(VerificationResult result);
@@ -118,6 +150,21 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice The supplied SNP raw report does not hash to the journal's reportHash.
     ///         Indicates the report body was not the one the ZK proof attested to.
     error SnpReportHashMismatch(bytes32 expected, bytes32 actual);
+
+    /// @notice The AMD SEV-SNP raw report is not exactly 1,184 bytes.
+    error InvalidSnpReportLength(uint256 actual, uint256 expected);
+
+    /// @notice The AMD SEV-SNP report version is not supported.
+    error UnsupportedSnpReportVersion(uint32 actual);
+
+    /// @notice Reserved AMD SEV-SNP POLICY bits have invalid values.
+    error InvalidSnpPolicy(uint64 actual);
+
+    /// @notice AMD SEV-SNP reports must be requested at VMPL 0.
+    error UnsupportedSnpVmpl(uint32 actual);
+
+    /// @notice AMD SEV-SNP REPORT_ID_MA is nonzero.
+    error SnpMigrationAgentNotSupported();
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -234,28 +281,59 @@ contract TeeVerifier is ITeeVerifier {
         }
     }
 
-    /// @dev Returns true only for TCB statuses considered acceptable for production workloads.
-    function isAcceptedDcapTcbStatus(bytes memory output) private pure returns (bool) {
-        if (output.length <= DCAP_TCB_STATUS_OFFSET) {
-            return false;
+    function _validateTdxReport(bytes memory quoteBody) private pure returns (bool debugEnabled) {
+        bytes8 attributes;
+        assembly ("memory-safe") {
+            attributes := mload(add(add(quoteBody, 0x20), TD_ATTRIBUTES_OFFSET))
         }
 
-        uint8 tcbStatus = uint8(output[DCAP_TCB_STATUS_OFFSET]);
-        return tcbStatus == TCB_STATUS_OK || tcbStatus == TCB_STATUS_SW_HARDENING_NEEDED;
+        if (
+            (uint8(quoteBody[TD_ATTRIBUTES_OFFSET]) & ~TD_ATTRIBUTES_DEBUG_MASK) != 0
+                || uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 1]) != 0 || uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 2]) != 0
+                || (uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 3]) & 0x2f) != 0
+                || uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 4]) != 0 || uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 5]) != 0
+                || uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 6]) != 0
+                || (uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 7]) & 0x7f) != 0
+        ) {
+            revert InvalidTdxAttributes(attributes);
+        }
+        if ((uint8(quoteBody[TD_ATTRIBUTES_OFFSET + 3]) & TD_ATTRIBUTES_SEPT_VE_DISABLE_MASK) == 0) {
+            revert TdxSeptVeDisableRequired();
+        }
+        if (
+            quoteBody.length == TD15_QUOTE_BODY_SIZE
+                && _hasNonzeroBytes(quoteBody, TD15_MR_SERVICETD_OFFSET, TD15_MR_SERVICETD_SIZE)
+        ) {
+            revert TdxMigrationServiceTdNotSupported();
+        }
+        return (uint8(quoteBody[TD_ATTRIBUTES_OFFSET]) & TD_ATTRIBUTES_DEBUG_MASK) != 0;
     }
 
-    /// @dev Checks TDX TD_ATTRIBUTES.DEBUG from the little-endian TD attributes bit field.
-    function isTdxDebugEnabled(bytes memory quoteBody) private pure returns (bool) {
-        return (uint8(quoteBody[TD_ATTRIBUTES_OFFSET]) & TD_ATTRIBUTES_DEBUG_MASK) != 0;
+    function _hasNonzeroBytes(bytes memory data, uint256 offset, uint256 length) private pure returns (bool) {
+        for (uint256 i = 0; i < length; i++) {
+            if (data[offset + i] != bytes1(0)) return true;
+        }
+        return false;
+    }
+
+    function _readLeUint32(bytes memory data, uint256 offset) private pure returns (uint32 value) {
+        return uint32(uint8(data[offset])) | (uint32(uint8(data[offset + 1])) << 8)
+            | (uint32(uint8(data[offset + 2])) << 16) | (uint32(uint8(data[offset + 3])) << 24);
+    }
+
+    function _readLeUint64(bytes memory data, uint256 offset) private pure returns (uint64 value) {
+        value = uint64(uint8(data[offset])) | (uint64(uint8(data[offset + 1])) << 8)
+            | (uint64(uint8(data[offset + 2])) << 16) | (uint64(uint8(data[offset + 3])) << 24)
+            | (uint64(uint8(data[offset + 4])) << 32) | (uint64(uint8(data[offset + 5])) << 40)
+            | (uint64(uint8(data[offset + 6])) << 48) | (uint64(uint8(data[offset + 7])) << 56);
     }
 
     /// @dev Extracts the full SNP attestation report from journal
     /// @param rawReport The SNP raw report bytes from VerifierJournal (already the full report)
     /// @return attestationReport The attestation report (validated and returned directly)
     function extractSnpAttestationReport(bytes memory rawReport) private pure returns (bytes memory attestationReport) {
-        // Validate minimum length
-        if (rawReport.length < SNP_MIN_REPORT_LEN) {
-            revert SnpReportTooShort(rawReport.length, SNP_MIN_REPORT_LEN);
+        if (rawReport.length != SNP_REPORT_SIZE) {
+            revert InvalidSnpReportLength(rawReport.length, SNP_REPORT_SIZE);
         }
 
         // rawReport IS the attestation report - return directly (no copy needed)
@@ -266,9 +344,8 @@ contract TeeVerifier is ITeeVerifier {
     /// @param rawReport The SNP raw report bytes from VerifierJournal
     /// @return reportData The extracted 64-byte REPORT_DATA field
     function extractSnpReportData(bytes memory rawReport) external pure returns (bytes memory reportData) {
-        // Validate minimum length to contain REPORT_DATA
-        if (rawReport.length < SNP_MIN_REPORT_LEN) {
-            revert SnpReportTooShort(rawReport.length, SNP_MIN_REPORT_LEN);
+        if (rawReport.length != SNP_REPORT_SIZE) {
+            revert InvalidSnpReportLength(rawReport.length, SNP_REPORT_SIZE);
         }
 
         // Allocate reportData buffer
@@ -316,18 +393,21 @@ contract TeeVerifier is ITeeVerifier {
             revert DcapVerificationFailed(output);
         }
 
-        if (!isAcceptedDcapTcbStatus(output)) {
-            return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.IntelTDX});
+        if (output.length <= DCAP_TCB_STATUS_OFFSET) {
+            revert TeeReportTooShort(output.length, DCAP_TCB_STATUS_OFFSET + 1);
+        }
+        uint8 tcbStatus = uint8(output[DCAP_TCB_STATUS_OFFSET]);
+        if (tcbStatus != TCB_STATUS_OK && tcbStatus != TCB_STATUS_SW_HARDENING_NEEDED) {
+            revert DcapTcbStatusNotAccepted(tcbStatus);
         }
 
-        // Extract quote body from DCAP output (Step 1)
         bytes memory quoteBody = extractDcapQuoteBody(output);
+        bool debugEnabled = _validateTdxReport(quoteBody);
+        uint256 enabledTeeAttributes = debugEnabled ? TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT : 0;
 
-        if (isTdxDebugEnabled(quoteBody)) {
-            return TeeVerificationResult({valid: false, reportData: "", teeType: TEEType.IntelTDX});
-        }
-
-        return TeeVerificationResult({valid: true, reportData: quoteBody, teeType: TEEType.IntelTDX});
+        return TeeVerificationResult({
+            valid: true, reportData: quoteBody, teeType: TEEType.IntelTDX, enabledTeeAttributes: enabledTeeAttributes
+        });
     }
 
     /// @dev Verifies an AMD SEV-SNP attestation report
@@ -362,9 +442,38 @@ contract TeeVerifier is ITeeVerifier {
             revert SnpReportHashMismatch(journal.reportHash, computedHash);
         }
 
-        // The bound raw report IS the full attestation report (Step 1)
         bytes memory attestationReport = extractSnpAttestationReport(zkProof.rawReport);
+        uint32 version = _readLeUint32(attestationReport, SNP_VERSION_OFFSET);
+        if (version < 2 || version > 5) {
+            revert UnsupportedSnpReportVersion(version);
+        }
 
-        return TeeVerificationResult({valid: true, reportData: attestationReport, teeType: TEEType.AmdSevSnp});
+        uint64 policy = _readLeUint64(attestationReport, SNP_POLICY_OFFSET);
+        if ((policy & SNP_POLICY_RESERVED_ONE) == 0 || (policy >> 26) != 0) {
+            revert InvalidSnpPolicy(policy);
+        }
+
+        uint32 vmpl = _readLeUint32(attestationReport, SNP_VMPL_OFFSET);
+        if (vmpl != 0) {
+            revert UnsupportedSnpVmpl(vmpl);
+        }
+        if (_hasNonzeroBytes(attestationReport, SNP_REPORT_ID_MA_OFFSET, SNP_REPORT_ID_MA_SIZE)) {
+            revert SnpMigrationAgentNotSupported();
+        }
+
+        uint256 enabledTeeAttributes;
+        if ((policy & SNP_POLICY_DEBUG) != 0) {
+            enabledTeeAttributes |= TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT;
+        }
+        if ((policy & SNP_POLICY_MIGRATE_MA) != 0) {
+            enabledTeeAttributes |= TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT;
+        }
+
+        return TeeVerificationResult({
+            valid: true,
+            reportData: attestationReport,
+            teeType: TEEType.AmdSevSnp,
+            enabledTeeAttributes: enabledTeeAttributes
+        });
     }
 }

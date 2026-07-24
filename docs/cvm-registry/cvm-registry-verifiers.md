@@ -36,7 +36,7 @@ uint256 constant SNP_MIN_REPORT_LEN = 144;
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "1.0.0";
+string public constant TEE_VERIFIER_VERSION = "1.1.0";
 ```
 
 ### Functions
@@ -57,13 +57,27 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 1. Dispatch based on `VerificationBackendType`:
    - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
    - ZK RiscZero/Succinct: `dcapAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
-2. Extract quote body from DCAP output (`extractDcapQuoteBody`)
-3. Extract 64-byte reportData from quote body (`extractDcapReportData`)
+2. Extract the quote body from DCAP output
+3. Require acceptable trusted computing base status, valid reserved attribute
+   bits, and `SEPT_VE_DISABLE`
+4. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`
+5. Extract `DEBUG` into `enabledTeeAttributes`
+6. Return the quote body with `valid=true`
 
 **SNP (AMD) flow**:
 1. ZK only: `snpAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
-2. Extract attestation report (`extractSnpAttestationReport`)
-3. Extract 64-byte reportData (`extractSnpReportData`)
+2. Check the proof-bound report hash before reading report fields
+3. Require an exact 1,184-byte report, supported version, valid policy-reserved
+   bits, and `VMPL=0`
+4. Reject nonzero `REPORT_ID_MA`
+5. Extract `POLICY.DEBUG` and `POLICY.MIGRATE_MA` into
+   `enabledTeeAttributes`
+6. Return the raw report with `valid=true`
+
+AMD SEV-SNP `POLICY.SMT` and Intel TDX `TD_ATTRIBUTES.PERFMON` do not have
+reserved attribute names in this version. The verifier keeps its existing
+acceptance rules for those bits. Both bits are candidates for a future policy
+version.
 
 #### Helper Functions
 
@@ -71,7 +85,7 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 |---|---|---|
 | `extractDcapQuoteBody(output)` | private | Parse DCAP output -> TD10/TD15 quote body bytes |
 | `extractDcapReportData(quoteBody)` | external | Extract 64 bytes at offset 520 from quote body |
-| `extractSnpAttestationReport(rawReport)` | private | Validate length >= 144, return raw report |
+| `extractSnpAttestationReport(rawReport)` | private | Require the exact 1,184-byte report and validate policy fields |
 | `extractSnpReportData(rawReport)` | external | Extract 64 bytes at offset 0x50 from SNP report |
 
 Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before quote body in DCAP output).
@@ -80,9 +94,18 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 
 | Error | Condition |
 |---|---|
-| `UnsupportedTeeType()` | Not TDX or SNP |
-| `UnsupportedBackendType()` | Invalid verification backend |
-| `InvalidTeeReport()` | Verification returned invalid |
+| `UnsupportedTeeType(TEEType actual)` | Not TDX or SNP |
+| `UnsupportedBackendType(TEEType teeType, VerificationBackendType backend)` | Invalid verification backend |
+| `DcapTcbStatusNotAccepted(uint8 actual)` | DCAP trusted computing base status is not accepted |
+| `InvalidTdxAttributes(bytes8 actual)` | Intel TDX reserved attribute bits are invalid |
+| `TdxSeptVeDisableRequired()` | Intel TDX `SEPT_VE_DISABLE` is absent |
+| `TdxMigrationServiceTdNotSupported()` | Intel TDX 1.5 `MR_SERVICETD` is nonzero |
+| `SnpReportHashMismatch(bytes32 expected, bytes32 actual)` | Raw report is not the proof-bound report |
+| `InvalidSnpReportLength(uint256 actual, uint256 expected)` | Raw report is not exactly 1,184 bytes |
+| `UnsupportedSnpReportVersion(uint32 actual)` | Report version is unsupported |
+| `InvalidSnpPolicy(uint64 actual)` | Required or reserved policy bits are invalid |
+| `UnsupportedSnpVmpl(uint32 actual)` | `VMPL` is nonzero |
+| `SnpMigrationAgentNotSupported()` | `REPORT_ID_MA` is nonzero |
 
 ---
 

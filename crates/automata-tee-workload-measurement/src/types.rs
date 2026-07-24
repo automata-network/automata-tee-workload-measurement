@@ -4,10 +4,67 @@ use alloy::{
 };
 use anyhow::ensure;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use std::sync::LazyLock;
 
 use crate::stubs::{
     AttestationEvidence, PublicIdentity, SessionKeyRotationEvidence, SessionRenewalAuthorization,
 };
+
+pub const TEE_ATTRIBUTE_NAMESPACE: &str = "atakit.attestation.v1.tee.";
+pub const TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME: &str =
+    "atakit.attestation.v1.tee.intel-tdx.debug.enabled";
+pub const TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME: &str =
+    "atakit.attestation.v1.tee.amd-sev-snp.debug.enabled";
+pub const TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME: &str =
+    "atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled";
+
+pub static TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY: LazyLock<B256> =
+    LazyLock::new(|| keccak256(TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME));
+pub static TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY: LazyLock<B256> =
+    LazyLock::new(|| keccak256(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME));
+pub static TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY: LazyLock<B256> =
+    LazyLock::new(|| keccak256(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME));
+
+pub fn tee_attribute_key(name: &str) -> Option<B256> {
+    match name {
+        TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME => Some(*TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY),
+        TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME => Some(*TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY),
+        TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME => {
+            Some(*TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY)
+        }
+        _ => None,
+    }
+}
+
+pub fn tee_attribute_name(key: B256) -> Option<&'static str> {
+    if key == *TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY {
+        Some(TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME)
+    } else if key == *TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY {
+        Some(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME)
+    } else if key == *TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY {
+        Some(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME)
+    } else {
+        None
+    }
+}
+
+pub fn tee_attribute_boolean_value(value: bool) -> B256 {
+    if value {
+        B256::with_last_byte(1)
+    } else {
+        B256::ZERO
+    }
+}
+
+pub fn tee_attribute_boolean_from_value(value: B256) -> Option<bool> {
+    if value == B256::ZERO {
+        Some(false)
+    } else if value == B256::with_last_byte(1) {
+        Some(true)
+    } else {
+        None
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct AppRef {
@@ -167,4 +224,72 @@ pub struct RecoverSessionRequest {
 pub struct LifecycleSessionResponse {
     pub new_session_id: B256,
     pub tx_hash: B256,
+}
+
+#[cfg(test)]
+mod tee_attribute_tests {
+    use super::{
+        TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME,
+        TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME,
+        TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME,
+        tee_attribute_boolean_from_value, tee_attribute_boolean_value, tee_attribute_key,
+        tee_attribute_name,
+    };
+    use alloy::primitives::B256;
+
+    #[test]
+    fn keys_match_contract_vectors() {
+        assert_eq!(
+            *TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY,
+            "e96023946a6ad61275cb45a796a2905e3d923139ce33b7734f3bea4eec3d72cd"
+                .parse::<B256>()
+                .unwrap()
+        );
+        assert_eq!(
+            *TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY,
+            "e3517680fe2d4f15751da85b0400ea909bb3d5ae76232c10a6c447031d6389b9"
+                .parse::<B256>()
+                .unwrap()
+        );
+        assert_eq!(
+            *TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY,
+            "9090b994ea4098b565ee0da01c4bcaa083a5bfb19c0a797c7ffe3de7ce0251e1"
+                .parse::<B256>()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn name_and_boolean_helpers_are_exact() {
+        for (name, key) in [
+            (
+                TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME,
+                *TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY,
+            ),
+            (
+                TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME,
+                *TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY,
+            ),
+            (
+                TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME,
+                *TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY,
+            ),
+        ] {
+            assert_eq!(tee_attribute_key(name), Some(key));
+            assert_eq!(tee_attribute_name(key), Some(name));
+        }
+        assert_eq!(tee_attribute_key("atakit.attestation.v1.tee.unknown"), None);
+        assert_eq!(tee_attribute_name(B256::repeat_byte(0xff)), None);
+        assert_eq!(tee_attribute_boolean_value(false), B256::ZERO);
+        assert_eq!(tee_attribute_boolean_value(true), B256::with_last_byte(1));
+        assert_eq!(tee_attribute_boolean_from_value(B256::ZERO), Some(false));
+        assert_eq!(
+            tee_attribute_boolean_from_value(B256::with_last_byte(1)),
+            Some(true)
+        );
+        assert_eq!(
+            tee_attribute_boolean_from_value(B256::with_last_byte(2)),
+            None
+        );
+    }
 }

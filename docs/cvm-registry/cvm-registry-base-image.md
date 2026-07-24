@@ -174,6 +174,7 @@ function addPlatformVariants(
 | `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
 | `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
 | `DuplicateAttributeKey(bytes32 key)` | Repeated key in attributes array |
+| `InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue)` | Reserved verified TEE attribute is not `bytes32(0)` or `bytes32(uint256(1))` |
 | `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not in whitelist |
 
 ## Events
@@ -192,6 +193,7 @@ function addPlatformVariants(
 
 1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24` (enforced by `_validatePcrSpecsSorted`)
 2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateUniqueAttributeKeys`, uses in-memory hash table)
+3. **Reserved TEE attribute values**: The three exact reserved keys accept only the canonical Boolean encodings. Missing means `false` during session policy evaluation.
 3. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
 4. **Signature expiry**: `block.timestamp <= expireAt`
 5. **Owner match**: Signer fingerprint must match stored owner for updates/deactivation

@@ -136,8 +136,16 @@ Input: evidence.teeReport
 Actions:
   - Call teeVerifier.verifyTeeReport(teeReport)
   - Revert TEEVerificationFailed if !result.valid
-Output: TeeVerificationResult { valid, reportData (full quote body or report), teeType }
+Output: TeeVerificationResult { valid, reportData (full quote body or report), teeType, enabledTeeAttributes }
 ```
+
+### Step 2a: Verified TEE Attribute Policy
+
+SessionRegistry converts `enabledTeeAttributes` into the three reserved Boolean
+values. Attributes for the non-selected TEE evaluate to `false`. The merged
+profile and variant declaration defaults to `false` and must equal the signed
+report. The matching workload requirement defaults to `[false]` and must be
+exactly `[false]` or `[false, true]`. The verified value must be allowed.
 
 ### Step 3: AK Collateral & TEE-AK Binding (`_verifyTeeAkBinding`)
 ```
@@ -233,6 +241,7 @@ Output: All PCR checks pass (or revert PCRVerificationFailed / PCRNotFound)
 ```
 Input: workloadSpec.requirements, merged platform+variant attributes
 Actions:
+  - Skip the three reserved verified TEE attribute keys because Step 2a already evaluated them
   - Merge: _mergeAttributes(platformProfile.attributes, variant.attributes)
     (variant attrs override platform attrs at matching key)
   - For each requirement:
@@ -409,6 +418,8 @@ This binds the session key to a specific base image, workload, and session.
 
 ### Rotation Key Differences from Registration
 - TEE is NOT re-attested during rotation (teeReportBytesHash provided directly)
+- The verified launch TEE attributes are inherited because workload, base
+  image, profile, and variant cannot change during rotation
 - GCP PCR15 binding check is skipped (expectedPcr15 = bytes32(0))
 - Old session's `expiresAt` is preserved (NOT recomputed from TTL)
 - Rotation authorization: old TPM signing key must sign rotation message

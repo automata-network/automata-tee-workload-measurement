@@ -41,7 +41,14 @@ import {
     SESSION_ROTATE_KEY_MSG,
     SESSION_RENEW_DOMAIN,
     SESSION_RENEW_MSG,
-    SESSION_RECOVER_MSG
+    SESSION_RECOVER_MSG,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT,
+    TEE_ATTRIBUTE_TRUE
 } from "./types/Constants.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {LibBytes, Bytes48} from "./lib/LibBytes.sol";
@@ -176,6 +183,18 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     /// @notice Attribute value is not in the requirement's allow-list
     error AttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
+
+    /// @notice A TEE verifier returned valid=false instead of reverting.
+    error TeeVerificationFailed();
+
+    /// @notice The effective base-image declaration differs from the verified TEE state.
+    error TeeAttributeBaseImageMismatch(bytes32 key, bytes32 declaredValue, bytes32 verifiedValue);
+
+    /// @notice A reserved workload requirement does not use [false] or [false, true].
+    error MalformedTeeAttributeRequirement(bytes32 key);
+
+    /// @notice The verified TEE state is not permitted by the workload.
+    error TeeAttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
 
     /// @notice Workload not active
     error WorkloadNotActive(bytes32 workloadId);
@@ -510,6 +529,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         PcrValue[] pcrValues;
         bytes32 expectedPcr15; // GCP binding PCR15 expected value (zero for Azure)
         bytes32 tpmSignatureHash; // Hash of TPM quote signature (for session ID computation)
+        TEEType teeType;
+        uint256 enabledTeeAttributes;
     }
 
     struct FullSessionResult {
@@ -539,6 +560,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     ) private returns (FullSessionResult memory result) {
         PolicyContext memory policyCtx = _lookupPolicy(workloadId, baseImageId, platformProfileId, measurementVariantId);
         result.attestation = _verifyAttestation(evidence, ownerFingerprint);
+        _evaluateTeePolicy(
+            result.attestation.teeType,
+            result.attestation.enabledTeeAttributes,
+            policyCtx.platformProfile,
+            policyCtx.variant,
+            policyCtx.workloadSpec.requirements
+        );
         result.sessionId =
             _computeSessionId(result.attestation.tpmSignatureHash, teeVerifier.getTeeReportHash(evidence.teeReport));
         if (_sessions[result.sessionId].exists) revert SessionAlreadyExists();
@@ -794,6 +822,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         // STEP 2: TEE Report Verification (verifier reverts with rich errors on failure)
         // ─────────────────────────────────────────────────────────────────────────────────
         TeeVerificationResult memory teeResult = teeVerifier.verifyTeeReport(evidence.teeReport);
+        if (!teeResult.valid) {
+            revert TeeVerificationFailed();
+        }
 
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 3: AK Collateral + TEE↔vTPM Binding (verifier reverts with rich errors)
@@ -824,7 +855,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             tpmSigningKeyFingerprint: tpmSigningKeyFingerprint,
             pcrValues: pcrValues,
             expectedPcr15: expectedPcr15,
-            tpmSignatureHash: tpmSignatureHash
+            tpmSignatureHash: tpmSignatureHash,
+            teeType: teeResult.teeType,
+            enabledTeeAttributes: teeResult.enabledTeeAttributes
         });
     }
 
@@ -1374,6 +1407,68 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     // Internal Helpers - Attribute Evaluation
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
+    function _isTeeAttributeKey(bytes32 key) private pure returns (bool) {
+        return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA;
+    }
+
+    function _evaluateTeePolicy(
+        TEEType teeType,
+        uint256 enabledTeeAttributes,
+        PlatformProfile memory platformProfile,
+        MeasurementVariant memory variant,
+        AttributeRequirement[] memory requirements
+    ) private pure {
+        Attribute[] memory attributes = _mergeAttributes(platformProfile.attributes, variant.attributes);
+        bytes32[3] memory keys =
+            [TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA];
+
+        for (uint256 i = 0; i < keys.length; i++) {
+            bytes32 key = keys[i];
+            bool enabled;
+            if (i == 0) {
+                enabled = teeType == TEEType.IntelTDX && (enabledTeeAttributes & TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT) != 0;
+            } else if (i == 1) {
+                enabled =
+                    teeType == TEEType.AmdSevSnp && (enabledTeeAttributes & TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT) != 0;
+            } else {
+                enabled = teeType == TEEType.AmdSevSnp
+                    && (enabledTeeAttributes & TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT) != 0;
+            }
+            bytes32 verifiedValue = enabled ? TEE_ATTRIBUTE_TRUE : bytes32(0);
+
+            bytes32 declaredValue;
+            for (uint256 j = 0; j < attributes.length; j++) {
+                if (attributes[j].key == key) {
+                    declaredValue = attributes[j].value;
+                    break;
+                }
+            }
+            if (declaredValue != verifiedValue) {
+                revert TeeAttributeBaseImageMismatch(key, declaredValue, verifiedValue);
+            }
+
+            bool requirementFound;
+            bool permitsTrue;
+            for (uint256 j = 0; j < requirements.length; j++) {
+                if (requirements[j].key != key) continue;
+                requirementFound = true;
+                uint256 allowedLen = requirements[j].allowedValues.length;
+                if (
+                    (allowedLen != 1 && allowedLen != 2) || requirements[j].allowedValues[0] != bytes32(0)
+                        || (allowedLen == 2 && requirements[j].allowedValues[1] != TEE_ATTRIBUTE_TRUE)
+                ) {
+                    revert MalformedTeeAttributeRequirement(key);
+                }
+                permitsTrue = allowedLen == 2;
+                break;
+            }
+            if (verifiedValue == TEE_ATTRIBUTE_TRUE && (!requirementFound || !permitsTrue)) {
+                revert TeeAttributeValueNotAllowed(key, verifiedValue);
+            }
+        }
+    }
+
     /// @dev Merges platform profile attributes with variant attributes (variant overrides at matching keys)
     /// @param profileAttrs Platform profile attributes
     /// @param variantAttrs Variant attributes
@@ -1440,6 +1535,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         uint256 reqLen = requirements.length;
         uint256 attrsLen = attributes.length;
         for (uint256 i = 0; i < reqLen;) {
+            if (_isTeeAttributeKey(requirements[i].key)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
             // Find attribute by key
             bool found = false;
             bytes32 attributeValue;

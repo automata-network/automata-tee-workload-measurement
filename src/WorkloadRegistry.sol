@@ -9,7 +9,15 @@ import {
     PcrVerifyType,
     AttributeRequirement
 } from "./types/Common.sol";
-import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
+import {
+    WORKLOAD_DOMAIN,
+    WORKLOAD_REGISTER_MSG,
+    WORKLOAD_DEACTIVATE_MSG,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_TRUE
+} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
@@ -38,6 +46,8 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
     error DuplicateRequirementKey(bytes32 key);
+    error InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
+    error InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
     // ============================================================================
@@ -94,7 +104,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         }
 
         _validatePcrSpecsSorted(spec.pcrs);
-        _validateUniqueRequirementKeys(spec.requirements);
+        _validateRequirements(spec.requirements);
 
         // Compute workload ID
         workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version));
@@ -283,8 +293,27 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         }
     }
 
-    function _validateUniqueRequirementKeys(AttributeRequirement[] calldata requirements) private pure {
+    function _validateRequirements(AttributeRequirement[] calldata requirements) private pure {
         uint256 len = requirements.length;
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 key = requirements[i].key;
+            if (
+                key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+                    || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA
+            ) {
+                bytes32[] calldata allowedValues = requirements[i].allowedValues;
+                uint256 allowedLen = allowedValues.length;
+                if (allowedLen != 1 && allowedLen != 2) {
+                    revert InvalidTeeAttributeRequirementLength(key, allowedLen);
+                }
+                if (allowedValues[0] != bytes32(0)) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[0]);
+                }
+                if (allowedLen == 2 && allowedValues[1] != TEE_ATTRIBUTE_TRUE) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[1]);
+                }
+            }
+        }
         if (len < 2) {
             return;
         }

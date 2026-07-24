@@ -26,6 +26,25 @@ bytes32 constant WORKLOAD_DOMAIN = keccak256("CVM_WORKLOAD_V1");
 /// @dev Domain separator for TPM quote extraData nonce binding (used by SessionRegistry)
 bytes32 constant SESSION_NONCE_DOMAIN = keccak256("CVM_SESSION_REG_NONCE_V1");
 
+// ============================================================================
+// Verified TEE Attribute Constants
+// ============================================================================
+
+/// @dev Reserved base-image and workload attribute keys.
+bytes32 constant TEE_ATTRIBUTE_INTEL_TDX_DEBUG = keccak256("atakit.attestation.v1.tee.intel-tdx.debug.enabled");
+bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG = keccak256("atakit.attestation.v1.tee.amd-sev-snp.debug.enabled");
+bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA =
+    keccak256("atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled");
+
+/// @dev Canonical Boolean attribute values.
+bytes32 constant TEE_ATTRIBUTE_FALSE = bytes32(0);
+bytes32 constant TEE_ATTRIBUTE_TRUE = bytes32(uint256(1));
+
+/// @dev Stable internal bits returned in TeeVerificationResult.enabledTeeAttributes.
+uint256 constant TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT = uint256(1) << 0;
+uint256 constant TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT = uint256(1) << 1;
+uint256 constant TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT = uint256(1) << 2;
+
 // ─── Operation Message Separators ──────────────────────────────────────
 /// @dev Message separator for base image registration message signatures
 bytes32 constant BASEIMAGE_REGISTER_MSG = keccak256("CVM_MSG_BASEIMAGE_REGISTER_V1");

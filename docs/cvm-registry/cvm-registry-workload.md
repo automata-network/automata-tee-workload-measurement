@@ -150,6 +150,8 @@ Logic:
 | `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
 | `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
 | `DuplicateRequirementKey(bytes32 key)` | Repeated key in requirements array |
+| `InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength)` | Reserved verified TEE requirement has the wrong number of values |
+| `InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue)` | Reserved verified TEE requirement is not exactly `[false]` or `[false, true]` |
 | `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not whitelisted |
 
 ## Events
@@ -165,6 +167,7 @@ Logic:
 
 1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24`
 2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateUniqueRequirementKeys`)
+3. **Reserved TEE requirements**: The three exact reserved keys accept only `[bytes32(0)]` or `[bytes32(0), bytes32(uint256(1))]`. Missing means `[false]`.
 3. **Signature expiry**: `block.timestamp <= expireAt`
 4. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
 

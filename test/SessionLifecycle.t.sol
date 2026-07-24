@@ -51,7 +51,14 @@ import {
     SESSION_DOMAIN,
     SESSION_NONCE_DOMAIN,
     SESSION_RECOVER_MSG,
-    SESSION_RENEW_DOMAIN
+    SESSION_RENEW_DOMAIN,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT,
+    TEE_ATTRIBUTE_TRUE
 } from "../src/types/Constants.sol";
 
 contract SessionLifecycleTest is Test {
@@ -101,6 +108,7 @@ contract SessionLifecycleTest is Test {
     PublicIdentity private oldSessionKey;
     PolicyIds private oldPolicy;
     PolicyIds private newPolicy;
+    uint256 private nextTeePolicyVersion;
 
     function setUp() public {
         vm.warp(1_800_000_000);
@@ -564,6 +572,277 @@ contract SessionLifecycleTest is Test {
         assertTrue(sessionRegistry.isSessionActive(sessionId));
     }
 
+    function testTeeAttributePolicyMatrices() public {
+        bytes32[3] memory keys =
+            [TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA];
+        uint256[3] memory bits = [
+            TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
+            TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
+            TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT
+        ];
+
+        for (uint256 keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+            TEEType teeType = keyIndex == 0 ? TEEType.IntelTDX : TEEType.AmdSevSnp;
+            for (uint256 actualMode = 0; actualMode < 2; actualMode++) {
+                bool actual = actualMode == 1;
+                for (uint256 baseMode = 0; baseMode < 3; baseMode++) {
+                    for (uint256 workloadMode = 0; workloadMode < 3; workloadMode++) {
+                        PolicyIds memory policy = _registerTeePolicy(keys[keyIndex], baseMode, workloadMode, 0, 0);
+                        AttestationEvidence memory evidence =
+                            _fullEvidence(uint8(nextTeePolicyVersion), _identity(ALGO_ID_ES256K, 0xa0));
+                        evidence.teeReport.teeType = teeType;
+                        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+                        uint256 nonce = sessionRegistry.getNonce(ownerFingerprint);
+                        _mockFullEvidenceWithResult(
+                            evidence,
+                            ownerFingerprint,
+                            nonce,
+                            oldAk,
+                            oldTpmSigningKey,
+                            keccak256(evidence.teeReport.data),
+                            TeeVerificationResult({
+                                valid: true,
+                                reportData: "",
+                                teeType: teeType,
+                                enabledTeeAttributes: actual ? bits[keyIndex] : 0
+                            })
+                        );
+
+                        bool baseMatches = actual ? baseMode == 2 : baseMode != 2;
+                        bool workloadPermits = !actual || workloadMode == 2;
+                        if (!baseMatches) {
+                            bytes32 declaredValue = baseMode == 2 ? TEE_ATTRIBUTE_TRUE : bytes32(0);
+                            vm.expectRevert(
+                                abi.encodeWithSelector(
+                                    SessionRegistry.TeeAttributeBaseImageMismatch.selector,
+                                    keys[keyIndex],
+                                    declaredValue,
+                                    actual ? TEE_ATTRIBUTE_TRUE : bytes32(0)
+                                )
+                            );
+                        } else if (!workloadPermits) {
+                            vm.expectRevert(
+                                abi.encodeWithSelector(
+                                    SessionRegistry.TeeAttributeValueNotAllowed.selector,
+                                    keys[keyIndex],
+                                    TEE_ATTRIBUTE_TRUE
+                                )
+                            );
+                        }
+
+                        bytes32 sessionId = sessionRegistry.registerSession(
+                            evidence,
+                            policy.workloadId,
+                            policy.baseImageId,
+                            policy.platformProfileId,
+                            policy.measurementVariantId,
+                            uint64(block.timestamp + 5 minutes),
+                            ownerIdentity,
+                            hex"01"
+                        );
+                        if (baseMatches && workloadPermits) {
+                            assertTrue(sessionRegistry.isSessionActive(sessionId));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    function testTeeAttributeVariantOverridesProfile() public {
+        _assertVariantOverride(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, 1, 2, true);
+        _assertVariantOverride(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, 2, 1, false);
+    }
+
+    function testRotateKeyInheritsPreviouslyVerifiedTeeAttributes() public {
+        PolicyIds memory policy = _registerTeePolicy(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, 2, 2, 0, 1 days);
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        bytes32 oldSessionId = keccak256("verified-debug-session");
+        _seedSession(
+            oldSessionId,
+            false,
+            uint64(block.timestamp + 12 hours),
+            ownerFingerprint,
+            oldAk,
+            oldTpmSigningKey,
+            oldSessionKey,
+            policy
+        );
+
+        PublicIdentity memory newTpmSigningKey = _identity(ALGO_ID_ES256, 0xc1);
+        PublicIdentity memory newSessionKey = _identity(ALGO_ID_ES256K, 0xc2);
+        SessionKeyRotationEvidence memory evidence = _rotationEvidence(0xc3, oldAk, oldTpmSigningKey, newSessionKey);
+        _mockQuote(ownerFingerprint, 0);
+        _mockCertifiedKey(newTpmSigningKey);
+
+        bytes32 newSessionId = sessionRegistry.rotateKey(
+            oldSessionId,
+            keccak256("verified-debug-tee-report"),
+            evidence,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+
+        assertTrue(sessionRegistry.isSessionActive(newSessionId));
+        _assertPolicy(sessionRegistry.getSession(newSessionId), policy);
+    }
+
+    function testNonSelectedTeeAttributesEvaluateToFalse() public {
+        PolicyIds memory policy = _registerTeePolicy(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, 1, 1, 0, 0);
+        AttestationEvidence memory evidence = _fullEvidence(0xe1, _identity(ALGO_ID_ES256K, 0xe2));
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        _mockFullEvidenceWithResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            TeeVerificationResult({
+                valid: true,
+                reportData: "",
+                teeType: TEEType.IntelTDX,
+                enabledTeeAttributes: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT
+            })
+        );
+
+        sessionRegistry.registerSession(
+            evidence,
+            policy.workloadId,
+            policy.baseImageId,
+            policy.platformProfileId,
+            policy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+    }
+
+    function testValidFalseFailsForAzureAndGcpRegistration() public {
+        for (uint256 collateralType = 0; collateralType < 2; collateralType++) {
+            AttestationEvidence memory evidence =
+                _fullEvidence(uint8(0xf0 + collateralType), _identity(ALGO_ID_ES256K, uint8(0xf2 + collateralType)));
+            evidence.akPubCollateral.akPubCollateralType =
+                collateralType == 0 ? AkPubCollateralType.AzureMaaJwt : AkPubCollateralType.GcpCertChain;
+            bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+            _mockFullEvidenceWithResult(
+                evidence,
+                ownerFingerprint,
+                0,
+                oldAk,
+                oldTpmSigningKey,
+                keccak256(evidence.teeReport.data),
+                TeeVerificationResult({
+                    valid: false, reportData: "", teeType: TEEType.IntelTDX, enabledTeeAttributes: 0
+                })
+            );
+
+            vm.expectRevert(SessionRegistry.TeeVerificationFailed.selector);
+            sessionRegistry.registerSession(
+                evidence,
+                oldPolicy.workloadId,
+                oldPolicy.baseImageId,
+                oldPolicy.platformProfileId,
+                oldPolicy.measurementVariantId,
+                uint64(block.timestamp + 5 minutes),
+                ownerIdentity,
+                hex"01"
+            );
+        }
+    }
+
+    function _assertVariantOverride(bytes32 key, uint256 profileMode, uint256 variantMode, bool actual) private {
+        PolicyIds memory policy = _registerTeePolicy(key, profileMode, 2, variantMode, 0);
+        AttestationEvidence memory evidence =
+            _fullEvidence(uint8(nextTeePolicyVersion), _identity(ALGO_ID_ES256K, 0xd0));
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        _mockFullEvidenceWithResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            TeeVerificationResult({
+                valid: true,
+                reportData: "",
+                teeType: TEEType.IntelTDX,
+                enabledTeeAttributes: actual ? TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT : 0
+            })
+        );
+
+        sessionRegistry.registerSession(
+            evidence,
+            policy.workloadId,
+            policy.baseImageId,
+            policy.platformProfileId,
+            policy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+    }
+
+    function _registerTeePolicy(bytes32 key, uint256 profileMode, uint256 workloadMode, uint256 variantMode, uint64 ttl)
+        private
+        returns (PolicyIds memory ids)
+    {
+        nextTeePolicyVersion++;
+        string memory version = vm.toString(nextTeePolicyVersion);
+        BaseImageSpec memory baseImage = BaseImageSpec({name: "tee-policy-base", version: version, uri: ""});
+        PlatformProfile[] memory profiles = new PlatformProfile[](1);
+        profiles[0] = PlatformProfile({
+            name: "test-platform", invariants: new PcrSpec[](0), attributes: _teeAttributes(key, profileMode)
+        });
+        MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] = MeasurementVariant({
+            name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: _teeAttributes(key, variantMode)
+        });
+        ids.baseImageId = baseImageRegistry.registerBaseImage(
+            baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
+        );
+        ids.platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, ids.baseImageId, profiles[0].name));
+        ids.measurementVariantId =
+            keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, ids.platformProfileId, variants[0][0].name));
+
+        bytes32[] memory allowedBaseImages = new bytes32[](1);
+        allowedBaseImages[0] = ids.baseImageId;
+        WorkloadSpec memory workload = WorkloadSpec({
+            name: "tee-policy-workload",
+            version: version,
+            sessionTtl: ttl,
+            baseImageMode: AccessMode.WHITELIST,
+            baseImageIds: allowedBaseImages,
+            requirements: _teeRequirements(key, workloadMode),
+            pcrs: new PcrSpec[](0)
+        });
+        ids.workloadId =
+            workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
+        ids.sessionTtl = ttl;
+    }
+
+    function _teeAttributes(bytes32 key, uint256 mode) private pure returns (Attribute[] memory attributes) {
+        attributes = new Attribute[](mode == 0 ? 0 : 1);
+        if (mode != 0) {
+            attributes[0] = Attribute({key: key, value: mode == 2 ? TEE_ATTRIBUTE_TRUE : bytes32(0)});
+        }
+    }
+
+    function _teeRequirements(bytes32 key, uint256 mode)
+        private
+        pure
+        returns (AttributeRequirement[] memory requirements)
+    {
+        requirements = new AttributeRequirement[](mode == 0 ? 0 : 1);
+        if (mode == 0) return requirements;
+        bytes32[] memory allowedValues = new bytes32[](mode == 2 ? 2 : 1);
+        allowedValues[0] = bytes32(0);
+        if (mode == 2) allowedValues[1] = TEE_ATTRIBUTE_TRUE;
+        requirements[0] = AttributeRequirement({key: key, allowedValues: allowedValues});
+    }
+
     function _registerPolicy(string memory baseVersion, string memory workloadVersion, uint64 ttl)
         private
         returns (PolicyIds memory ids)
@@ -668,10 +947,30 @@ contract SessionLifecycleTest is Test {
         PublicIdentity memory certifiedTpmSigningKey,
         bytes32 teeReportHash
     ) private {
+        _mockFullEvidenceWithResult(
+            evidence,
+            ownerFingerprint,
+            nonce,
+            akPub,
+            certifiedTpmSigningKey,
+            teeReportHash,
+            TeeVerificationResult({
+                valid: true, reportData: "", teeType: evidence.teeReport.teeType, enabledTeeAttributes: 0
+            })
+        );
+    }
+
+    function _mockFullEvidenceWithResult(
+        AttestationEvidence memory evidence,
+        bytes32 ownerFingerprint,
+        uint256 nonce,
+        PublicIdentity memory akPub,
+        PublicIdentity memory certifiedTpmSigningKey,
+        bytes32 teeReportHash,
+        TeeVerificationResult memory teeResult
+    ) private {
         vm.mockCall(
-            TEE_VERIFIER,
-            abi.encodeCall(ITeeVerifier.verifyTeeReport, (evidence.teeReport)),
-            abi.encode(TeeVerificationResult({valid: true, reportData: "", teeType: evidence.teeReport.teeType}))
+            TEE_VERIFIER, abi.encodeCall(ITeeVerifier.verifyTeeReport, (evidence.teeReport)), abi.encode(teeResult)
         );
         vm.mockCall(
             TEE_VERIFIER, abi.encodeCall(ITeeVerifier.getTeeReportHash, (evidence.teeReport)), abi.encode(teeReportHash)

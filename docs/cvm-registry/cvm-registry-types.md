@@ -148,8 +148,19 @@ struct TeeVerificationResult {
     bool valid;
     bytes reportData;    // Full report body (TDX: 584/648-byte quote body; SNP: full attestation report)
     TEEType teeType;     // Use extractDcapReportData/extractSnpReportData for 64-byte user data
+    uint256 enabledTeeAttributes; // Stable internal bitset derived from the signed report
 }
 ```
+
+The stable bits represent Intel TDX debug (`1 << 0`), AMD SEV-SNP debug
+(`1 << 1`), and AMD SEV-SNP `MIGRATE_MA` (`1 << 2`). Their canonical keys are
+`keccak256` of these exact names:
+
+- `atakit.attestation.v1.tee.intel-tdx.debug.enabled`
+- `atakit.attestation.v1.tee.amd-sev-snp.debug.enabled`
+- `atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled`
+
+Boolean values use only `bytes32(0)` and `bytes32(uint256(1))`.
 
 ### TPM Structs
 

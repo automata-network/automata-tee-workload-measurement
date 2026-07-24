@@ -47,17 +47,39 @@ import {
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
     SESSION_DOMAIN,
-    SESSION_NONCE_DOMAIN
+    SESSION_NONCE_DOMAIN,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
+    TEE_ATTRIBUTE_TRUE
 } from "../src/types/Constants.sol";
 
 /// @dev Transaction-path mock only. It authenticates no hardware evidence.
 contract AnvilLifecycleTeeVerifier is ITeeVerifier {
+    error TdxMigrationServiceTdNotSupported();
+    error SnpMigrationAgentNotSupported();
+
+    bool private _valid;
+    TEEType private _teeType;
+    uint256 private _enabledTeeAttributes;
+    uint8 private _rejection;
+
+    function configure(bool valid, TEEType teeType, uint256 enabledTeeAttributes, uint8 rejection) external {
+        _valid = valid;
+        _teeType = teeType;
+        _enabledTeeAttributes = enabledTeeAttributes;
+        _rejection = rejection;
+    }
+
     function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32) {
         return keccak256(teeReport.data);
     }
 
-    function verifyTeeReport(TeeReport memory teeReport) external pure returns (TeeVerificationResult memory result) {
-        return TeeVerificationResult({valid: true, reportData: "", teeType: teeReport.teeType});
+    function verifyTeeReport(TeeReport memory) external view returns (TeeVerificationResult memory result) {
+        if (_rejection == 1) revert TdxMigrationServiceTdNotSupported();
+        if (_rejection == 2) revert SnpMigrationAgentNotSupported();
+        return TeeVerificationResult({
+            valid: _valid, reportData: "", teeType: _teeType, enabledTeeAttributes: _enabledTeeAttributes
+        });
     }
 
     function extractDcapReportData(bytes memory) external pure returns (bytes memory) {
@@ -164,6 +186,21 @@ contract AnvilLifecycleTpmVerifier is ITpmAttestation {
     }
 }
 
+/// @dev Keeps expected registration failures inside a successful Anvil transaction.
+contract AnvilExpectedRevertProbe {
+    function expectRevert(address target, bytes calldata callData, bytes4 expectedSelector) external {
+        (bool success, bytes memory reason) = target.call(callData);
+        require(!success, "registration unexpectedly succeeded");
+        require(reason.length >= 4, "registration returned no error selector");
+
+        bytes4 actualSelector;
+        assembly ("memory-safe") {
+            actualSelector := mload(add(reason, 0x20))
+        }
+        require(actualSelector == expectedSelector, "registration returned the wrong error");
+    }
+}
+
 contract SessionLifecycleAnvilTest is Script {
     struct PolicyIds {
         bytes32 baseImageId;
@@ -180,6 +217,7 @@ contract SessionLifecycleAnvilTest is Script {
     AnvilLifecycleTpmVerifier private tpmVerifier;
     AnvilLifecycleAkVerifier private akVerifier;
     SessionRegistry private sessionRegistry;
+    AnvilExpectedRevertProbe private expectedRevertProbe;
 
     PublicIdentity private ownerIdentity;
 
@@ -191,11 +229,13 @@ contract SessionLifecycleAnvilTest is Script {
         baseImageRegistry = new BaseImageRegistry(signatureVerifier);
         workloadRegistry = new WorkloadRegistry(signatureVerifier);
         teeVerifier = new AnvilLifecycleTeeVerifier();
+        teeVerifier.configure(true, TEEType.IntelTDX, 0, 0);
         tpmVerifier = new AnvilLifecycleTpmVerifier();
         akVerifier = new AnvilLifecycleAkVerifier();
         sessionRegistry = new SessionRegistry(
             teeVerifier, tpmVerifier, signatureVerifier, akVerifier, baseImageRegistry, workloadRegistry
         );
+        expectedRevertProbe = new AnvilExpectedRevertProbe();
 
         PolicyIds memory oldPolicy = _registerPolicy("anvil-base-v1", "anvil-workload-v1", 1 days);
         PolicyIds memory newPolicy = _registerPolicy("anvil-base-v2", "anvil-workload-v2", 7 days);
@@ -286,6 +326,8 @@ contract SessionLifecycleAnvilTest is Script {
             sessionRegistry.getNonce(LibKey.computeKeyFingerprint(ownerIdentity)) == 4, "unexpected final owner nonce"
         );
 
+        _runTeeAttributePolicyMatrix();
+
         console.log("SessionRegistry:", address(sessionRegistry));
         console.log("registered session:");
         console.logBytes32(firstSessionId);
@@ -297,6 +339,134 @@ contract SessionLifecycleAnvilTest is Script {
         console.logBytes32(recoveredSessionId);
 
         vm.stopBroadcast();
+    }
+
+    function _runTeeAttributePolicyMatrix() private {
+        PolicyIds memory safeDefault = _registerTeePolicy("safe-default", bytes32(0), new bytes32[](0));
+        _registerWithCurrentTeeResult(safeDefault, 0x50, 4);
+
+        bytes32[] memory allowDebug = new bytes32[](2);
+        allowDebug[0] = bytes32(0);
+        allowDebug[1] = TEE_ATTRIBUTE_TRUE;
+        PolicyIds memory debugAllowed = _registerTeePolicy("debug-allowed", TEE_ATTRIBUTE_TRUE, allowDebug);
+        teeVerifier.configure(true, TEEType.IntelTDX, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT, 0);
+        _registerWithCurrentTeeResult(debugAllowed, 0x51, 5);
+
+        bytes32[] memory falseOnly = new bytes32[](1);
+        falseOnly[0] = bytes32(0);
+        PolicyIds memory workloadVeto = _registerTeePolicy("workload-veto", TEE_ATTRIBUTE_TRUE, falseOnly);
+        _expectRegisterRevert(workloadVeto, 0x52, 6, SessionRegistry.TeeAttributeValueNotAllowed.selector);
+
+        PolicyIds memory baseMismatch = _registerTeePolicy("base-mismatch", bytes32(0), allowDebug);
+        _expectRegisterRevert(baseMismatch, 0x53, 6, SessionRegistry.TeeAttributeBaseImageMismatch.selector);
+
+        teeVerifier.configure(true, TEEType.IntelTDX, 0, 1);
+        _expectRegisterRevert(
+            safeDefault, 0x54, 6, AnvilLifecycleTeeVerifier.TdxMigrationServiceTdNotSupported.selector
+        );
+
+        teeVerifier.configure(true, TEEType.AmdSevSnp, 0, 2);
+        AttestationEvidence memory snpEvidence = _fullEvidence(0x55, _identity(ALGO_ID_ES256K, 0x56));
+        snpEvidence.teeReport.teeType = TEEType.AmdSevSnp;
+        _configureAttestation(_identity(ALGO_ID_ES256, 0x57), _identity(ALGO_ID_ES256, 0x58), 6);
+        _expectEvidenceRegisterRevert(
+            snpEvidence, safeDefault, AnvilLifecycleTeeVerifier.SnpMigrationAgentNotSupported.selector
+        );
+
+        console.log("verified TEE attribute Anvil matrix: passed");
+    }
+
+    function _registerWithCurrentTeeResult(PolicyIds memory policy, uint8 marker, uint256 nonce) private {
+        _configureAttestation(_identity(ALGO_ID_ES256, marker + 1), _identity(ALGO_ID_ES256, marker + 2), nonce);
+        bytes32 sessionId = sessionRegistry.registerSession(
+            _fullEvidence(marker, _identity(ALGO_ID_ES256K, marker + 3)),
+            policy.workloadId,
+            policy.baseImageId,
+            policy.platformProfileId,
+            policy.measurementVariantId,
+            uint64(block.timestamp + 1 hours),
+            ownerIdentity,
+            hex"01"
+        );
+        require(sessionRegistry.isSessionActive(sessionId), "TEE attribute registration inactive");
+    }
+
+    function _expectRegisterRevert(PolicyIds memory policy, uint8 marker, uint256 nonce, bytes4 expectedSelector)
+        private
+    {
+        _configureAttestation(_identity(ALGO_ID_ES256, marker + 1), _identity(ALGO_ID_ES256, marker + 2), nonce);
+        _expectEvidenceRegisterRevert(
+            _fullEvidence(marker, _identity(ALGO_ID_ES256K, marker + 3)), policy, expectedSelector
+        );
+    }
+
+    function _expectEvidenceRegisterRevert(
+        AttestationEvidence memory evidence,
+        PolicyIds memory policy,
+        bytes4 expectedSelector
+    ) private {
+        bytes memory callData = abi.encodeCall(
+            SessionRegistry.registerSession,
+            (
+                evidence,
+                policy.workloadId,
+                policy.baseImageId,
+                policy.platformProfileId,
+                policy.measurementVariantId,
+                uint64(block.timestamp + 1 hours),
+                ownerIdentity,
+                hex"01"
+            )
+        );
+        expectedRevertProbe.expectRevert(address(sessionRegistry), callData, expectedSelector);
+    }
+
+    function _registerTeePolicy(string memory suffix, bytes32 baseValue, bytes32[] memory allowedValues)
+        private
+        returns (PolicyIds memory ids)
+    {
+        BaseImageSpec memory baseImage = BaseImageSpec({name: "anvil-tee-base", version: suffix, uri: ""});
+        Attribute[] memory attributes;
+        if (baseValue == bytes32(0) && allowedValues.length == 0) {
+            attributes = new Attribute[](0);
+        } else {
+            attributes = new Attribute[](1);
+            attributes[0] = Attribute({key: TEE_ATTRIBUTE_INTEL_TDX_DEBUG, value: baseValue});
+        }
+        PlatformProfile[] memory profiles = new PlatformProfile[](1);
+        profiles[0] = PlatformProfile({name: "anvil-tdx", invariants: new PcrSpec[](0), attributes: attributes});
+        MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] =
+            MeasurementVariant({name: "anvil-variant", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        ids.baseImageId = baseImageRegistry.registerBaseImage(
+            baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
+        );
+        ids.platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, ids.baseImageId, profiles[0].name));
+        ids.measurementVariantId =
+            keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, ids.platformProfileId, variants[0][0].name));
+
+        AttributeRequirement[] memory requirements;
+        if (allowedValues.length == 0) {
+            requirements = new AttributeRequirement[](0);
+        } else {
+            requirements = new AttributeRequirement[](1);
+            requirements[0] = AttributeRequirement({key: TEE_ATTRIBUTE_INTEL_TDX_DEBUG, allowedValues: allowedValues});
+        }
+        bytes32[] memory baseImages = new bytes32[](1);
+        baseImages[0] = ids.baseImageId;
+        WorkloadSpec memory workload = WorkloadSpec({
+            name: "anvil-tee-workload",
+            version: suffix,
+            sessionTtl: 1 days,
+            baseImageMode: AccessMode.WHITELIST,
+            baseImageIds: baseImages,
+            requirements: requirements,
+            pcrs: new PcrSpec[](0)
+        });
+        ids.workloadId =
+            workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
+        ids.sessionTtl = 1 days;
     }
 
     function _registerPolicy(string memory baseVersion, string memory workloadVersion, uint64 ttl)

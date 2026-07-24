@@ -14,6 +14,11 @@ import {
     SnpZkProof,
     TeeVerificationResult
 } from "../src/types/Evidence.sol";
+import {
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT
+} from "../src/types/Constants.sol";
 
 /// @notice Exercises the SEV-SNP path of TeeVerifier against the SDK journal layout
 ///         (VerifierJournal.reportHash = keccak256(report)), including the report-binding guard.
@@ -28,12 +33,11 @@ contract TeeVerifierSnpTest is Test {
         teeVerifier = new TeeVerifier(IDcapAttestation(address(dcap)), ISnpAttestation(address(snp)));
     }
 
-    /// @dev A deterministic, full-size (1184-byte) SEV-SNP report.
+    /// @dev A deterministic, structurally valid, full-size SEV-SNP report.
     function _report() internal pure returns (bytes memory r) {
         r = new bytes(1184);
-        for (uint256 i = 0; i < r.length; i++) {
-            r[i] = bytes1(uint8(i));
-        }
+        r[0] = bytes1(uint8(2)); // VERSION = 2, little-endian
+        r[10] = bytes1(uint8(2)); // POLICY reserved bit 17 must be one
     }
 
     /// @dev The SDK's *packed* zkVM public journal (matches SEVAgentAttestation._parseJournal), with
@@ -56,6 +60,26 @@ contract TeeVerifierSnpTest is Test {
         });
     }
 
+    function _setLeUint32(bytes memory data, uint256 offset, uint32 value) internal pure {
+        data[offset] = bytes1(uint8(value));
+        data[offset + 1] = bytes1(uint8(value >> 8));
+        data[offset + 2] = bytes1(uint8(value >> 16));
+        data[offset + 3] = bytes1(uint8(value >> 24));
+    }
+
+    function _setLeUint64(bytes memory data, uint256 offset, uint64 value) internal pure {
+        for (uint256 i = 0; i < 8; i++) {
+            data[offset + i] = bytes1(uint8(value >> (i * 8)));
+        }
+    }
+
+    function _verifySnp(bytes memory report) internal returns (TeeVerificationResult memory) {
+        return
+            teeVerifier.verifyTeeReport(
+                _teeReport(_packedJournal(VerificationResult.Success, keccak256(report)), report)
+            );
+    }
+
     function test_snp_happyPath_returnsFullReport() public {
         bytes memory report = _report();
         TeeReport memory tr = _teeReport(_packedJournal(VerificationResult.Success, keccak256(report)), report);
@@ -64,6 +88,7 @@ contract TeeVerifierSnpTest is Test {
 
         assertTrue(res.valid);
         assertEq(uint8(res.teeType), uint8(TEEType.AmdSevSnp));
+        assertEq(res.enabledTeeAttributes, 0);
         // _verifyAmdSevSnp returns the full bound report as reportData.
         assertEq(res.reportData, report);
     }
@@ -90,6 +115,65 @@ contract TeeVerifierSnpTest is Test {
         teeVerifier.verifyTeeReport(tr);
     }
 
+    function test_snp_extracts_debug_and_migrate_ma() public {
+        bytes memory report = _report();
+        _setLeUint64(report, 8, (uint64(1) << 17) | (uint64(1) << 18) | (uint64(1) << 19));
+
+        TeeVerificationResult memory result = _verifySnp(report);
+
+        assertEq(
+            result.enabledTeeAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT | TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT
+        );
+    }
+
+    function test_snp_rejects_non_exact_report_length() public {
+        bytes memory report = new bytes(1183);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpReportLength.selector, 1183, 1184));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_unsupported_report_version() public {
+        bytes memory report = _report();
+        _setLeUint32(report, 0, 6);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.UnsupportedSnpReportVersion.selector, 6));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_policy_without_reserved_one_bit() public {
+        bytes memory report = _report();
+        _setLeUint64(report, 8, 0);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpPolicy.selector, 0));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_policy_reserved_high_bit() public {
+        bytes memory report = _report();
+        uint64 policy = (uint64(1) << 17) | (uint64(1) << 26);
+        _setLeUint64(report, 8, policy);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpPolicy.selector, policy));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_nonzero_vmpl() public {
+        bytes memory report = _report();
+        _setLeUint32(report, 0x30, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.UnsupportedSnpVmpl.selector, 1));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_nonzero_report_id_ma() public {
+        bytes memory report = _report();
+        report[0x160] = bytes1(uint8(1));
+
+        vm.expectRevert(TeeVerifier.SnpMigrationAgentNotSupported.selector);
+        _verifySnp(report);
+    }
+
     /// @dev Session-ID binding: getTeeReportHash reads the trailing 32 bytes of the packed journal,
     ///      which the SDK places reportHash at. Also exercises the SnpZkProof→ZkProof forward-compat
     ///      decode (getTeeReportHash decodes as ZkProof and must still read `output`).
@@ -99,5 +183,72 @@ contract TeeVerifierSnpTest is Test {
         TeeReport memory tr = _teeReport(_packedJournal(VerificationResult.Success, reportHash), report);
 
         assertEq(teeVerifier.getTeeReportHash(tr), reportHash);
+    }
+
+    function _tdxReport(bytes memory quote) internal pure returns (TeeReport memory) {
+        return
+            TeeReport({
+                verificationBackendType: VerificationBackendType.Solidity, teeType: TEEType.IntelTDX, data: quote
+            });
+    }
+
+    function _td10Quote() internal pure returns (bytes memory quote) {
+        quote = new bytes(48 + 584);
+        quote[0] = bytes1(uint8(4));
+        quote[4] = bytes1(uint8(0x81));
+        quote[48 + 123] = bytes1(uint8(0x10)); // TD_ATTRIBUTES.SEPT_VE_DISABLE
+    }
+
+    function _td15Quote() internal pure returns (bytes memory quote) {
+        quote = new bytes(48 + 6 + 648);
+        quote[0] = bytes1(uint8(5));
+        quote[4] = bytes1(uint8(0x81));
+        quote[48] = bytes1(uint8(3)); // TD15 quote body type
+        quote[50] = bytes1(uint8(0x88)); // 648, little-endian
+        quote[51] = bytes1(uint8(0x02));
+        quote[54 + 123] = bytes1(uint8(0x10)); // TD_ATTRIBUTES.SEPT_VE_DISABLE
+    }
+
+    function test_tdx_extracts_debug() public {
+        bytes memory quote = _td10Quote();
+        quote[48 + 120] = bytes1(uint8(1));
+
+        TeeVerificationResult memory result = teeVerifier.verifyTeeReport(_tdxReport(quote));
+
+        assertTrue(result.valid);
+        assertEq(uint8(result.teeType), uint8(TEEType.IntelTDX));
+        assertEq(result.enabledTeeAttributes, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT);
+    }
+
+    function test_tdx_rejects_invalid_reserved_attribute_bit() public {
+        bytes memory quote = _td10Quote();
+        quote[48 + 121] = bytes1(uint8(1));
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidTdxAttributes.selector, bytes8(0x0001001000000000)));
+        teeVerifier.verifyTeeReport(_tdxReport(quote));
+    }
+
+    function test_tdx_requires_sept_ve_disable() public {
+        bytes memory quote = _td10Quote();
+        quote[48 + 123] = bytes1(0);
+
+        vm.expectRevert(TeeVerifier.TdxSeptVeDisableRequired.selector);
+        teeVerifier.verifyTeeReport(_tdxReport(quote));
+    }
+
+    function test_tdx_rejects_nonzero_mr_servicetd() public {
+        bytes memory quote = _td15Quote();
+        quote[54 + 600] = bytes1(uint8(1));
+
+        vm.expectRevert(TeeVerifier.TdxMigrationServiceTdNotSupported.selector);
+        teeVerifier.verifyTeeReport(_tdxReport(quote));
+    }
+
+    function test_tdx_rejects_unacceptable_tcb_status() public {
+        bytes memory quote = _td10Quote();
+        dcap.setTcbStatus(2);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.DcapTcbStatusNotAccepted.selector, 2));
+        teeVerifier.verifyTeeReport(_tdxReport(quote));
     }
 }

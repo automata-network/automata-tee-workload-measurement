@@ -16,7 +16,11 @@ import {
     PLATFORM_VARIANT_DOMAIN,
     BASEIMAGE_REGISTER_MSG,
     BASEIMAGE_DEACTIVATE_MSG,
-    BASEIMAGE_UPDATE_MSG
+    BASEIMAGE_UPDATE_MSG,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_TRUE
 } from "./types/Constants.sol";
 import {
     IBaseImageRegistry,
@@ -68,6 +72,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
     error DuplicateAttributeKey(bytes32 key);
+    error InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
     // ============================================================================
@@ -137,12 +142,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
             _validatePcrSpecsSorted(profile.invariants);
-            _validateUniqueAttributeKeys(profile.attributes);
+            _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
-                _validateUniqueAttributeKeys(variants[j].attributes);
+                _validateAttributes(variants[j].attributes);
             }
         }
 
@@ -310,12 +315,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
             _validatePcrSpecsSorted(profile.invariants);
-            _validateUniqueAttributeKeys(profile.attributes);
+            _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
-                _validateUniqueAttributeKeys(variants[j].attributes);
+                _validateAttributes(variants[j].attributes);
             }
         }
 
@@ -554,8 +559,19 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
     }
 
-    function _validateUniqueAttributeKeys(Attribute[] calldata attrs) private pure {
+    function _validateAttributes(Attribute[] calldata attrs) private pure {
         uint256 len = attrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 key = attrs[i].key;
+            if (
+                (key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG
+                        || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+                        || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA) && attrs[i].value != bytes32(0)
+                    && attrs[i].value != TEE_ATTRIBUTE_TRUE
+            ) {
+                revert InvalidTeeAttributeValue(key, attrs[i].value);
+            }
+        }
         if (len < 2) {
             return;
         }
