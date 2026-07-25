@@ -45,9 +45,11 @@ import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT,
+    TDX_TCB_STATUS_OK,
     TEE_ATTRIBUTE_TRUE
 } from "./types/Constants.sol";
 import {LibKey} from "./lib/LibKey.sol";
@@ -200,9 +202,6 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     /// @notice The effective base-image declaration differs from the verified TEE state.
     error TeeAttributeBaseImageMismatch(bytes32 key, bytes32 declaredValue, bytes32 verifiedValue);
-
-    /// @notice A reserved workload requirement does not use [false] or [false, true].
-    error MalformedTeeAttributeRequirement(bytes32 key);
 
     /// @notice The verified TEE state is not permitted by the workload.
     error TeeAttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
@@ -542,6 +541,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 tpmSignatureHash; // Hash of TPM quote signature (for session ID computation)
         TEEType teeType;
         uint256 enabledTeeAttributes;
+        uint256 intelTdxTcbStatusBit;
     }
 
     struct FullSessionResult {
@@ -574,6 +574,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         _evaluateTeePolicy(
             result.attestation.teeType,
             result.attestation.enabledTeeAttributes,
+            result.attestation.intelTdxTcbStatusBit,
             policyCtx.platformProfile,
             policyCtx.variant,
             policyCtx.workloadSpec.requirements
@@ -868,7 +869,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             expectedPcr15: expectedPcr15,
             tpmSignatureHash: tpmSignatureHash,
             teeType: teeResult.teeType,
-            enabledTeeAttributes: teeResult.enabledTeeAttributes
+            enabledTeeAttributes: teeResult.enabledTeeAttributes,
+            intelTdxTcbStatusBit: teeResult.intelTdxTcbStatusBit
         });
     }
 
@@ -1432,64 +1434,97 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     function _isTeeAttributeKey(bytes32 key) private pure returns (bool) {
         return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
-            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA;
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA || key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED;
     }
 
     function _evaluateTeePolicy(
         TEEType teeType,
         uint256 enabledTeeAttributes,
+        uint256 intelTdxTcbStatusBit,
         PlatformProfile memory platformProfile,
         MeasurementVariant memory variant,
         AttributeRequirement[] memory requirements
     ) private pure {
         Attribute[] memory attributes = _mergeAttributes(platformProfile.attributes, variant.attributes);
-        bytes32[3] memory keys =
-            [TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA];
-
-        for (uint256 i = 0; i < keys.length; i++) {
-            bytes32 key = keys[i];
-            bool enabled;
-            if (i == 0) {
-                enabled = teeType == TEEType.IntelTDX && (enabledTeeAttributes & TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT) != 0;
-            } else if (i == 1) {
-                enabled =
-                    teeType == TEEType.AmdSevSnp && (enabledTeeAttributes & TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT) != 0;
-            } else {
-                enabled = teeType == TEEType.AmdSevSnp
-                    && (enabledTeeAttributes & TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT) != 0;
+        if (teeType == TEEType.IntelTDX) {
+            _evaluateBooleanTeeAttribute(
+                TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+                (enabledTeeAttributes & TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT) != 0,
+                attributes,
+                requirements
+            );
+            uint256 baseMask = uint256(
+                _attributeValueOrDefault(
+                    attributes, TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK)
+                )
+            );
+            if ((baseMask & intelTdxTcbStatusBit) == 0) {
+                revert TeeAttributeBaseImageMismatch(
+                    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(baseMask), bytes32(intelTdxTcbStatusBit)
+                );
             }
-            bytes32 verifiedValue = enabled ? TEE_ATTRIBUTE_TRUE : bytes32(0);
-
-            bytes32 declaredValue;
-            for (uint256 j = 0; j < attributes.length; j++) {
-                if (attributes[j].key == key) {
-                    declaredValue = attributes[j].value;
+            uint256 workloadMask = TDX_TCB_STATUS_OK;
+            for (uint256 i = 0; i < requirements.length; i++) {
+                if (requirements[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+                    workloadMask = uint256(requirements[i].allowedValues[0]);
                     break;
                 }
             }
-            if (declaredValue != verifiedValue) {
-                revert TeeAttributeBaseImageMismatch(key, declaredValue, verifiedValue);
+            if ((workloadMask & intelTdxTcbStatusBit) == 0) {
+                revert TeeAttributeValueNotAllowed(
+                    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(intelTdxTcbStatusBit)
+                );
             }
+        } else if (teeType == TEEType.AmdSevSnp) {
+            _evaluateBooleanTeeAttribute(
+                TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+                (enabledTeeAttributes & TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT) != 0,
+                attributes,
+                requirements
+            );
+            _evaluateBooleanTeeAttribute(
+                TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+                (enabledTeeAttributes & TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT) != 0,
+                attributes,
+                requirements
+            );
+        }
+    }
 
-            bool requirementFound;
-            bool permitsTrue;
-            for (uint256 j = 0; j < requirements.length; j++) {
-                if (requirements[j].key != key) continue;
-                requirementFound = true;
-                uint256 allowedLen = requirements[j].allowedValues.length;
-                if (
-                    (allowedLen != 1 && allowedLen != 2) || requirements[j].allowedValues[0] != bytes32(0)
-                        || (allowedLen == 2 && requirements[j].allowedValues[1] != TEE_ATTRIBUTE_TRUE)
-                ) {
-                    revert MalformedTeeAttributeRequirement(key);
-                }
-                permitsTrue = allowedLen == 2;
-                break;
-            }
-            if (verifiedValue == TEE_ATTRIBUTE_TRUE && (!requirementFound || !permitsTrue)) {
-                revert TeeAttributeValueNotAllowed(key, verifiedValue);
+    function _evaluateBooleanTeeAttribute(
+        bytes32 key,
+        bool enabled,
+        Attribute[] memory attributes,
+        AttributeRequirement[] memory requirements
+    ) private pure {
+        bytes32 verifiedValue = enabled ? TEE_ATTRIBUTE_TRUE : bytes32(0);
+        bytes32 declaredValue = _attributeValueOrDefault(attributes, key, bytes32(0));
+        if (declaredValue != verifiedValue) {
+            revert TeeAttributeBaseImageMismatch(key, declaredValue, verifiedValue);
+        }
+        if (enabled && !_workloadPermitsTrue(requirements, key)) {
+            revert TeeAttributeValueNotAllowed(key, verifiedValue);
+        }
+    }
+
+    function _attributeValueOrDefault(Attribute[] memory attributes, bytes32 key, bytes32 defaultValue)
+        private
+        pure
+        returns (bytes32)
+    {
+        for (uint256 i = 0; i < attributes.length; i++) {
+            if (attributes[i].key == key) return attributes[i].value;
+        }
+        return defaultValue;
+    }
+
+    function _workloadPermitsTrue(AttributeRequirement[] memory requirements, bytes32 key) private pure returns (bool) {
+        for (uint256 i = 0; i < requirements.length; i++) {
+            if (requirements[i].key == key) {
+                return requirements[i].allowedValues.length == 2;
             }
         }
+        return false;
     }
 
     /// @dev Merges platform profile attributes with variant attributes (variant overrides at matching keys)

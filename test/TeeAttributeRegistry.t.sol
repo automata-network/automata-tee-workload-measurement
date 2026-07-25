@@ -21,6 +21,9 @@ import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TDX_TCB_STATUS_OK,
+    TDX_TCB_STATUS_CONFIGURABLE_MASK,
     TEE_ATTRIBUTE_FALSE,
     TEE_ATTRIBUTE_TRUE
 } from "../src/types/Constants.sol";
@@ -51,6 +54,10 @@ contract TeeAttributeRegistryTest is Test {
             TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
             bytes32(0x9090b994ea4098b565ee0da01c4bcaa083a5bfb19c0a797c7ffe3de7ce0251e1)
         );
+        assertEq(
+            TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+            bytes32(0xbc505eab3cf5643bdf24f1dee86998cd93d05a297e4c34f5e8f37bba764a8116)
+        );
         assertEq(TEE_ATTRIBUTE_FALSE, bytes32(0));
         assertEq(TEE_ATTRIBUTE_TRUE, bytes32(uint256(1)));
     }
@@ -69,6 +76,63 @@ contract TeeAttributeRegistryTest is Test {
             )
         );
         _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, actual));
+    }
+
+    function test_base_image_accepts_missing_and_valid_tdx_tcb_masks() public {
+        _registerBaseImage(new Attribute[](0));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK)));
+        _registerBaseImage(
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_CONFIGURABLE_MASK))
+        );
+    }
+
+    function test_base_image_rejects_invalid_tdx_tcb_masks() public {
+        bytes32[4] memory invalidMasks =
+            [bytes32(0), bytes32(uint256(2)), bytes32(uint256(0x41)), bytes32(uint256(0x401))];
+        for (uint256 i = 0; i < invalidMasks.length; i++) {
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    BaseImageRegistry.InvalidTeeAttributeValue.selector,
+                    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+                    invalidMasks[i]
+                )
+            );
+            _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, invalidMasks[i]));
+        }
+    }
+
+    function test_tdx_tcb_policy_is_not_allowed_in_measurement_variants() public {
+        bytes32 baseImageId =
+            _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK)));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.TeeAttributeNotAllowedInMeasurementVariant.selector,
+                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
+            )
+        );
+        _addPlatformVariant(
+            baseImageId,
+            "test-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK))
+        );
+    }
+
+    function test_add_platform_variants_rejects_relaxed_tdx_tcb_mask_on_new_profile() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.TeeAttributeOptInRequiresNewBaseImage.selector,
+                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
+            )
+        );
+        _addPlatformVariant(
+            baseImageId,
+            "new-platform",
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(uint256(3))),
+            new Attribute[](0)
+        );
     }
 
     function test_add_platform_variants_rejects_true_reserved_attribute_on_new_profile() public {
@@ -187,6 +251,28 @@ contract TeeAttributeRegistryTest is Test {
     function test_workload_keeps_empty_allowed_values_for_ordinary_metadata() public {
         bytes32 ordinaryKey = keccak256("ordinary.metadata");
         _registerWorkload(_requirements(ordinaryKey, new bytes32[](0)));
+    }
+
+    function test_workload_accepts_valid_tdx_tcb_masks() public {
+        _registerWorkload(
+            _requirements(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(TDX_TCB_STATUS_OK)))
+        );
+        _registerWorkload(
+            _requirements(
+                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(TDX_TCB_STATUS_CONFIGURABLE_MASK))
+            )
+        );
+    }
+
+    function test_workload_rejects_invalid_tdx_tcb_requirement_shapes_and_masks() public {
+        _expectRequirementLength(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, new bytes32[](0), 0);
+        _expectRequirementLength(
+            TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _pairValues(bytes32(TDX_TCB_STATUS_OK), bytes32(uint256(3))), 2
+        );
+        _expectRequirementValue(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(0)), bytes32(0));
+        _expectRequirementValue(
+            TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(uint256(0x401))), bytes32(uint256(0x401))
+        );
     }
 
     function _expectRequirementLength(bytes32 key, bytes32[] memory values, uint256 actualLength) private {

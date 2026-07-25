@@ -35,6 +35,8 @@ bytes32 constant TEE_ATTRIBUTE_INTEL_TDX_DEBUG = keccak256("atakit.attestation.v
 bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG = keccak256("atakit.attestation.v1.tee.amd-sev-snp.debug.enabled");
 bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA =
     keccak256("atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled");
+bytes32 constant TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED =
+    keccak256("atakit.attestation.v1.tee.intel-tdx.tcb.status.allowed");
 
 /// @dev Canonical Boolean attribute values.
 bytes32 constant TEE_ATTRIBUTE_FALSE = bytes32(0);
@@ -44,6 +46,17 @@ bytes32 constant TEE_ATTRIBUTE_TRUE = bytes32(uint256(1));
 uint256 constant TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT = uint256(1) << 0;
 uint256 constant TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT = uint256(1) << 1;
 uint256 constant TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT = uint256(1) << 2;
+
+/// @dev Intel DCAP TCB status values are represented as one-hot bits.
+uint256 constant TDX_TCB_STATUS_OK = uint256(1) << 0;
+uint256 constant TDX_TCB_STATUS_SW_HARDENING_NEEDED = uint256(1) << 1;
+uint256 constant TDX_TCB_STATUS_CONFIGURATION_AND_SW_HARDENING_NEEDED = uint256(1) << 2;
+uint256 constant TDX_TCB_STATUS_CONFIGURATION_NEEDED = uint256(1) << 3;
+uint256 constant TDX_TCB_STATUS_OUT_OF_DATE = uint256(1) << 4;
+uint256 constant TDX_TCB_STATUS_OUT_OF_DATE_CONFIGURATION_NEEDED = uint256(1) << 5;
+uint256 constant TDX_TCB_STATUS_RELAUNCH_ADVISED = uint256(1) << 8;
+uint256 constant TDX_TCB_STATUS_RELAUNCH_ADVISED_CONFIGURATION_NEEDED = uint256(1) << 9;
+uint256 constant TDX_TCB_STATUS_CONFIGURABLE_MASK = uint256(0x33f);
 
 // ─── Operation Message Separators ──────────────────────────────────────
 /// @dev Message separator for base image registration message signatures

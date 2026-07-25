@@ -16,6 +16,9 @@ import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TDX_TCB_STATUS_OK,
+    TDX_TCB_STATUS_CONFIGURABLE_MASK,
     TEE_ATTRIBUTE_TRUE
 } from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
@@ -297,7 +300,16 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         uint256 len = requirements.length;
         for (uint256 i = 0; i < len; i++) {
             bytes32 key = requirements[i].key;
-            if (
+            if (key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+                bytes32[] calldata allowedValues = requirements[i].allowedValues;
+                if (allowedValues.length != 1) {
+                    revert InvalidTeeAttributeRequirementLength(key, allowedValues.length);
+                }
+                uint256 mask = uint256(allowedValues[0]);
+                if ((mask & TDX_TCB_STATUS_OK) == 0 || (mask & ~TDX_TCB_STATUS_CONFIGURABLE_MASK) != 0) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[0]);
+                }
+            } else if (
                 key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
                     || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA
             ) {

@@ -55,9 +55,12 @@ import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT,
+    TDX_TCB_STATUS_OK,
+    TDX_TCB_STATUS_CONFIGURATION_NEEDED,
     TEE_ATTRIBUTE_TRUE
 } from "../src/types/Constants.sol";
 
@@ -604,7 +607,8 @@ contract SessionLifecycleTest is Test {
                                 valid: true,
                                 reportData: "",
                                 teeType: teeType,
-                                enabledTeeAttributes: actual ? bits[keyIndex] : 0
+                                enabledTeeAttributes: actual ? bits[keyIndex] : 0,
+                                intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
                             })
                         );
 
@@ -688,8 +692,8 @@ contract SessionLifecycleTest is Test {
         _assertPolicy(sessionRegistry.getSession(newSessionId), policy);
     }
 
-    function testNonSelectedTeeAttributesEvaluateToFalse() public {
-        PolicyIds memory policy = _registerTeePolicy(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, 1, 1, 0, 0);
+    function testNonSelectedTeeAttributesAreNotEvaluated() public {
+        PolicyIds memory policy = _registerTeePolicy(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, 2, 2, 0, 0);
         AttestationEvidence memory evidence = _fullEvidence(0xe1, _identity(ALGO_ID_ES256K, 0xe2));
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         _mockFullEvidenceWithResult(
@@ -703,7 +707,8 @@ contract SessionLifecycleTest is Test {
                 valid: true,
                 reportData: "",
                 teeType: TEEType.IntelTDX,
-                enabledTeeAttributes: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT
+                enabledTeeAttributes: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
             })
         );
 
@@ -717,6 +722,105 @@ contract SessionLifecycleTest is Test {
             ownerIdentity,
             hex"01"
         );
+    }
+
+    function testTdxTcbStatusPolicyMatrices() public {
+        uint256[2] memory actualStatuses = [TDX_TCB_STATUS_OK, TDX_TCB_STATUS_CONFIGURATION_NEEDED];
+        for (uint256 actualIndex = 0; actualIndex < actualStatuses.length; actualIndex++) {
+            uint256 actualStatus = actualStatuses[actualIndex];
+            for (uint256 baseMode = 0; baseMode < 3; baseMode++) {
+                for (uint256 workloadMode = 0; workloadMode < 3; workloadMode++) {
+                    PolicyIds memory policy = _registerTdxTcbPolicy(baseMode, workloadMode);
+                    AttestationEvidence memory evidence =
+                        _fullEvidence(uint8(nextTeePolicyVersion), _identity(ALGO_ID_ES256K, 0xb0));
+                    bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+                    _mockFullEvidenceWithResult(
+                        evidence,
+                        ownerFingerprint,
+                        sessionRegistry.getNonce(ownerFingerprint),
+                        oldAk,
+                        oldTpmSigningKey,
+                        keccak256(evidence.teeReport.data),
+                        TeeVerificationResult({
+                            valid: true,
+                            reportData: "",
+                            teeType: TEEType.IntelTDX,
+                            enabledTeeAttributes: 0,
+                            intelTdxTcbStatusBit: actualStatus
+                        })
+                    );
+
+                    bool basePermits = actualStatus == TDX_TCB_STATUS_OK || baseMode == 2;
+                    bool workloadPermits = actualStatus == TDX_TCB_STATUS_OK || workloadMode == 2;
+                    if (!basePermits) {
+                        vm.expectRevert(
+                            abi.encodeWithSelector(
+                                SessionRegistry.TeeAttributeBaseImageMismatch.selector,
+                                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+                                bytes32(TDX_TCB_STATUS_OK),
+                                bytes32(actualStatus)
+                            )
+                        );
+                    } else if (!workloadPermits) {
+                        vm.expectRevert(
+                            abi.encodeWithSelector(
+                                SessionRegistry.TeeAttributeValueNotAllowed.selector,
+                                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+                                bytes32(actualStatus)
+                            )
+                        );
+                    }
+
+                    bytes32 sessionId = sessionRegistry.registerSession(
+                        evidence,
+                        policy.workloadId,
+                        policy.baseImageId,
+                        policy.platformProfileId,
+                        policy.measurementVariantId,
+                        uint64(block.timestamp + 5 minutes),
+                        ownerIdentity,
+                        hex"01"
+                    );
+                    if (basePermits && workloadPermits) {
+                        assertTrue(sessionRegistry.isSessionActive(sessionId));
+                    }
+                }
+            }
+        }
+    }
+
+    function testSnpDoesNotEvaluateTdxTcbStatusPolicy() public {
+        PolicyIds memory policy = _registerTdxTcbPolicy(2, 2);
+        AttestationEvidence memory evidence = _fullEvidence(0xd8, _identity(ALGO_ID_ES256K, 0xd9));
+        evidence.teeReport.teeType = TEEType.AmdSevSnp;
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        _mockFullEvidenceWithResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            TeeVerificationResult({
+                valid: true,
+                reportData: "",
+                teeType: TEEType.AmdSevSnp,
+                enabledTeeAttributes: 0,
+                intelTdxTcbStatusBit: 0
+            })
+        );
+
+        bytes32 sessionId = sessionRegistry.registerSession(
+            evidence,
+            policy.workloadId,
+            policy.baseImageId,
+            policy.platformProfileId,
+            policy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+        assertTrue(sessionRegistry.isSessionActive(sessionId));
     }
 
     function testValidFalseFailsForAzureAndGcpRegistration() public {
@@ -734,7 +838,11 @@ contract SessionLifecycleTest is Test {
                 oldTpmSigningKey,
                 keccak256(evidence.teeReport.data),
                 TeeVerificationResult({
-                    valid: false, reportData: "", teeType: TEEType.IntelTDX, enabledTeeAttributes: 0
+                    valid: false,
+                    reportData: "",
+                    teeType: TEEType.IntelTDX,
+                    enabledTeeAttributes: 0,
+                    intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
                 })
             );
 
@@ -769,7 +877,13 @@ contract SessionLifecycleTest is Test {
                 oldAk,
                 oldTpmSigningKey,
                 keccak256(evidence.teeReport.data),
-                TeeVerificationResult({valid: true, reportData: reportData, teeType: teeType, enabledTeeAttributes: 0}),
+                TeeVerificationResult({
+                    valid: true,
+                    reportData: reportData,
+                    teeType: teeType,
+                    enabledTeeAttributes: 0,
+                    intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
+                }),
                 expectedBindingHash
             );
 
@@ -813,7 +927,8 @@ contract SessionLifecycleTest is Test {
                     valid: true,
                     reportData: _azureReportData(teeType, bindingHash, bytes32(0)),
                     teeType: teeType,
-                    enabledTeeAttributes: 0
+                    enabledTeeAttributes: 0,
+                    intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
                 }),
                 bindingHash
             );
@@ -848,7 +963,8 @@ contract SessionLifecycleTest is Test {
                 valid: true,
                 reportData: _azureReportData(TEEType.IntelTDX, bindingHash, padding),
                 teeType: TEEType.IntelTDX,
-                enabledTeeAttributes: 0
+                enabledTeeAttributes: 0,
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
             }),
             bindingHash
         );
@@ -881,7 +997,11 @@ contract SessionLifecycleTest is Test {
             oldTpmSigningKey,
             keccak256(evidence.teeReport.data),
             TeeVerificationResult({
-                valid: true, reportData: hex"00", teeType: TEEType.IntelTDX, enabledTeeAttributes: 0
+                valid: true,
+                reportData: hex"00",
+                teeType: TEEType.IntelTDX,
+                enabledTeeAttributes: 0,
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
             }),
             bytes32(0)
         );
@@ -917,7 +1037,8 @@ contract SessionLifecycleTest is Test {
                 valid: true,
                 reportData: "",
                 teeType: TEEType.IntelTDX,
-                enabledTeeAttributes: actual ? TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT : 0
+                enabledTeeAttributes: actual ? TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT : 0,
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
             })
         );
 
@@ -970,6 +1091,54 @@ contract SessionLifecycleTest is Test {
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
         ids.sessionTtl = ttl;
+    }
+
+    function _registerTdxTcbPolicy(uint256 profileMode, uint256 workloadMode) private returns (PolicyIds memory ids) {
+        nextTeePolicyVersion++;
+        string memory version = vm.toString(nextTeePolicyVersion);
+        bytes32 relaxedMask = bytes32(TDX_TCB_STATUS_OK | TDX_TCB_STATUS_CONFIGURATION_NEEDED);
+
+        Attribute[] memory attributes = new Attribute[](profileMode == 0 ? 0 : 1);
+        if (profileMode != 0) {
+            attributes[0] = Attribute({
+                key: TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+                value: profileMode == 2 ? relaxedMask : bytes32(TDX_TCB_STATUS_OK)
+            });
+        }
+        PlatformProfile[] memory profiles = new PlatformProfile[](1);
+        profiles[0] = PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: attributes});
+        MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] =
+            MeasurementVariant({name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        BaseImageSpec memory baseImage = BaseImageSpec({name: "tdx-tcb-base", version: version, uri: ""});
+        ids.baseImageId = baseImageRegistry.registerBaseImage(
+            baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
+        );
+        ids.platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, ids.baseImageId, profiles[0].name));
+        ids.measurementVariantId =
+            keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, ids.platformProfileId, variants[0][0].name));
+
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](workloadMode == 0 ? 0 : 1);
+        if (workloadMode != 0) {
+            bytes32[] memory allowedValues = new bytes32[](1);
+            allowedValues[0] = workloadMode == 2 ? relaxedMask : bytes32(TDX_TCB_STATUS_OK);
+            requirements[0] =
+                AttributeRequirement({key: TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, allowedValues: allowedValues});
+        }
+        bytes32[] memory allowedBaseImages = new bytes32[](1);
+        allowedBaseImages[0] = ids.baseImageId;
+        WorkloadSpec memory workload = WorkloadSpec({
+            name: "tdx-tcb-workload",
+            version: version,
+            sessionTtl: 0,
+            baseImageMode: AccessMode.WHITELIST,
+            baseImageIds: allowedBaseImages,
+            requirements: requirements,
+            pcrs: new PcrSpec[](0)
+        });
+        ids.workloadId =
+            workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
     }
 
     function _teeAttributes(bytes32 key, uint256 mode) private pure returns (Attribute[] memory attributes) {
@@ -1104,7 +1273,11 @@ contract SessionLifecycleTest is Test {
             certifiedTpmSigningKey,
             teeReportHash,
             TeeVerificationResult({
-                valid: true, reportData: "", teeType: evidence.teeReport.teeType, enabledTeeAttributes: 0
+                valid: true,
+                reportData: "",
+                teeType: evidence.teeReport.teeType,
+                enabledTeeAttributes: 0,
+                intelTdxTcbStatusBit: evidence.teeReport.teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
             })
         );
     }

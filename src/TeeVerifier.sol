@@ -28,7 +28,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Contract version
-    string public constant TEE_VERIFIER_VERSION = "1.1.0";
+    string public constant TEE_VERIFIER_VERSION = "1.2.0";
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
@@ -62,9 +62,10 @@ contract TeeVerifier is ITeeVerifier {
     /// @dev Offset of tcbStatus in DCAP output (2-byte version + 2-byte quoteBodyType)
     uint256 private constant DCAP_TCB_STATUS_OFFSET = 4;
 
-    /// @dev Accepted DCAP TCB statuses: OK and TCB_SW_HARDENING_NEEDED.
-    uint8 private constant TCB_STATUS_OK = 0;
-    uint8 private constant TCB_STATUS_SW_HARDENING_NEEDED = 1;
+    /// @dev DCAP TCB statuses 6 (Revoked), 7 (Unrecognized), and unknown values are hard failures.
+    uint8 private constant TCB_STATUS_OUT_OF_DATE_CONFIGURATION_NEEDED = 5;
+    uint8 private constant TCB_STATUS_RELAUNCH_ADVISED = 8;
+    uint8 private constant TCB_STATUS_RELAUNCH_ADVISED_CONFIGURATION_NEEDED = 9;
 
     /// @dev Size of reportData field in bytes
     uint256 private constant REPORT_DATA_SIZE = 64;
@@ -132,7 +133,7 @@ contract TeeVerifier is ITeeVerifier {
     ///         so off-chain decoders can surface the underlying reason.
     error DcapVerificationFailed(bytes output);
 
-    /// @notice The DCAP verifier returned a trusted computing base status that policy rejects.
+    /// @notice The DCAP verifier returned a hard-rejected or unknown trusted computing base status.
     error DcapTcbStatusNotAccepted(uint8 actual);
 
     /// @notice Reserved Intel TDX TD_ATTRIBUTES bits are set.
@@ -397,16 +398,24 @@ contract TeeVerifier is ITeeVerifier {
             revert TeeReportTooShort(output.length, DCAP_TCB_STATUS_OFFSET + 1);
         }
         uint8 tcbStatus = uint8(output[DCAP_TCB_STATUS_OFFSET]);
-        if (tcbStatus != TCB_STATUS_OK && tcbStatus != TCB_STATUS_SW_HARDENING_NEEDED) {
+        if (
+            tcbStatus > TCB_STATUS_RELAUNCH_ADVISED_CONFIGURATION_NEEDED
+                || (tcbStatus > TCB_STATUS_OUT_OF_DATE_CONFIGURATION_NEEDED && tcbStatus < TCB_STATUS_RELAUNCH_ADVISED)
+        ) {
             revert DcapTcbStatusNotAccepted(tcbStatus);
         }
+        uint256 tcbStatusBit = uint256(1) << tcbStatus;
 
         bytes memory quoteBody = extractDcapQuoteBody(output);
         bool debugEnabled = _validateTdxReport(quoteBody);
         uint256 enabledTeeAttributes = debugEnabled ? TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT : 0;
 
         return TeeVerificationResult({
-            valid: true, reportData: quoteBody, teeType: TEEType.IntelTDX, enabledTeeAttributes: enabledTeeAttributes
+            valid: true,
+            reportData: quoteBody,
+            teeType: TEEType.IntelTDX,
+            enabledTeeAttributes: enabledTeeAttributes,
+            intelTdxTcbStatusBit: tcbStatusBit
         });
     }
 
@@ -473,7 +482,8 @@ contract TeeVerifier is ITeeVerifier {
             valid: true,
             reportData: attestationReport,
             teeType: TEEType.AmdSevSnp,
-            enabledTeeAttributes: enabledTeeAttributes
+            enabledTeeAttributes: enabledTeeAttributes,
+            intelTdxTcbStatusBit: 0
         });
     }
 }

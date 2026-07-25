@@ -89,6 +89,7 @@ contract TeeVerifierSnpTest is Test {
         assertTrue(res.valid);
         assertEq(uint8(res.teeType), uint8(TEEType.AmdSevSnp));
         assertEq(res.enabledTeeAttributes, 0);
+        assertEq(res.intelTdxTcbStatusBit, 0);
         // _verifyAmdSevSnp returns the full bound report as reportData.
         assertEq(res.reportData, report);
     }
@@ -218,6 +219,7 @@ contract TeeVerifierSnpTest is Test {
         assertTrue(result.valid);
         assertEq(uint8(result.teeType), uint8(TEEType.IntelTDX));
         assertEq(result.enabledTeeAttributes, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT);
+        assertEq(result.intelTdxTcbStatusBit, 1);
     }
 
     function test_tdx_rejects_invalid_reserved_attribute_bit() public {
@@ -244,11 +246,23 @@ contract TeeVerifierSnpTest is Test {
         teeVerifier.verifyTeeReport(_tdxReport(quote));
     }
 
-    function test_tdx_rejects_unacceptable_tcb_status() public {
+    function test_tdx_returns_one_hot_configurable_tcb_statuses() public {
         bytes memory quote = _td10Quote();
-        dcap.setTcbStatus(2);
+        uint8[8] memory statuses = [uint8(0), 1, 2, 3, 4, 5, 8, 9];
+        for (uint256 i = 0; i < statuses.length; i++) {
+            dcap.setTcbStatus(statuses[i]);
+            TeeVerificationResult memory result = teeVerifier.verifyTeeReport(_tdxReport(quote));
+            assertEq(result.intelTdxTcbStatusBit, uint256(1) << statuses[i]);
+        }
+    }
 
-        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.DcapTcbStatusNotAccepted.selector, 2));
-        teeVerifier.verifyTeeReport(_tdxReport(quote));
+    function test_tdx_rejects_revoked_unrecognized_and_unknown_tcb_statuses() public {
+        bytes memory quote = _td10Quote();
+        uint8[4] memory statuses = [uint8(6), 7, 10, type(uint8).max];
+        for (uint256 i = 0; i < statuses.length; i++) {
+            dcap.setTcbStatus(statuses[i]);
+            vm.expectRevert(abi.encodeWithSelector(TeeVerifier.DcapTcbStatusNotAccepted.selector, statuses[i]));
+            teeVerifier.verifyTeeReport(_tdxReport(quote));
+        }
     }
 }

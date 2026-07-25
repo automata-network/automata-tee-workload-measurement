@@ -99,6 +99,8 @@ struct TeeVerificationResult {
     ///      Bit 1: AMD SEV-SNP POLICY.DEBUG.
     ///      Bit 2: AMD SEV-SNP POLICY.MIGRATE_MA.
     uint256 enabledTeeAttributes;
+    /// @dev One-hot Intel DCAP TCB status. Zero for non-Intel TDX reports.
+    uint256 intelTdxTcbStatusBit;
 }
 
 /// @notice TPM report for platform binding verification

@@ -20,6 +20,9 @@ import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TDX_TCB_STATUS_OK,
+    TDX_TCB_STATUS_CONFIGURABLE_MASK,
     TEE_ATTRIBUTE_TRUE
 } from "./types/Constants.sol";
 import {
@@ -73,6 +76,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error EmptyMatchData(uint8 pcrIndex);
     error DuplicateAttributeKey(bytes32 key);
     error InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue);
+    error TeeAttributeNotAllowedInMeasurementVariant(bytes32 key);
     error TeeAttributeOptInRequiresNewBaseImage(bytes32 key);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
@@ -149,6 +153,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
                 _validateAttributes(variants[j].attributes);
+                _validateVariantAttributes(variants[j].attributes);
             }
         }
 
@@ -322,6 +327,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
                 _validateAttributes(variants[j].attributes);
+                _validateVariantAttributes(variants[j].attributes);
             }
             _validateAppendedTeePolicy(baseImageId, profile, variants);
         }
@@ -565,8 +571,15 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         uint256 len = attrs.length;
         for (uint256 i = 0; i < len; i++) {
             bytes32 key = attrs[i].key;
-            if (_isTeeAttributeKey(key) && attrs[i].value != bytes32(0) && attrs[i].value != TEE_ATTRIBUTE_TRUE) {
+            if (_isBooleanTeeAttributeKey(key) && attrs[i].value != bytes32(0) && attrs[i].value != TEE_ATTRIBUTE_TRUE)
+            {
                 revert InvalidTeeAttributeValue(key, attrs[i].value);
+            }
+            if (key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+                uint256 mask = uint256(attrs[i].value);
+                if ((mask & TDX_TCB_STATUS_OK) == 0 || (mask & ~TDX_TCB_STATUS_CONFIGURABLE_MASK) != 0) {
+                    revert InvalidTeeAttributeValue(key, attrs[i].value);
+                }
             }
         }
         if (len < 2) {
@@ -595,6 +608,14 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
     }
 
+    function _validateVariantAttributes(Attribute[] calldata attrs) private pure {
+        for (uint256 i = 0; i < attrs.length; i++) {
+            if (attrs[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+                revert TeeAttributeNotAllowedInMeasurementVariant(attrs[i].key);
+            }
+        }
+    }
+
     function _validateAppendedTeePolicy(
         bytes32 baseImageId,
         PlatformProfile calldata profile,
@@ -612,7 +633,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             for (uint256 j = 0; j < attributes.length; j++) {
                 bytes32 key = attributes[j].key;
                 if (
-                    _isTeeAttributeKey(key) && attributes[j].value == TEE_ATTRIBUTE_TRUE
+                    _isBooleanTeeAttributeKey(key) && attributes[j].value == TEE_ATTRIBUTE_TRUE
                         && (!profileExists || !_storedProfileDeclaresTeeAttribute(platformProfileId, key))
                 ) {
                     revert TeeAttributeOptInRequiresNewBaseImage(key);
@@ -623,7 +644,11 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
     function _rejectTeeAttributeOptIns(Attribute[] calldata attrs) private pure {
         for (uint256 i = 0; i < attrs.length; i++) {
-            if (_isTeeAttributeKey(attrs[i].key) && attrs[i].value == TEE_ATTRIBUTE_TRUE) {
+            if (
+                (_isBooleanTeeAttributeKey(attrs[i].key) && attrs[i].value == TEE_ATTRIBUTE_TRUE)
+                    || (attrs[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
+                        && uint256(attrs[i].value) != TDX_TCB_STATUS_OK)
+            ) {
                 revert TeeAttributeOptInRequiresNewBaseImage(attrs[i].key);
             }
         }
@@ -639,7 +664,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         return false;
     }
 
-    function _isTeeAttributeKey(bytes32 key) private pure returns (bool) {
+    function _isBooleanTeeAttributeKey(bytes32 key) private pure returns (bool) {
         return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
             || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA;
     }

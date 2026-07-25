@@ -50,6 +50,7 @@ import {
     SESSION_NONCE_DOMAIN,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
+    TDX_TCB_STATUS_OK,
     TEE_ATTRIBUTE_TRUE
 } from "../src/types/Constants.sol";
 
@@ -79,7 +80,11 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
         if (_rejection == 2) revert SnpMigrationAgentNotSupported();
         bytes memory reportData = _teeType == TEEType.IntelTDX ? new bytes(584) : new bytes(1184);
         return TeeVerificationResult({
-            valid: _valid, reportData: reportData, teeType: _teeType, enabledTeeAttributes: _enabledTeeAttributes
+            valid: _valid,
+            reportData: reportData,
+            teeType: _teeType,
+            enabledTeeAttributes: _enabledTeeAttributes,
+            intelTdxTcbStatusBit: _teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
         });
     }
 
