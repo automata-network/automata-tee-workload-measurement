@@ -166,10 +166,10 @@ Logic:
 ## Validation Rules
 
 1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24`
-2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateUniqueRequirementKeys`)
+2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateRequirements`)
 3. **Reserved TEE requirements**: The three exact reserved keys accept only `[bytes32(0)]` or `[bytes32(0), bytes32(uint256(1))]`. Missing means `[false]`.
-3. **Signature expiry**: `block.timestamp <= expireAt`
-4. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
+4. **Signature expiry**: `block.timestamp <= expireAt`
+5. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
 
 ## Initialization
 

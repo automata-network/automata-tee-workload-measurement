@@ -30,6 +30,7 @@ contract TeeAttributeRegistryTest is Test {
     WorkloadRegistry private workloadRegistry;
     PublicIdentity private ownerIdentity;
     uint256 private nextVersion;
+    uint256 private nextVariant;
 
     function setUp() public {
         vm.warp(1_800_000_000);
@@ -68,6 +69,96 @@ contract TeeAttributeRegistryTest is Test {
             )
         );
         _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, actual));
+    }
+
+    function test_add_platform_variants_rejects_true_reserved_attribute_on_new_profile() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.TeeAttributeOptInRequiresNewBaseImage.selector, TEE_ATTRIBUTE_INTEL_TDX_DEBUG
+            )
+        );
+        _addPlatformVariant(
+            baseImageId,
+            "new-platform",
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE),
+            new Attribute[](0)
+        );
+    }
+
+    function test_add_platform_variants_rejects_true_reserved_variant_attribute_on_new_profile() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.TeeAttributeOptInRequiresNewBaseImage.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+            )
+        );
+        _addPlatformVariant(
+            baseImageId,
+            "new-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_TRUE)
+        );
+    }
+
+    function test_add_platform_variants_rejects_true_variant_when_stored_profile_is_missing_or_false() public {
+        bytes32 missingBaseImageId = _registerBaseImage(new Attribute[](0));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.TeeAttributeOptInRequiresNewBaseImage.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA
+            )
+        );
+        _addPlatformVariant(
+            missingBaseImageId,
+            "test-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE)
+        );
+
+        bytes32 falseBaseImageId =
+            _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_FALSE));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.TeeAttributeOptInRequiresNewBaseImage.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA
+            )
+        );
+        _addPlatformVariant(
+            falseBaseImageId,
+            "test-platform",
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE)
+        );
+    }
+
+    function test_add_platform_variants_allows_inherited_or_explicit_true_when_stored_profile_is_true() public {
+        bytes32 baseImageId = _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE));
+
+        _addPlatformVariant(baseImageId, "test-platform", new Attribute[](0), new Attribute[](0));
+        _addPlatformVariant(
+            baseImageId,
+            "test-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE)
+        );
+    }
+
+    function test_add_platform_variants_allows_false_and_ordinary_attributes() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+
+        _addPlatformVariant(
+            baseImageId,
+            "new-platform",
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_FALSE),
+            _attributes(keccak256("ordinary.metadata"), TEE_ATTRIBUTE_TRUE)
+        );
+        _addPlatformVariant(
+            baseImageId,
+            "test-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_FALSE)
+        );
     }
 
     function test_workload_accepts_missing_false_and_false_true_reserved_requirements() public {
@@ -139,6 +230,27 @@ contract TeeAttributeRegistryTest is Test {
             pcrs: new PcrSpec[](0)
         });
         return workloadRegistry.registerWorkload(spec, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
+    }
+
+    function _addPlatformVariant(
+        bytes32 baseImageId,
+        string memory profileName,
+        Attribute[] memory profileAttributes,
+        Attribute[] memory variantAttributes
+    ) private {
+        nextVariant++;
+        PlatformProfile[] memory profiles = new PlatformProfile[](1);
+        profiles[0] = PlatformProfile({name: profileName, invariants: new PcrSpec[](0), attributes: profileAttributes});
+        MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] = MeasurementVariant({
+            name: string.concat("appended-variant-", vm.toString(nextVariant)),
+            overridePcrs: new PcrSpec[](0),
+            attributes: variantAttributes
+        });
+        baseImageRegistry.addPlatformVariants(
+            baseImageId, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
+        );
     }
 
     function _attributes(bytes32 key, bytes32 value) private pure returns (Attribute[] memory attributes) {

@@ -130,6 +130,8 @@ function addPlatformVariants(
   - Existing profile ids → submitted `invariants` and `attributes` are silently dropped (§14.2). The stored profile metadata is immutable post-registration; only the variant set under that profile can grow. Callers can pass the full PlatformProfile struct from their config without having to clear the metadata fields first.
   - New variant ids → stored with their `overridePcrs` + `attributes`; emits `MeasurementVariantRegistered`.
   - Existing variant ids → reverts `MeasurementVariantAlreadyExists(variantId)`.
+  - A new profile cannot set a reserved verified TEE attribute to `true`.
+  - A new variant can set a reserved verified TEE attribute to `true` only when the existing stored profile already sets the same attribute to `true`. Missing and explicit `false` values remain valid. Publishing a new opt-in requires a new base-image version.
 - Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), expireAt, baseImageId, platformProfiles, measurementVariants))`.
 - Emits: `BaseImageUpdated`, `PlatformProfileRegistered` (only for newly-created profiles), `MeasurementVariantRegistered` (per new variant).
 
@@ -175,6 +177,7 @@ function addPlatformVariants(
 | `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
 | `DuplicateAttributeKey(bytes32 key)` | Repeated key in attributes array |
 | `InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue)` | Reserved verified TEE attribute is not `bytes32(0)` or `bytes32(uint256(1))` |
+| `TeeAttributeOptInRequiresNewBaseImage(bytes32 key)` | `addPlatformVariants` would introduce a reserved verified TEE attribute with value `true` under an existing base-image ID |
 | `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not in whitelist |
 
 ## Events
@@ -192,12 +195,13 @@ function addPlatformVariants(
 ## Validation Rules
 
 1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24` (enforced by `_validatePcrSpecsSorted`)
-2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateUniqueAttributeKeys`, uses in-memory hash table)
+2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateAttributes`, uses an in-memory hash table)
 3. **Reserved TEE attribute values**: The three exact reserved keys accept only the canonical Boolean encodings. Missing means `false` during session policy evaluation.
-3. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
-4. **Signature expiry**: `block.timestamp <= expireAt`
-5. **Owner match**: Signer fingerprint must match stored owner for updates/deactivation
-6. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
+4. **Reserved TEE attribute append policy**: `addPlatformVariants` cannot add a new `true` declaration. A new variant may inherit or repeat `true` only when its existing stored profile already declares `true`.
+5. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
+6. **Signature expiry**: `block.timestamp <= expireAt`
+7. **Owner match**: Signer fingerprint must match stored owner for updates/deactivation
+8. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
 
 ## Initialization
 
@@ -207,7 +211,8 @@ Contract starts **paused** (`_pause()` called in `initialize`). Owner must eithe
 
 - `_checkRegistrationAllowed(ownerFingerprint)` -- Reverts NotWhitelisted if paused AND not whitelisted
 - `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order and index range (< 24); also reverts `EmptyMatchData` for `DYNAMIC_*` specs with zero-length `matchData`
-- `_validateUniqueAttributeKeys(Attribute[])` -- Hash-table-based uniqueness check for attribute keys
+- `_validateAttributes(Attribute[])` -- Validates reserved verified TEE attribute values and checks attribute-key uniqueness
+- `_validateAppendedTeePolicy(bytes32, PlatformProfile, MeasurementVariant[])` -- Prevents a reserved verified TEE attribute opt-in from being added under an existing base-image ID
 
 ## Implementation Nuance
 

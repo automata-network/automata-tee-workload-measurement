@@ -73,6 +73,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error EmptyMatchData(uint8 pcrIndex);
     error DuplicateAttributeKey(bytes32 key);
     error InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue);
+    error TeeAttributeOptInRequiresNewBaseImage(bytes32 key);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
     // ============================================================================
@@ -322,6 +323,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
                 _validateAttributes(variants[j].attributes);
             }
+            _validateAppendedTeePolicy(baseImageId, profile, variants);
         }
 
         // Build and verify signature
@@ -563,12 +565,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         uint256 len = attrs.length;
         for (uint256 i = 0; i < len; i++) {
             bytes32 key = attrs[i].key;
-            if (
-                (key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG
-                        || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
-                        || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA) && attrs[i].value != bytes32(0)
-                    && attrs[i].value != TEE_ATTRIBUTE_TRUE
-            ) {
+            if (_isTeeAttributeKey(key) && attrs[i].value != bytes32(0) && attrs[i].value != TEE_ATTRIBUTE_TRUE) {
                 revert InvalidTeeAttributeValue(key, attrs[i].value);
             }
         }
@@ -596,6 +593,55 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             used[slot] = true;
             keys[slot] = key;
         }
+    }
+
+    function _validateAppendedTeePolicy(
+        bytes32 baseImageId,
+        PlatformProfile calldata profile,
+        MeasurementVariant[] calldata variants
+    ) private view {
+        bytes32 platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name));
+        bool profileExists = _platformProfiles[platformProfileId].exists;
+
+        if (!profileExists) {
+            _rejectTeeAttributeOptIns(profile.attributes);
+        }
+
+        for (uint256 i = 0; i < variants.length; i++) {
+            Attribute[] calldata attributes = variants[i].attributes;
+            for (uint256 j = 0; j < attributes.length; j++) {
+                bytes32 key = attributes[j].key;
+                if (
+                    _isTeeAttributeKey(key) && attributes[j].value == TEE_ATTRIBUTE_TRUE
+                        && (!profileExists || !_storedProfileDeclaresTeeAttribute(platformProfileId, key))
+                ) {
+                    revert TeeAttributeOptInRequiresNewBaseImage(key);
+                }
+            }
+        }
+    }
+
+    function _rejectTeeAttributeOptIns(Attribute[] calldata attrs) private pure {
+        for (uint256 i = 0; i < attrs.length; i++) {
+            if (_isTeeAttributeKey(attrs[i].key) && attrs[i].value == TEE_ATTRIBUTE_TRUE) {
+                revert TeeAttributeOptInRequiresNewBaseImage(attrs[i].key);
+            }
+        }
+    }
+
+    function _storedProfileDeclaresTeeAttribute(bytes32 platformProfileId, bytes32 key) private view returns (bool) {
+        Attribute[] storage attrs = _platformProfiles[platformProfileId].platformProfile.attributes;
+        for (uint256 i = 0; i < attrs.length; i++) {
+            if (attrs[i].key == key) {
+                return attrs[i].value == TEE_ATTRIBUTE_TRUE;
+            }
+        }
+        return false;
+    }
+
+    function _isTeeAttributeKey(bytes32 key) private pure returns (bool) {
+        return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA;
     }
 
     // ============================================================================
