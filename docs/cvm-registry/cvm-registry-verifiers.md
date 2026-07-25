@@ -57,12 +57,13 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 1. Dispatch based on `VerificationBackendType`:
    - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
    - ZK RiscZero/Succinct: `dcapAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
-2. Extract the quote body from DCAP output
-3. Require acceptable trusted computing base status, valid reserved attribute
-   bits, and `SEPT_VE_DISABLE`
-4. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`
-5. Extract `DEBUG` into `enabledTeeAttributes`
-6. Return the quote body with `valid=true`
+2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
+3. Return the accepted status as `intelTdxTcbStatusBit = 1 << rawStatus`.
+4. Extract the quote body from DCAP output.
+5. Require valid reserved attribute bits and `SEPT_VE_DISABLE`.
+6. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`.
+7. Extract `DEBUG` into `enabledTeeAttributes`.
+8. Return the quote body with `valid=true`.
 
 **SNP (AMD) flow**:
 1. ZK only: `snpAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
@@ -72,7 +73,7 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 4. Reject nonzero `REPORT_ID_MA`
 5. Extract `POLICY.DEBUG` and `POLICY.MIGRATE_MA` into
    `enabledTeeAttributes`
-6. Return the raw report with `valid=true`
+6. Return the raw report with `valid=true` and `intelTdxTcbStatusBit=0`.
 
 AMD SEV-SNP `POLICY.SMT` and Intel TDX `TD_ATTRIBUTES.PERFMON` do not have
 reserved attribute names in this version. The verifier keeps its existing
@@ -96,7 +97,7 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 |---|---|
 | `UnsupportedTeeType(TEEType actual)` | Not TDX or SNP |
 | `UnsupportedBackendType(TEEType teeType, VerificationBackendType backend)` | Invalid verification backend |
-| `DcapTcbStatusNotAccepted(uint8 actual)` | DCAP trusted computing base status is not accepted |
+| `DcapTcbStatusNotAccepted(uint8 actual)` | DCAP trusted computing base status is 6, 7, or an unknown non-configurable value |
 | `InvalidTdxAttributes(bytes8 actual)` | Intel TDX reserved attribute bits are invalid |
 | `TdxSeptVeDisableRequired()` | Intel TDX `SEPT_VE_DISABLE` is absent |
 | `TdxMigrationServiceTdNotSupported()` | Intel TDX 1.5 `MR_SERVICETD` is nonzero |

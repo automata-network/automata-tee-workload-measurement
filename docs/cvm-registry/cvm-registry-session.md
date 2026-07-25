@@ -136,16 +136,20 @@ Input: evidence.teeReport
 Actions:
   - Call teeVerifier.verifyTeeReport(teeReport)
   - Revert TEEVerificationFailed if !result.valid
-Output: TeeVerificationResult { valid, reportData (full quote body or report), teeType, enabledTeeAttributes }
+Output: TeeVerificationResult { valid, reportData (full quote body or report), teeType, enabledTeeAttributes, intelTdxTcbStatusBit }
 ```
 
 ### Step 2a: Verified TEE Attribute Policy
 
-SessionRegistry converts `enabledTeeAttributes` into the three reserved Boolean
-values. Attributes for the non-selected TEE evaluate to `false`. The merged
-profile and variant declaration defaults to `false` and must equal the signed
-report. The matching workload requirement defaults to `[false]` and must be
-exactly `[false]` or `[false, true]`. The verified value must be allowed.
+SessionRegistry uses `teeType` to evaluate only the reserved attributes for the
+verified TEE platform. It converts `enabledTeeAttributes` into the three
+reserved Boolean values. Each merged Boolean declaration defaults to `false`
+and must equal the signed report. Each matching workload requirement defaults
+to `[false]` and must be exactly `[false]` or `[false, true]`.
+
+For Intel TDX, the effective base-image and workload masks default to `0x1`
+(`ok` only). Both masks must contain `intelTdxTcbStatusBit`. The Intel TDX TCB
+mask is profile-wide and cannot be changed by a measurement variant.
 
 ### Step 3: AK Collateral & TEE-AK Binding (`_verifyTeeAkBinding`)
 ```
@@ -242,7 +246,7 @@ Output: All PCR checks pass (or revert PCRVerificationFailed / PCRNotFound)
 ```
 Input: workloadSpec.requirements, merged platform+variant attributes
 Actions:
-  - Skip the three reserved verified TEE attribute keys because Step 2a already evaluated them
+  - Skip all four reserved verified TEE attribute keys because Step 2a already handled the applicable platform keys
   - Merge: _mergeAttributes(platformProfile.attributes, variant.attributes)
     (variant attrs override platform attrs at matching key)
   - For each requirement:
