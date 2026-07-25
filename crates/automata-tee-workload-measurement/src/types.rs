@@ -17,6 +17,8 @@ pub const TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME: &str =
     "atakit.attestation.v1.tee.amd-sev-snp.debug.enabled";
 pub const TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME: &str =
     "atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled";
+pub const TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME: &str =
+    "atakit.attestation.v1.tee.intel-tdx.tcb.status.allowed";
 
 pub static TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY: LazyLock<B256> =
     LazyLock::new(|| keccak256(TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME));
@@ -24,6 +26,20 @@ pub static TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY: LazyLock<B256> =
     LazyLock::new(|| keccak256(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME));
 pub static TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY: LazyLock<B256> =
     LazyLock::new(|| keccak256(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME));
+pub static TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY: LazyLock<B256> =
+    LazyLock::new(|| keccak256(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME));
+
+pub const TDX_TCB_STATUS_NAMES: [(&str, u16); 8] = [
+    ("ok", 1 << 0),
+    ("sw-hardening-needed", 1 << 1),
+    ("configuration-and-sw-hardening-needed", 1 << 2),
+    ("configuration-needed", 1 << 3),
+    ("out-of-date", 1 << 4),
+    ("out-of-date-configuration-needed", 1 << 5),
+    ("relaunch-advised", 1 << 8),
+    ("relaunch-advised-configuration-needed", 1 << 9),
+];
+pub const TDX_TCB_STATUS_CONFIGURABLE_MASK: u16 = 0x33f;
 
 pub fn tee_attribute_key(name: &str) -> Option<B256> {
     match name {
@@ -31,6 +47,9 @@ pub fn tee_attribute_key(name: &str) -> Option<B256> {
         TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME => Some(*TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY),
         TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME => {
             Some(*TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY)
+        }
+        TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME => {
+            Some(*TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY)
         }
         _ => None,
     }
@@ -43,9 +62,41 @@ pub fn tee_attribute_name(key: B256) -> Option<&'static str> {
         Some(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME)
     } else if key == *TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY {
         Some(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME)
+    } else if key == *TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY {
+        Some(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME)
     } else {
         None
     }
+}
+
+pub fn tdx_tcb_status_bit(name: &str) -> Option<u16> {
+    TDX_TCB_STATUS_NAMES
+        .iter()
+        .find_map(|(candidate, bit)| (*candidate == name).then_some(*bit))
+}
+
+pub fn tdx_tcb_status_mask<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<u16> {
+    let mut mask = 0u16;
+    for name in names {
+        let bit = tdx_tcb_status_bit(name)?;
+        if mask & bit != 0 {
+            return None;
+        }
+        mask |= bit;
+    }
+    ((mask & 1) != 0).then_some(mask)
+}
+
+pub fn tdx_tcb_status_names(mask: u16) -> Option<Vec<&'static str>> {
+    if mask & 1 == 0 || mask & !TDX_TCB_STATUS_CONFIGURABLE_MASK != 0 {
+        return None;
+    }
+    Some(
+        TDX_TCB_STATUS_NAMES
+            .iter()
+            .filter_map(|(name, bit)| (mask & bit != 0).then_some(*name))
+            .collect(),
+    )
 }
 
 pub fn tee_attribute_boolean_value(value: bool) -> B256 {
@@ -232,8 +283,11 @@ mod tee_attribute_tests {
         TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME,
         TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME,
         TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME,
+        TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY,
+        TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME,
+        TDX_TCB_STATUS_CONFIGURABLE_MASK,
         tee_attribute_boolean_from_value, tee_attribute_boolean_value, tee_attribute_key,
-        tee_attribute_name,
+        tee_attribute_name, tdx_tcb_status_mask, tdx_tcb_status_names,
     };
     use alloy::primitives::B256;
 
@@ -257,6 +311,12 @@ mod tee_attribute_tests {
                 .parse::<B256>()
                 .unwrap()
         );
+        assert_eq!(
+            *TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY,
+            "bc505eab3cf5643bdf24f1dee86998cd93d05a297e4c34f5e8f37bba764a8116"
+                .parse::<B256>()
+                .unwrap()
+        );
     }
 
     #[test]
@@ -273,6 +333,10 @@ mod tee_attribute_tests {
             (
                 TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME,
                 *TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY,
+            ),
+            (
+                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME,
+                *TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY,
             ),
         ] {
             assert_eq!(tee_attribute_key(name), Some(key));
@@ -291,5 +355,25 @@ mod tee_attribute_tests {
             tee_attribute_boolean_from_value(B256::with_last_byte(2)),
             None
         );
+    }
+
+    #[test]
+    fn tdx_tcb_status_masks_are_canonical() {
+        assert_eq!(tdx_tcb_status_mask(["ok"]), Some(1));
+        assert_eq!(
+            tdx_tcb_status_mask(["ok", "sw-hardening-needed", "configuration-needed"]),
+            Some(11)
+        );
+        assert_eq!(tdx_tcb_status_mask(["configuration-needed"]), None);
+        assert_eq!(tdx_tcb_status_mask(["ok", "ok"]), None);
+        assert_eq!(tdx_tcb_status_mask(["ok", "unknown"]), None);
+        assert_eq!(
+            tdx_tcb_status_names(TDX_TCB_STATUS_CONFIGURABLE_MASK)
+                .unwrap()
+                .len(),
+            8
+        );
+        assert_eq!(tdx_tcb_status_names(0), None);
+        assert_eq!(tdx_tcb_status_names(0x401), None);
     }
 }
