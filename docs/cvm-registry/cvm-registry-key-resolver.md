@@ -1,6 +1,6 @@
 # KeyResolver -- Detailed Analysis
 
-**File**: `src/KeyResolver.sol` (101 lines)
+**File**: `src/KeyResolver.sol`
 **Interface**: `src/interfaces/registries/IKeyResolver.sol`
 **Role**: Global public key fingerprint directory
 

@@ -9,7 +9,7 @@ This guide explains how to integrate with the CVM Registry System. There are two
 
 ## Prerequisites
 
-- Contract addresses (see [Deployment](../README.md#deployment) in the README)
+- A verified `SessionRegistry` address and its immutable dependency graph
 - For Rust SDK: Rust toolchain installed
 - For Solidity: [Foundry](https://book.getfoundry.sh/getting-started/installation) installed
 
@@ -36,7 +36,7 @@ use automata_tee_workload_measurement::{WorkloadMeasurement, WorkloadMeasurement
 let cfg = WorkloadMeasurementConfig {
     rpc_url: "https://your-hoodi-rpc.example.com".to_string(),
     relay_key: Some(your_private_key),
-    session_registry_address: "0xD1860020870ffEd23a644d0CD4CA9E7b3Ff53D6c".parse()?,
+    session_registry_address: "0x1111111111111111111111111111111111111111".parse()?,
 };
 
 let client = WorkloadMeasurement::new(cfg).await?;
@@ -69,37 +69,53 @@ let workload_id = workload_ref.id("CVM_WORKLOAD_V1");
 
 ```rust
 let response = client.register_session(RegisterSessionRequest {
-    signer: &signer,                // PrivateKeySigner for the owner
-    evidence,                       // AttestationEvidence from CVM agent
-    workload_ref,                   // AppRef for the workload
-    base_image_ref,                 // AppRef for the base image
-    platform_profile_id,            // bytes32 platform profile ID
-    variant_id,                     // bytes32 measurement variant ID
-    expire_offset_secs: 3600,       // signature validity window
+    evidence,
+    workload_id,
+    base_image_id,
+    platform_profile_id,
+    variant_id,
+    op_expires_at,
+    owner_identity,
+    owner_signature,
 }).await?;
 
 println!("Session ID: {}", response.session_id);
 println!("TX Hash: {}", response.tx_hash);
 ```
 
-The SDK handles:
-- Session ID computation from attestation evidence
-- Owner signature generation with correct domain separation
-- Transaction submission and event parsing
+`register_session` accepts a pre-signed owner operation. The caller constructs
+the exact domain-separated owner message and supplies `owner_signature`. The
+SDK submits the transaction and parses the result.
 
 ### Rotating a Session
 
 ```rust
-let response = client.rotate_session(RotateSessionRequest {
-    signer: &signer,
+let response = client.rotate_key(RotateKeyRequest {
     old_session_id,
     tee_report_bytes_hash,
     rotation_evidence,
-    expire_offset_secs: 3600,
+    op_expires_at,
+    owner_identity,
+    owner_signature,
 }).await?;
 
 println!("New Session ID: {}", response.new_session_id);
 ```
+
+`rotate_key` does not extend `sessionExpiresAt`. Use `renew_session` with fresh
+attestation and predecessor TPM authorization to extend the lifecycle. Use
+`recover_session` with fresh attestation and owner authorization when the
+predecessor TPM key is unavailable.
+
+### Reserved TEE attribute helpers
+
+The SDK exposes the six exact reserved names and keys through
+`automata_tee_workload_measurement::types`. Use `tee_attribute_key` and
+`tee_attribute_name` for the exact mapping. Use
+`tee_attribute_boolean_value`, `tdx_tcb_status_bit`,
+`tdx_tcb_status_mask`, and `tdx_tcb_status_names` for the canonical Boolean
+and Intel TDX TCB encodings. AMD SEV-SNP TCB and `PLATFORM_INFO` policies are
+already packed `bytes32` values; do not hash their hexadecimal text.
 
 ---
 
@@ -226,7 +242,9 @@ bool allowed = workloadRegistry.isBaseImageAllowed(workloadId, baseImageId);
 | Task | Rust SDK | Solidity |
 | --- | --- | --- |
 | Register session | `WorkloadMeasurement::register_session()` | `ISessionRegistry.registerSession()` |
-| Rotate session | `WorkloadMeasurement::rotate_session()` | `ISessionRegistry.rotateSession()` |
+| Rotate keys without extending expiry | `WorkloadMeasurement::rotate_key()` | `ISessionRegistry.rotateKey()` |
+| Renew with fresh attestation | `WorkloadMeasurement::renew_session()` | `ISessionRegistry.renewSession()` |
+| Recover with fresh attestation | `WorkloadMeasurement::recover_session()` | `ISessionRegistry.recoverSession()` |
 | Verify session signature | — | `ISessionRegistry.verifySessionSignature()` |
 | Check session active | — | `ISessionRegistry.isSessionActive()` |
 | Query session | — | `ISessionRegistry.getSession()` |

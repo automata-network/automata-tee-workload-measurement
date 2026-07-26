@@ -99,22 +99,34 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 |---|---|
 | `UnsupportedTeeType(TEEType actual)` | Not TDX or SNP |
 | `UnsupportedBackendType(TEEType teeType, VerificationBackendType backend)` | Invalid verification backend |
+| `TeeReportTooShort(uint256 length, uint256 minRequired)` | Generic report is too short |
+| `UnsupportedDcapBodyType(uint16 bodyType)` | DCAP output is neither TD10 nor TD15 |
+| `DcapReportDataOob(uint256 length, uint256 minRequired)` | DCAP report-data slice is out of bounds |
+| `DcapVerificationFailed(bytes output)` | Upstream DCAP verification failed |
 | `DcapTcbStatusNotAccepted(uint8 actual)` | DCAP trusted computing base status is 6, 7, or an unknown non-configurable value |
 | `InvalidTdxAttributes(bytes8 actual)` | Intel TDX reserved attribute bits are invalid |
 | `TdxSeptVeDisableRequired()` | Intel TDX `SEPT_VE_DISABLE` is absent |
 | `TdxMigrationServiceTdNotSupported()` | Intel TDX 1.5 `MR_SERVICETD` is nonzero |
+| `SnpVerificationFailed(VerificationResult result)` | SNP proof journal reports failure |
 | `SnpReportHashMismatch(bytes32 expected, bytes32 actual)` | Raw report is not the proof-bound report |
 | `InvalidSnpReportLength(uint256 actual, uint256 expected)` | Raw report is not exactly 1,184 bytes |
 | `UnsupportedSnpReportVersion(uint32 actual)` | Report version is unsupported |
 | `InvalidSnpPolicy(uint64 actual)` | Required or reserved policy bits are invalid |
 | `UnsupportedSnpVmpl(uint32 actual)` | `VMPL` is nonzero |
 | `SnpMigrationAgentNotSupported()` | `REPORT_ID_MA` is nonzero |
+| `InvalidSnpSignatureAlgorithm(uint32 actual)` | Report signature algorithm is not ECDSA P-384 with SHA-384 |
+| `InvalidSnpKeySettings(uint32 actual)` | Signing-key selection or masking-chip settings are unsupported |
+| `InvalidSnpReservedField(uint256 offset)` | A reserved report field is nonzero |
+| `InvalidSnpTcb(uint256 offset, uint64 actual)` | A TCB field has nonzero reserved bytes |
+| `InvalidSnpPlatformInfo(uint64 actual)` | `PLATFORM_INFO` contains an unsupported bit |
+| `UnsupportedSnpCpuid(uint24 actual)` | CPUID is outside AMD family `0x19`, model `0x00` through `0x1f` |
+| `InvalidSnpTcbOrder(bytes32 lower, bytes32 upper)` | TCB fields do not satisfy reported ≤ committed ≤ current; launch TCB has no ordering rule |
 
 ---
 
 ## SignatureVerifier
 
-**File**: `src/SignatureVerifier.sol` (172 lines)
+**File**: `src/SignatureVerifier.sol`
 **Interface**: `src/interfaces/ISignatureVerifier.sol`
 **Role**: Stateless multi-algorithm signature verification
 
@@ -178,7 +190,7 @@ function verify(
 
 ## TpmVerifier
 
-**File**: `src/bases/TpmVerifier.sol` (197 lines)
+**File**: `src/bases/TpmVerifier.sol`
 **Inheritance**: `TpmBase` (abstract)
 **Role**: TPM quote and certify verification
 
@@ -249,7 +261,7 @@ function verifyTpmCertify(
 
 ## AkCollateralVerifier
 
-**File**: `src/bases/AkCollateralVerifier.sol` (191 lines)
+**File**: `src/bases/AkCollateralVerifier.sol`
 **Inheritance**: `TpmBase` (abstract)
 **Role**: AK (Attestation Key) certificate chain / collateral validation
 
@@ -305,24 +317,24 @@ Binding: `bindingHash = bytes32(0)`. AK is bound to TEE via PCR15 computation (v
 
 | Error | Condition |
 |---|---|
-| `UnsupportedAkCollateralType()` | Unknown collateral type |
+| `UnsupportedAkCollateralType(AkPubCollateralType actual)` | Unknown collateral type |
 | `AzureJwkParsingFailed()` | `HCLAkPub` JWK field extraction from `hclVarData` failed |
 | `MaaJwtMalformed()` | JWT does not split into three base64url parts, or header/claims fail base64url/JSON decode |
 | `MaaJwtAlgUnsupported()` | JWT header `alg` is not `"RS256"` |
 | `MaaJwtHeaderClaimMissing()` | JWT header is missing `kid` or `alg` |
 | `MaaJwtClaimMissing()` | JWT claims is missing a required field |
-| `MaaKidNotRegistered()` | `kidHash` lookup in MAA Signing Key Registry returned an empty / revoked / expired key |
-| `MaaJwtIssuerMismatch()` | `iss` claim hash does not equal `key.issuerHash` |
+| `MaaKidNotRegistered(bytes32 kidHash)` | `kidHash` lookup in MAA Signing Key Registry returned an empty / revoked / expired key |
+| `MaaJwtIssuerMismatch(bytes32 actual, bytes32 expected)` | `iss` claim hash does not equal `key.issuerHash` |
 | `MaaJwtComplianceFailed()` | `x-ms-compliance-status` ≠ `"azure-compliant-cvm"`, or `x-ms-attestation-type` ∉ `{"tdxvm","sevsnpvm"}` |
 | `MaaJwtReportDataMalformed()` | report_data claim has wrong length, non-hex chars, or non-zero padding |
-| `MaaJwtSignatureInvalid()` | `signatureVerifier.verify` rejected the RS256 signature over `header || "." || claims` |
+| `MaaJwtSignatureInvalid(bytes32 kidHash)` | `signatureVerifier.verify` rejected the RS256 signature over `header || "." || claims` |
 | `MaaJwtBindingMismatch()` | `sha256(hclVarData)` did not equal the report-data claim prefix |
 
 ---
 
 ## TpmBase
 
-**File**: `src/bases/TpmBase.sol` (30 lines)
+**File**: `src/bases/TpmBase.sol`
 **Role**: Shared abstract base holding `ITpmAttestation` immutable
 
 ```solidity
@@ -334,4 +346,8 @@ abstract contract TpmBase {
 }
 ```
 
-Resolves diamond inheritance: both `TpmVerifier` and `AkCollateralVerifier` inherit `TpmBase`, and `SessionRegistry` inherits both. C3 linearization ensures single `tpmAttestation` instance.
+`TpmVerifier` and `AkCollateralVerifier` each inherit `TpmBase`.
+`SessionRegistry` inherits `TpmVerifier` and calls a separately deployed
+`IAkCollateralVerifier`; it does not inherit `AkCollateralVerifier`. Each
+constructor receives its own immutable `ITpmAttestation` reference. A
+deployment may point both references at the same `ITpmAttestation` contract.

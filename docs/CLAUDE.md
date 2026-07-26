@@ -106,30 +106,34 @@ SessionRegistry (orchestrator)
 │   ├── PlatformProfile (GCP TDX, Azure SNP, etc.)
 │   └── MeasurementVariant (machine-type overrides)
 ├── WorkloadRegistry (application)
-│   └── WorkloadSpec (container PCRs 20-23)
+│   └── WorkloadSpec (application PCR and attribute policy)
+├── AmdSnpSecurityPolicyRegistry (global AMD policy by exact CPUID)
 ├── TeeVerifier (TEE attestation)
+├── AkCollateralVerifier (Azure MAA and GCP AK collateral)
 └── SignatureVerifier (owner authentication)
 ```
 
 **Key Principles:**
 - **Separation of Concerns**: BaseImage (privileged), Workload (unprivileged), Session (runtime)
 - **Immutable Verifiers**: TeeVerifier is stateless and can be reused across registries
-- **Upgradeable Registries**: BaseImage/Workload/Session use UUPS proxies for policy updates
+- **Upgradeable Registries**: BaseImageRegistry, WorkloadRegistry,
+  SessionRegistry, AmdSnpSecurityPolicyRegistry, MaaKeyRegistry, and
+  KeyResolver use UUPS proxies
 - **Whitelist Mode**: Registries can operate in permissioned mode during initial rollout
 
-### Verification Flow (9-Step Attestation)
+### Session Registration Verification Flow
 
 When a CVM registers a session via `SessionRegistry.registerSession()`, the system performs:
 
-1. **TEE Attestation** - Verify Intel TDX quote or AMD SNP report via vendor-specific contracts
-2. **AK Collateral** - Verify TPM Attestation Key (AK) is legitimate (EK cert chain or GCP vTPM UUID)
-3. **TEE-AK Binding** - Ensure TEE and TPM measurements are cryptographically linked
-4. **TPM Quote** - Verify TPM quote signature using AK, extract PCR values
-5. **TPM Certify** - Verify TPM signing key is certified by AK (guarantees key is TPM-resident)
-6. **Session Key Delegation** - Verify session key is authorized by TPM signing key
-7. **Base Image PCRs** - Match PCRs 0-14 against BaseImage + PlatformProfile + Variant policies
-8. **Workload PCRs** - Match PCRs 20-23 against WorkloadSpec policies
-9. **Owner Authorization** - Verify owner signature over the entire registration request
+1. **Policy lookup** - Resolve the workload, base image, platform profile, and measurement variant.
+2. **TEE attestation** - Verify the Intel TDX quote or AMD SEV-SNP report.
+3. **Verified TEE and attribute policy** - Call `AmdSnpSecurityPolicyRegistry.verifyTeePolicy`. It evaluates ordinary attributes first, then the applicable reserved TEE attributes and the global AMD policy.
+4. **AK collateral and TEE-AK binding** - Verify the TPM Attestation Key and bind it to the verified TEE report.
+5. **TPM Quote** - Verify the Quote signature, nonce, and PCR values.
+6. **TPM Certify** - Verify that the TPM signing key is certified by the AK.
+7. **Session key delegation** - Verify that the TPM signing key authorized the session key.
+8. **PCR policy** - Evaluate platform-profile invariants, measurement-variant overrides, and every workload PCR rule.
+9. **Owner authorization** - Verify the owner signature and create the session.
 
 **PCR Verification Types:**
 - `STATIC` - Exact PCR value match (fixed measurement)
@@ -141,11 +145,14 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 **SessionRegistry** (the main orchestrator):
 ```
 SessionRegistry
+├── ISessionRegistry
 ├── TpmVerifier (TPM quote + TPM2_Certify verification logic)
-├── AkCollateralVerifier (AK certificate chain validation)
 ├── OwnableUpgradeable (admin control)
 └── UUPSUpgradeable (upgradeability pattern)
 ```
+
+`SessionRegistry` calls the separately deployed `IAkCollateralVerifier` and
+holds an immutable `IAmdSnpSecurityPolicyRegistry` reference.
 
 **BaseImageRegistry / WorkloadRegistry**:
 ```
@@ -173,15 +180,19 @@ SessionRegistry
 **CVMSession** - Registered CVM identity:
 - `sessionKeyFingerprint` - Current operational key
 - `baseImageId / workloadId` - Policy identifiers
-- `expiresAt` - Session TTL (default 30 days)
-- `nonce` - Replay protection counter
+- `sessionExpiresAt` - Absolute session expiry
+
+Owner replay-protection nonces live in a separate `SessionRegistry` mapping;
+they are not fields in `CVMSession`.
 
 ### Code Organization
 
 **Solidity (`src/`)**:
-- `SessionRegistry.sol` - Main orchestrator (9-step verification)
+- `SessionRegistry.sol` - Attestation verification and session lifecycle
 - `BaseImageRegistry.sol` - OS/platform policy management
 - `WorkloadRegistry.sol` - Application policy management
+- `AmdSnpSecurityPolicyRegistry.sol` - Mandatory AMD SEV-SNP policy by exact CPUID
+- `MaaKeyRegistry.sol` - Microsoft Azure Attestation signing-key directory
 - `TeeVerifier.sol` - TEE attestation dispatcher
 - `SignatureVerifier.sol` - ECDSA/RSA signature verification
 - `KeyResolver.sol` - Future: ENS-style key resolution (not yet integrated)
@@ -232,7 +243,8 @@ SessionRegistry
 ### Adding a New Base Image
 
 1. Register owner public key in `BaseImageRegistry` whitelist (if paused)
-2. Create `BaseImageSpec` with PCR policies for boot components (PCR 0-14)
+2. Create `BaseImageSpec` with PCR policies for boot components. PCR 0 through
+   19 is the usual platform convention, not a contract-enforced range.
 3. Register platform profiles (GCP, Azure, AWS) with TEE-specific attributes
 4. Register measurement variants for different machine types
 5. Call `BaseImageRegistry.registerBaseImage()` with owner signature
@@ -240,7 +252,8 @@ SessionRegistry
 ### Adding a New Workload
 
 1. Register owner public key in `WorkloadRegistry` whitelist (if paused)
-2. Create `WorkloadSpec` with PCR policies for application (PCR 20-23)
+2. Create `WorkloadSpec` with application PCR policies. PCR 20 through 23 is
+   the usual workload convention, not a contract-enforced range.
 3. Define access control (ANY, WHITELIST, BLACKLIST) for base images
 4. Call `WorkloadRegistry.registerWorkload()` with owner signature
 
@@ -249,20 +262,21 @@ SessionRegistry
 1. Boot CVM with TPM, generate TEE attestation and TPM quote
 2. Collect evidence: TEE report, TPM quote, AK collateral, TPM2_Certify proofs
 3. Sign registration message with owner key
-4. Call `SessionRegistry.registerSession()` - performs 9-step verification
+4. Call `SessionRegistry.registerSession()` - performs the complete registration verification sequence
 5. Store returned `sessionId` - use for session key verification downstream
 
 ### Rotating Session Keys
 
-Use `SessionRegistry.rotateSession()` when:
+Use `SessionRegistry.rotateKey()` when:
 - Session is still valid (not expired)
 - Want to rotate to new session key without full TEE re-attestation
 - Need fresh TPM2_Certify proof for new key
+- Do not want to extend `sessionExpiresAt`
 
-Use `registerSession()` again when:
-- Session has expired (past TTL)
-- Need full TEE + TPM re-attestation
-- Workload or base image policies changed
+Use `SessionRegistry.renewSession()` to extend the lifecycle with fresh TEE and
+TPM attestation plus predecessor TPM authorization. Use
+`SessionRegistry.recoverSession()` with fresh attestation and owner
+authorization when the predecessor TPM key is unavailable.
 
 ## Important Notes
 

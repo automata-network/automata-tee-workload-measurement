@@ -56,7 +56,7 @@ struct BaseImageSpec {
 
 struct PlatformProfile {
     string name;               // e.g. "gcp-tdx", "azure-snp"
-    PcrSpec[] invariants;      // PCR 0-19 baseline measurements
+    PcrSpec[] invariants;      // Typically platform baseline measurements
     Attribute[] attributes;    // Platform metadata (cloud, TEE type, etc.)
 }
 
@@ -73,11 +73,11 @@ struct MeasurementVariant {
 struct WorkloadSpec {
     string name;
     string version;
-    uint64 ttl;                              // Session TTL in seconds (0 = DEFAULT_CVM_TTL = 30 days)
+    uint64 sessionTtl;                       // Session TTL in seconds (0 = DEFAULT_CVM_TTL = 30 days)
     AccessMode baseImageMode;                // ANY / WHITELIST / BLACKLIST
     bytes32[] baseImageIds;                  // For whitelist/blacklist filtering
     AttributeRequirement[] requirements;     // Demanded platform attributes
-    PcrSpec[] pcrs;                          // PCR 20-23 specs
+    PcrSpec[] pcrs;                          // Typically workload PCR specs
 }
 ```
 
@@ -93,9 +93,13 @@ struct CVMSession {
     bytes32 platformProfileId;
     bytes32 measurementVariantId;
     uint64 registeredAt;
-    uint64 expiresAt;
+    uint64 sessionExpiresAt;
 }
 ```
+
+`registeredAt` is the creation timestamp of that session row. It is
+informational. `rotateKey` creates a row with a new `registeredAt` but
+preserves the predecessor's absolute `sessionExpiresAt`.
 
 ---
 
@@ -138,6 +142,12 @@ struct ZkProof {
     bytes proofBytes;   // ZK proof
 }
 
+struct SnpZkProof {
+    bytes output;       // VerifierJournal public output
+    bytes proofBytes;   // ZK proof
+    bytes rawReport;    // Exact 1,184-byte report bound by reportHash
+}
+
 struct TeeReport {
     VerificationBackendType verificationBackendType;
     TEEType teeType;
@@ -155,6 +165,11 @@ struct TeeVerificationResult {
     uint24 amdSevSnpCpuid;
 }
 ```
+
+Intel TDX ZK evidence uses `ZkProof`. AMD SEV-SNP uses `SnpZkProof` because
+the verifier needs the full report body after checking
+`keccak256(rawReport) == VerifierJournal.reportHash`. The first two fields
+remain ABI-compatible with `ZkProof`.
 
 The stable bits represent Intel TDX debug (`1 << 0`), AMD SEV-SNP debug
 (`1 << 1`), and AMD SEV-SNP `MIGRATE_MA` (`1 << 2`). Their canonical keys are
@@ -239,7 +254,7 @@ struct AttestationEvidence {
     PublicIdentity sessionKey;     // The session key being delegated to
 }
 
-struct SessionRotationEvidence {
+struct SessionKeyRotationEvidence {
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
     bytes sessionKeySignature;
@@ -247,6 +262,11 @@ struct SessionRotationEvidence {
     bytes rotationSignature;        // Old TPM signing key signs rotation message
     PublicIdentity oldTpmSigningKey;
     PublicIdentity akPub;
+}
+
+struct SessionRenewalAuthorization {
+    bytes signature;                     // Predecessor TPM key renewal commitment
+    PublicIdentity oldTpmSigningKey;
 }
 ```
 
@@ -265,7 +285,7 @@ struct TpmCertifyVerificationResult {
 }
 ```
 
-### AK Collateral Verification Result (defined at file scope in AkCollateralVerifier.sol)
+### AK Collateral Verification Result (defined in `interfaces/IAkCollateralVerifier.sol`)
 
 ```solidity
 struct AkCollateralVerificationResult {
@@ -291,9 +311,10 @@ All are `bytes32 constant = keccak256("...")`:
 | Name | String | Purpose |
 |---|---|---|
 | `KEY_DOMAIN` | `"KEY_RESOLVER_V1"` | Key fingerprint computation |
-| `SESSION_DOMAIN` | `"CVM_SESSION_V1"` | Session ID computation (`_computeSessionId` in `src/SessionRegistry.sol:687`) |
+| `SESSION_DOMAIN` | `"CVM_SESSION_V1"` | Session ID computation |
 | `DELEGATION_DOMAIN` | `"CVM_SESSION_KEY_DELEGATION"` | TPM→session key delegation |
-| `ROTATION_DOMAIN` | `"CVM_SESSION_KEY_ROTATION"` | Session key rotation |
+| `SESSION_ROTATE_KEY_DOMAIN` | `"CVM_SESSION_ROTATE_KEY_V1"` | Old TPM key rotation commitment |
+| `SESSION_RENEW_DOMAIN` | `"CVM_SESSION_RENEW_V1"` | Old TPM key renewal commitment |
 | `BASEIMAGE_DOMAIN` | `"CVM_BASEIMAGE_V1"` | Base image ID computation |
 | `PLATFORM_PROFILE_DOMAIN` | `"CVM_PLATFORM_PROFILE_V1"` | Platform profile ID |
 | `PLATFORM_VARIANT_DOMAIN` | `"CVM_PLATFORM_VARIANT_V1"` | Variant ID |
@@ -313,7 +334,9 @@ All are `bytes32 constant = keccak256("...")`. Note the `CVM_MSG_` prefix and `_
 | `WORKLOAD_DEACTIVATE_MSG` | `"CVM_MSG_WORKLOAD_DEACTIVATE_V1"` | deactivateWorkload |
 | `SESSION_REGISTER_MSG` | `"CVM_MSG_SESSION_REGISTER_V1"` | registerSession |
 | `SESSION_REVOKE_MSG` | `"CVM_MSG_SESSION_REVOKE_V1"` | revokeSession |
-| `SESSION_ROTATE_MSG` | `"CVM_MSG_SESSION_ROTATE_V1"` | rotateSession |
+| `SESSION_ROTATE_KEY_MSG` | `"CVM_MSG_SESSION_ROTATE_KEY_V1"` | rotateKey |
+| `SESSION_RENEW_MSG` | `"CVM_MSG_SESSION_RENEW_V1"` | renewSession |
+| `SESSION_RECOVER_MSG` | `"CVM_MSG_SESSION_RECOVER_V1"` | recoverSession |
 
 ### Algorithm Identifiers
 
@@ -346,6 +369,28 @@ function publicIdentityToCertPubkey(PublicIdentity memory identity) → CertPubk
 // Reverse mapping: ALGO_ID_RS256 → TPM_ALG_RSA, etc.
 ```
 
+### AmdSnpPolicy.sol (`src/lib/AmdSnpPolicy.sol`)
+
+Validation and comparison helpers for the two packed AMD SEV-SNP policy
+values.
+
+```solidity
+function validateTcb(bytes32 packedTcb)
+function isValidTcb(bytes32 packedTcb) → bool
+function maxTcb(bytes32 left, bytes32 right) → bytes32
+function tcbMeetsMinimum(bytes32 actual, bytes32 minimum) → bool
+
+function validatePlatformInfoPolicy(bytes32 packedPolicy)
+function isValidPlatformInfoPolicy(bytes32 packedPolicy) → bool
+function mergePlatformInfoPolicies(bytes32 left, bytes32 right) → bytes32
+function platformInfoMatches(uint64 actual, bytes32 packedPolicy) → bool
+```
+
+`validateTcb` reverts
+`InvalidAmdSnpTcbValue(bytes32 actual)`. `validatePlatformInfoPolicy` and a
+conflicting direct merge revert
+`InvalidAmdSnpPlatformInfoPolicy(bytes32 actual)`.
+
 ### LibBytes.sol (`src/lib/LibBytes.sol`)
 
 Structured byte types and utilities.
@@ -365,6 +410,9 @@ function slice(bytes memory subject, uint256 start, uint256 len) → bytes
 function toString(Bytes48) → string   // hex representation
 ```
 
+`toBytes48` and `toBytes64` require exactly 48 and 64 input bytes and revert
+`InvalidLength()` otherwise.
+
 ### Sha2Ext.sol (`src/lib/Sha2Ext.sol`)
 
 Pure Solidity SHA-384/512 implementation (EVM only has SHA-256 natively).
@@ -381,6 +429,7 @@ function rotateRight(x, n) → uint64
 ```
 
 Used for GCP TDX RTMR3 binding verification (SHA-384).
+An invalid internal padding length reverts `Sha2PaddingError()`.
 
 ### Asn1Decode.sol (`src/lib/Asn1Decode.sol`)
 

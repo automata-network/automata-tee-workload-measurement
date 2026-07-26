@@ -17,37 +17,55 @@ On-chain verification and management of Confidential VM (CVM) workloads. The sys
 The system uses a three-tier registry to separate platform, application, and runtime concerns:
 
 ```
-SessionRegistry (orchestrator — 9-step attestation verification)
-├── BaseImageRegistry (OS/platform policies — PCR 0-19)
+SessionRegistry (attestation verification and session lifecycle)
+├── BaseImageRegistry (OS/platform PCR and attribute policies)
 │   ├── BaseImage (name, version, URI)
 │   ├── PlatformProfile (cloud + TEE config, invariant PCRs, platform attributes)
 │   └── MeasurementVariant (machine-type PCR overrides, machine attributes)
-├── WorkloadRegistry (application policies — PCR 20-23)
+├── WorkloadRegistry (application PCR and attribute policies)
 │   └── WorkloadSpec (container measurements, attribute requirements, base image access control)
+├── AmdSnpSecurityPolicyRegistry (mandatory global policy for each exact AMD CPUID)
 ├── TeeVerifier (dispatches to DCAP/SNP attestation verifiers; supports ZK backends)
+├── AkCollateralVerifier (Azure MAA JWT and GCP AK certificate-chain verification)
+├── MaaKeyRegistry (Azure MAA signing-key directory)
 ├── SignatureVerifier (RS256, ES256, ES256K)
 └── KeyResolver (public key fingerprint → PublicIdentity directory)
 ```
+
+The usual PCR split is a convention. The contracts require sorted PCR indexes
+below 24 but do not enforce a fixed platform-versus-workload range.
+
+`TeeVerifier` extracts six reserved Intel TDX and AMD SEV-SNP security-policy
+inputs from verified reports. `SessionRegistry` sends the effective profile,
+variant, and workload attributes to `AmdSnpSecurityPolicyRegistry`. That
+registry evaluates ordinary metadata first, then only the reserved attributes
+for the verified TEE type. Intel TDX TCB status uses a configurable one-hot
+mask. AMD SEV-SNP TCB and `PLATFORM_INFO` checks also require the active
+`AmdSnpSecurityPolicyRegistry` record for the report's exact CPUID.
 
 **Key Principles:**
 - **Separation of Concerns** — Base images (privileged OS), workloads (unprivileged apps), and sessions (runtime identity) are managed independently
 - **PublicIdentity Ownership** — Registry ownership is based on cryptographic keys, independent of EVM addresses
 - **Immutable Verifiers** — `TeeVerifier` and `SignatureVerifier` are stateless and reusable across registries
-- **Upgradeable Registries** — `BaseImageRegistry`, `WorkloadRegistry`, and `SessionRegistry` use UUPS proxies
+- **Upgradeable Registries** — `BaseImageRegistry`, `WorkloadRegistry`,
+  `SessionRegistry`, `AmdSnpSecurityPolicyRegistry`, `MaaKeyRegistry`, and
+  `KeyResolver` use UUPS proxies
 
 ## Project Structure
 
 ```
 src/
-├── SessionRegistry.sol           # Session orchestrator (9-step attestation verification)
+├── SessionRegistry.sol           # Attestation verification and session lifecycle
 ├── BaseImageRegistry.sol         # OS/platform measurement policy management
 ├── WorkloadRegistry.sol          # Application measurement policy management
+├── AmdSnpSecurityPolicyRegistry.sol # Global AMD SEV-SNP security policy by CPUID
+├── MaaKeyRegistry.sol            # Microsoft Azure Attestation signing keys
 ├── TeeVerifier.sol               # TEE attestation dispatcher (DCAP / SNP / ZK)
 ├── SignatureVerifier.sol          # Cryptographic signature verification (RS256, ES256, ES256K)
 ├── KeyResolver.sol               # Public key fingerprint directory
 ├── bases/                        # Base verification contracts
 │   ├── TpmVerifier.sol           #   TPM Quote + TPM Certify verification
-│   └── AkCollateralVerifier.sol  #   AK certificate chain validation
+│   └── AkCollateralVerifier.sol  #   Azure MAA JWT and GCP AK validation
 ├── interfaces/                   # Contract interfaces
 ├── types/                        # Data structures (Common.sol, Evidence.sol, Constants.sol)
 ├── lib/                          # Utility libraries
@@ -60,22 +78,16 @@ test/                                   # Integration tests and benchmarks
 
 ## Documentation
 
-- **[Developer Guide](./docs/DEVELOPER_GUIDE.md)** — Detailed technical documentation covering each registry, the 9-step verification workflow, session lifecycle, and data structures
+- **[Developer Guide](./docs/DEVELOPER_GUIDE.md)** — Detailed technical documentation covering each registry, the session registration verification sequence, session lifecycle, and data structures
 - **[Integration Guide](./docs/INTEGRATION_GUIDE.md)** — How to integrate via the Rust client SDK or your own Solidity smart contract
 
 ## Deployment
 
-### Hoodi Testnet
-
-| Contract | Address |
-| --- | --- |
-| SessionRegistry | `0xB247950fBBFCE245641e433AFd7d8884328CE5A1` |
-| BaseImageRegistry | `0xCbe56f9B73c822679Cf36DcF8D99434E0f1588Ca` |
-| WorkloadRegistry | `0xda6430E06385F7516963f8A3B4e87beBb89860F8` |
-| TeeVerifier | `0xCfC1B6Bb1A177d46271B3938f264a484b9F7559f` |
-| SignatureVerifier | `0xc52B7390DFb82CC4e2241B4a2586428532D76f18` |
-| KeyResolver | `0x77B4f0c3Ab93bF3c624E8B72EdD12736D6B36C51` |
-| MaaKeyRegistry | `0x8451786c90260Da9441A2847Fb1e3DD8E5B207c3` |
+The verified TEE attribute implementation is not the older Hoodi deployment
+recorded in `deployment/560048.json`. It adds
+`AmdSnpSecurityPolicyRegistry` and changes the immutable dependencies of
+`SessionRegistry`. Verify the proxy implementations and every immutable
+dependency from live chain state before using a deployment.
 
 ## Related Projects
 
