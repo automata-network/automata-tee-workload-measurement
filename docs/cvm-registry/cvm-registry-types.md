@@ -150,6 +150,9 @@ struct TeeVerificationResult {
     TEEType teeType;     // Use extractDcapReportData/extractSnpReportData for 64-byte user data
     uint256 enabledTeeAttributes; // Stable internal bitset derived from the signed report
     uint256 intelTdxTcbStatusBit; // One-hot Intel DCAP TCB status; zero for AMD SEV-SNP
+    bytes32 amdSevSnpTcbValues;
+    uint64 amdSevSnpPlatformInfo;
+    uint24 amdSevSnpCpuid;
 }
 ```
 
@@ -168,6 +171,14 @@ The Intel TDX TCB policy key is
 `intelTdxTcbStatusBit` uses `1 << rawDcapStatus`. Configurable raw statuses are
 0 through 5, 8, and 9. The complete configurable mask is `0x33f`, and every
 stored policy mask must include bit 0 (`ok`).
+
+The AMD SEV-SNP packed policy keys are:
+
+- `atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum`
+- `atakit.attestation.v1.tee.amd-sev-snp.platform-info.policy`
+
+Their layouts are documented in
+[AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
 
 ### TPM Structs
 

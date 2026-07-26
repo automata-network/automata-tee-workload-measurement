@@ -2,7 +2,7 @@
 
 ## TeeVerifier
 
-**File**: `src/TeeVerifier.sol` (298 lines)
+**File**: `src/TeeVerifier.sol`
 **Interface**: `src/interfaces/ITeeVerifier.sol`
 **Role**: Stateless dispatcher for TEE attestation verification (Intel TDX via DCAP, AMD SEV-SNP)
 
@@ -30,13 +30,13 @@ uint256 constant DCAP_REPORT_DATA_START = 520;  // offset within quote body
 
 // SNP
 uint256 constant SNP_REPORT_DATA_OFFSET = 0x50;
-uint256 constant SNP_MIN_REPORT_LEN = 144;
+uint256 constant SNP_REPORT_SIZE = 1184;
 ```
 
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "1.1.0";
+string public constant TEE_VERIFIER_VERSION = "1.3.0";
 ```
 
 ### Functions
@@ -68,17 +68,19 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 **SNP (AMD) flow**:
 1. ZK only: `snpAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
 2. Check the proof-bound report hash before reading report fields
-3. Require an exact 1,184-byte report, supported version, valid policy-reserved
-   bits, and `VMPL=0`
-4. Reject nonzero `REPORT_ID_MA`
-5. Extract `POLICY.DEBUG` and `POLICY.MIGRATE_MA` into
-   `enabledTeeAttributes`
-6. Return the raw report with `valid=true` and `intelTdxTcbStatusBit=0`.
+3. Require an exact 1,184-byte report and version 3 through 5
+4. Validate signature selection, key settings, policy, `VMPL`, raw TCB,
+   CPUID, `PLATFORM_INFO`, and every version-specific reserved field
+5. Reject nonzero `REPORT_ID_MA`
+6. Require `reported_tcb <= committed_tcb <= current_tcb` component by
+   component
+7. Extract `POLICY.DEBUG`, `POLICY.MIGRATE_MA`, four normalized TCB fields,
+   `PLATFORM_INFO`, and exact CPUID
+8. Return the raw report with `valid=true`.
 
-AMD SEV-SNP `POLICY.SMT` and Intel TDX `TD_ATTRIBUTES.PERFMON` do not have
-reserved attribute names in this version. The verifier keeps its existing
-acceptance rules for those bits. Both bits are candidates for a future policy
-version.
+`AmdSnpSecurityPolicyRegistry` checks the extracted AMD state against the
+active global, base-image, and workload policies. See
+[AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
 
 #### Helper Functions
 

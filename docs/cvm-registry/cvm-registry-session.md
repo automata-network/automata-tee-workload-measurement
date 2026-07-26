@@ -37,6 +37,7 @@ uint256 private constant GCP_UUID_SIZE = 16;
 | `signatureVerifier` | `ISignatureVerifier` | Cryptographic signature verification |
 | `baseImageRegistry` | `IBaseImageRegistry` | Platform policy lookup |
 | `workloadRegistry` | `IWorkloadRegistry` | Application policy lookup |
+| `amdSnpSecurityPolicyRegistry` | `IAmdSnpSecurityPolicyRegistry` | Per-CPUID AMD security floor and attribute evaluation |
 | `tpmAttestation` | `ITpmAttestation` | (inherited from TpmBase) TPM operations |
 
 ## Storage
@@ -136,7 +137,7 @@ Input: evidence.teeReport
 Actions:
   - Call teeVerifier.verifyTeeReport(teeReport)
   - Revert TEEVerificationFailed if !result.valid
-Output: TeeVerificationResult { valid, reportData (full quote body or report), teeType, enabledTeeAttributes, intelTdxTcbStatusBit }
+Output: TeeVerificationResult { valid, reportData, teeType, enabledTeeAttributes, intelTdxTcbStatusBit, amdSevSnpTcbValues, amdSevSnpPlatformInfo, amdSevSnpCpuid }
 ```
 
 ### Step 2a: Verified TEE Attribute Policy
@@ -150,6 +151,12 @@ to `[false]` and must be exactly `[false]` or `[false, true]`.
 For Intel TDX, the effective base-image and workload masks default to `0x1`
 (`ok` only). Both masks must contain `intelTdxTcbStatusBit`. The Intel TDX TCB
 mask is profile-wide and cannot be changed by a measurement variant.
+
+For AMD SEV-SNP, the registry requires an active global record for the exact
+verified CPUID. It checks the four report TCB values against the global,
+base-image, and workload minimums. It also merges the global, base-image, and
+workload `PLATFORM_INFO` masks and rejects conflicts. The two packed policies
+are profile-wide and cannot be changed by a measurement variant.
 
 ### Step 3: AK Collateral & TEE-AK Binding (`_verifyTeeAkBinding`)
 ```

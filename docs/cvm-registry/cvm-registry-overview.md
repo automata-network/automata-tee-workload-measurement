@@ -42,9 +42,13 @@ Three-tier on-chain registry establishing cryptographic chains of trust from TEE
 
 3. **Policy hierarchy** -- Platform invariants + machine-specific variant overrides, merged at session registration time. BaseImage provides PCR 0-19, Workload provides PCR 20-23.
 
-4. **Stateless verifiers** -- `TeeVerifier` and `SignatureVerifier` are immutable, stateless, shared across registries. No storage, no upgrades needed.
+4. **Verified TEE policy** -- `TeeVerifier` extracts signed security state.
+`AmdSnpSecurityPolicyRegistry` stores the mandatory per-CPUID AMD floor and
+evaluates TEE and metadata attributes.
 
-5. **UUPS upgradeable registries** -- `BaseImageRegistry` (gap=46), `WorkloadRegistry` (gap=47), `SessionRegistry` (gap=47), `KeyResolver` (gap=49) all use UUPS proxy pattern with storage gaps.
+5. **UUPS upgradeable registries** -- `BaseImageRegistry`, `WorkloadRegistry`,
+`SessionRegistry`, `AmdSnpSecurityPolicyRegistry`, and `KeyResolver` use the
+UUPS proxy pattern with storage gaps.
 
 6. **Nonce-based replay protection** -- Per-owner nonce in SessionRegistry, bound into TPM quote `extraData`.
 
@@ -57,6 +61,7 @@ src/
 ├── BaseImageRegistry.sol          (525 lines)
 ├── WorkloadRegistry.sol           (305 lines)
 ├── SessionRegistry.sol            (1,312 lines)
+├── AmdSnpSecurityPolicyRegistry.sol
 ├── KeyResolver.sol                (102 lines)
 ├── MaaKeyRegistry.sol             (per-region MAA signing keys for AzureMaaJwt)
 ├── TeeVerifier.sol                (298 lines)
