@@ -18,6 +18,8 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
     TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TDX_TCB_STATUS_OK,
     TEE_ATTRIBUTE_TRUE
 } from "../src/types/Constants.sol";
 
@@ -245,6 +247,52 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
             )
         );
         registry.verifyTeePolicy(_validInputs(), profileAttributes, variantAttributes, new AttributeRequirement[](0));
+    }
+
+    function testVerifyIntelTdxTcbPolicyAppliesVariantOverride() public view {
+        uint256 configurationNeeded = uint256(1) << 3;
+        VerifiedTeePolicyInputs memory inputs = VerifiedTeePolicyInputs({
+            teeType: TEEType.IntelTDX,
+            enabledTeeAttributes: 0,
+            intelTdxTcbStatusBit: configurationNeeded,
+            amdSevSnpTcbValues: bytes32(0),
+            amdSevSnpPlatformInfo: 0,
+            amdSevSnpCpuid: 0
+        });
+        Attribute[] memory profileAttributes = new Attribute[](1);
+        profileAttributes[0] = Attribute(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK));
+        Attribute[] memory variantAttributes = new Attribute[](1);
+        variantAttributes[0] =
+            Attribute(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK | configurationNeeded));
+        bytes32[] memory allowedValues = new bytes32[](1);
+        allowedValues[0] = bytes32(TDX_TCB_STATUS_OK | configurationNeeded);
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](1);
+        requirements[0] = AttributeRequirement(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, allowedValues);
+
+        registry.verifyTeePolicy(inputs, profileAttributes, variantAttributes, requirements);
+    }
+
+    function testVerifyAmdSnpPlatformInfoPolicyAppliesWholeVariantOverride() public {
+        _register(GENOA_CPUID);
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.amdSevSnpPlatformInfo = 0x30;
+        Attribute[] memory profileAttributes = new Attribute[](1);
+        profileAttributes[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(uint256(1) << 68));
+        Attribute[] memory variantAttributes = new Attribute[](1);
+        variantAttributes[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(uint256(1) << 4));
+
+        registry.verifyTeePolicy(inputs, profileAttributes, variantAttributes, new AttributeRequirement[](0));
+
+        bytes32 effectiveProfilePolicy = bytes32(uint256(0x20) | (uint256(0x11) << 64));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+                effectiveProfilePolicy,
+                bytes32(uint256(0x30))
+            )
+        );
+        registry.verifyTeePolicy(inputs, profileAttributes, new Attribute[](0), new AttributeRequirement[](0));
     }
 
     function testVerifyAmdSnpPolicyEnforcesWorkloadMinimumAndPlatformConflicts() public {

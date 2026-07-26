@@ -679,6 +679,43 @@ contract SessionLifecycleTest is Test {
         _assertVariantOverride(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, 2, 1, false);
     }
 
+    function testTdxTcbStatusVariantOverridesProfile() public {
+        PolicyIds memory policy = _registerTdxTcbPolicyWithVariant(1, 2, 2);
+        AttestationEvidence memory evidence =
+            _fullEvidence(uint8(nextTeePolicyVersion), _identity(ALGO_ID_ES256K, 0xd1));
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        _mockFullEvidenceWithResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            TeeVerificationResult({
+                valid: true,
+                reportData: "",
+                teeType: TEEType.IntelTDX,
+                enabledTeeAttributes: 0,
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_CONFIGURATION_NEEDED,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: 0
+            })
+        );
+
+        bytes32 sessionId = sessionRegistry.registerSession(
+            evidence,
+            policy.workloadId,
+            policy.baseImageId,
+            policy.platformProfileId,
+            policy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+        assertTrue(sessionRegistry.isSessionActive(sessionId));
+    }
+
     function testRotateKeyInheritsPreviouslyVerifiedTeeAttributes() public {
         PolicyIds memory policy = _registerTeePolicy(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, 2, 2, 0, 1 days);
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
@@ -1215,6 +1252,13 @@ contract SessionLifecycleTest is Test {
     }
 
     function _registerTdxTcbPolicy(uint256 profileMode, uint256 workloadMode) private returns (PolicyIds memory ids) {
+        return _registerTdxTcbPolicyWithVariant(profileMode, 0, workloadMode);
+    }
+
+    function _registerTdxTcbPolicyWithVariant(uint256 profileMode, uint256 variantMode, uint256 workloadMode)
+        private
+        returns (PolicyIds memory ids)
+    {
         nextTeePolicyVersion++;
         string memory version = vm.toString(nextTeePolicyVersion);
         bytes32 relaxedMask = bytes32(TDX_TCB_STATUS_OK | TDX_TCB_STATUS_CONFIGURATION_NEEDED);
@@ -1230,8 +1274,15 @@ contract SessionLifecycleTest is Test {
         profiles[0] = PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: attributes});
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
+        Attribute[] memory variantAttributes = new Attribute[](variantMode == 0 ? 0 : 1);
+        if (variantMode != 0) {
+            variantAttributes[0] = Attribute({
+                key: TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+                value: variantMode == 2 ? relaxedMask : bytes32(TDX_TCB_STATUS_OK)
+            });
+        }
         variants[0][0] =
-            MeasurementVariant({name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+            MeasurementVariant({name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: variantAttributes});
         BaseImageSpec memory baseImage = BaseImageSpec({name: "tdx-tcb-base", version: version, uri: ""});
         ids.baseImageId = baseImageRegistry.registerBaseImage(
             baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"

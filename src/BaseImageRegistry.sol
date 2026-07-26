@@ -79,8 +79,6 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error EmptyMatchData(uint8 pcrIndex);
     error DuplicateAttributeKey(bytes32 key);
     error InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue);
-    error TeeAttributeNotAllowedInMeasurementVariant(bytes32 key);
-    error TeeAttributeOptInRequiresNewBaseImage(bytes32 key);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
     // ============================================================================
@@ -156,7 +154,6 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
                 _validateAttributes(variants[j].attributes);
-                _validateVariantAttributes(variants[j].attributes);
             }
         }
 
@@ -330,9 +327,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
                 _validateAttributes(variants[j].attributes);
-                _validateVariantAttributes(variants[j].attributes);
             }
-            _validateAppendedTeePolicy(baseImageId, profile, variants);
         }
 
         // Build and verify signature
@@ -357,10 +352,9 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // invariants and attributes are kept as-is and any re-submitted profile
         // metadata is ignored. New (variantId) values are stored fresh. Any
         // attempt to re-register a variantId that already exists reverts.
-        // This prevents post-hoc relaxation of PCR specs / attributes on
-        // policies that downstream sessions already reference. To publish a
-        // stricter or looser policy, owners must mint a fresh base image with
-        // a bumped name or version. See on-chain-registry-design.md §14.2.
+        // This prevents post-hoc changes to policies that downstream sessions
+        // already reference. A newly appended variant is a new immutable
+        // policy branch and may declare its own validated attributes.
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
 
@@ -616,69 +610,6 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             used[slot] = true;
             keys[slot] = key;
         }
-    }
-
-    function _validateVariantAttributes(Attribute[] calldata attrs) private pure {
-        for (uint256 i = 0; i < attrs.length; i++) {
-            if (
-                attrs[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
-                    || attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM
-                    || attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
-            ) {
-                revert TeeAttributeNotAllowedInMeasurementVariant(attrs[i].key);
-            }
-        }
-    }
-
-    function _validateAppendedTeePolicy(
-        bytes32 baseImageId,
-        PlatformProfile calldata profile,
-        MeasurementVariant[] calldata variants
-    ) private view {
-        bytes32 platformProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profile.name));
-        bool profileExists = _platformProfiles[platformProfileId].exists;
-
-        if (!profileExists) {
-            _rejectTeeAttributeOptIns(profile.attributes);
-        }
-
-        for (uint256 i = 0; i < variants.length; i++) {
-            Attribute[] calldata attributes = variants[i].attributes;
-            for (uint256 j = 0; j < attributes.length; j++) {
-                bytes32 key = attributes[j].key;
-                if (
-                    _isBooleanTeeAttributeKey(key) && attributes[j].value == TEE_ATTRIBUTE_TRUE
-                        && (!profileExists || !_storedProfileDeclaresTeeAttribute(platformProfileId, key))
-                ) {
-                    revert TeeAttributeOptInRequiresNewBaseImage(key);
-                }
-            }
-        }
-    }
-
-    function _rejectTeeAttributeOptIns(Attribute[] calldata attrs) private pure {
-        for (uint256 i = 0; i < attrs.length; i++) {
-            if (
-                (_isBooleanTeeAttributeKey(attrs[i].key) && attrs[i].value == TEE_ATTRIBUTE_TRUE)
-                    || (attrs[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
-                        && uint256(attrs[i].value) != TDX_TCB_STATUS_OK)
-                    || ((attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM
-                            || attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY)
-                        && attrs[i].value != bytes32(0))
-            ) {
-                revert TeeAttributeOptInRequiresNewBaseImage(attrs[i].key);
-            }
-        }
-    }
-
-    function _storedProfileDeclaresTeeAttribute(bytes32 platformProfileId, bytes32 key) private view returns (bool) {
-        Attribute[] storage attrs = _platformProfiles[platformProfileId].platformProfile.attributes;
-        for (uint256 i = 0; i < attrs.length; i++) {
-            if (attrs[i].key == key) {
-                return attrs[i].value == TEE_ATTRIBUTE_TRUE;
-            }
-        }
-        return false;
     }
 
     function _isBooleanTeeAttributeKey(bytes32 key) private pure returns (bool) {
