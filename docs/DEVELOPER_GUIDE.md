@@ -313,7 +313,7 @@ function verifySessionSignature(
 `AttestationEvidence`. `renewSession` also requires predecessor TPM
 authorization and an active predecessor. `recoverSession` requires the same
 owner but can replace an inactive predecessor. Both apply the current verified
-TEE attribute policy and current active AMD SEV-SNP global policy.
+TEE attribute policy and the active AMD SEV-SNP registry defaults.
 
 ### View Functions
 
@@ -558,7 +558,7 @@ re-attestation and **without** extending the session expiry:
    the base image to remain allowed by the workload, and re-evaluate the
    current platform and workload PCR policies. There is no new TEE report, so
    rotation does not re-evaluate verified TEE attributes or the current AMD
-   global policy; it inherits the state accepted by the predecessor's full
+   SEV-SNP registry defaults; it inherits the state accepted by the predecessor's full
    attestation.
 8. Verify owner signature under `SESSION_ROTATE_KEY_MSG`
 9. Revoke the old session and create the successor. The successor gets a new
