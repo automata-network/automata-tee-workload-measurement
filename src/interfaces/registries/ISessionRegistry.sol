@@ -136,7 +136,8 @@ interface ISessionRegistry {
 
     /// @notice Rotate a session's TPM signing key and session key without extending its lifetime
     /// @param oldSessionId The session to rotate
-    /// @param teeReportBytesHash keccak256(teeReport.data) from the original attestation
+    /// @param teeReportBytesHash Canonical ITeeVerifier.getTeeReportHash result
+    ///        from the original attestation
     /// @param rotationEvidence The key-rotation evidence bundle (TPM reports, signatures, keys)
     /// @param opExpiresAt Operation-signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The session owner's public key

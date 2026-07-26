@@ -54,7 +54,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title SessionRegistry
-/// @notice Central orchestrator for CVM session registration with 9-step attestation verification
+/// @notice Central orchestrator for CVM session registration, attestation, and policy verification
 /// @dev Inherits TPM verification capabilities from TpmVerifier and delegates AK collateral
 ///      verification to a separate contract to keep this implementation deployable under EIP-170.
 contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, UUPSUpgradeable {
@@ -1104,10 +1104,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Internal - Policy Evaluation (Steps 7-8)
+    // Internal - PCR Policy Evaluation (Step 7)
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Executes Steps 7-8: PCR and attribute policy evaluation
+    /// @dev Executes Step 7: platform, variant, workload, and GCP binding PCR evaluation
     /// @param pcrValues The PCR values from TPM quote
     /// @param platformProfile The platform profile (invariants + attributes)
     /// @param variant The measurement variant (overrides + attributes)

@@ -87,7 +87,7 @@ abstract contract TpmVerifier is TpmBase {
     /// @param tpmReport The TPM Quote report to verify
     /// @param akPub The Attestation Key public identity (root of trust from AK collateral)
     /// @param expectedExtraData The extraData that must be present in the TPM quote (for nonce binding)
-    /// @return result Verification result containing PCR values and AK fingerprint
+    /// @return result Verification result containing the verified PCR values
     function verifyTpmQuote(TpmReport memory tpmReport, PublicIdentity memory akPub, bytes memory expectedExtraData)
         internal
         returns (TpmQuoteVerificationResult memory result)
@@ -136,7 +136,7 @@ abstract contract TpmVerifier is TpmBase {
     /// @notice Verifies a TPM Certify report (key certification with signature)
     /// @param tpmReport The TPM Certify report to verify
     /// @param akPub The Attestation Key public identity (root of trust from AK collateral)
-    /// @return result Verification result containing certified key identity and fingerprints
+    /// @return result Verification result containing the certified key and its fingerprint
     function verifyTpmCertify(TpmReport memory tpmReport, PublicIdentity memory akPub)
         internal
         view

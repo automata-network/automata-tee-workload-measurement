@@ -37,7 +37,8 @@ interface IWorkloadRegistry {
     // ============================================================================
 
     /// @notice Register a new workload with policy and PCR specifications (immutable after registration)
-    /// @dev Workload ID is computed as: keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name))
+    /// @dev Workload ID is computed as:
+    ///      keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version))
     /// @param spec Complete workload specification (name, version, policy, pcrs)
     /// @param opExpiresAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the workload owner
