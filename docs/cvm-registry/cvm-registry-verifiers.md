@@ -80,7 +80,8 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 8. Return the raw report with `valid=true`.
 
 `AmdSnpSecurityPolicyRegistry` checks the extracted AMD state against the
-active global, base-image, and workload policies. See
+resolved base-image and workload policies. Its active exact-CPUID record
+supplies any missing packed value. See
 [AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
 
 #### Helper Functions

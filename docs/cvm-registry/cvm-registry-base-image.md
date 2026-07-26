@@ -199,7 +199,7 @@ function addPlatformVariants(
 2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateAttributes`, uses an in-memory hash table)
 3. **Reserved Boolean TEE attribute values**: Intel TDX debug, AMD SEV-SNP debug, and AMD SEV-SNP `MIGRATE_MA` accept only the canonical Boolean encodings. Missing means `false`.
 4. **Intel TDX TCB mask**: The mask must include `ok` and may contain only bits in `0x33f`. Missing means `ok` only.
-5. **AMD SEV-SNP packed policy**: `tcb.minimum` requires four valid 64-bit lanes. `platform-info.policy` requires valid, non-overlapping set and clear masks. Missing values are packed zero.
+5. **AMD SEV-SNP packed policy**: `tcb.minimum` requires four valid 64-bit lanes. `platform-info.policy` requires valid, non-overlapping set and clear masks. A missing measurement-variant value falls back to the platform-profile value. If both are missing, verification uses the active exact-CPUID `AmdSnpSecurityPolicyRegistry` default.
 6. **Measurement-variant attributes**: Custom and reserved attributes use the same value and duplicate-key validation in profiles and variants. A variant may declare any valid value for the selected hardware branch.
 7. **Append-only policy**: `addPlatformVariants` ignores submitted metadata for an existing profile, accepts fully validated attributes for a new profile or variant, and rejects an existing variant id.
 8. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`

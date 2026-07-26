@@ -43,7 +43,7 @@ The system is composed of six contract groups with strict separation of concerns
 - **BaseImageRegistry** — Defines platform images and their expected PCR measurement specifications. Managed by base image publishers.
 - **WorkloadRegistry** — Defines application-level policies including base image access control, attribute requirements, and PCR constraints. Managed by workload developers.
 - **SessionRegistry** — Orchestrates the full attestation verification workflow, creates on-chain session identities, and manages session lifecycle.
-- **AmdSnpSecurityPolicyRegistry** — Stores the mandatory active AMD SEV-SNP TCB and `PLATFORM_INFO` floor for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
+- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
 - **AkCollateralVerifier** — Separately deployed Azure MAA JWT and GCP AK certificate-chain verifier.
 - **MaaKeyRegistry** — Stores the owner-managed Microsoft Azure Attestation signing keys used by `AkCollateralVerifier`.
 - **TeeVerifier** — Stateless dispatcher for TEE attestation reports. Routes to DCAP (Intel TDX) or SNP (AMD SEV-SNP) verifiers. Supports ZK proof backends (RiscZero, SP1).
@@ -270,7 +270,7 @@ The SessionRegistry holds immutable references to:
 - `IAkCollateralVerifier` — Azure MAA JWT and GCP AK collateral verification
 - `IBaseImageRegistry` — Platform policy lookup
 - `IWorkloadRegistry` — Application policy lookup
-- `IAmdSnpSecurityPolicyRegistry` — Global AMD SEV-SNP policy plus ordinary and reserved TEE attribute evaluation
+- `IAmdSnpSecurityPolicyRegistry` — AMD SEV-SNP policy defaults plus ordinary and reserved TEE attribute evaluation
 - `ITpmAttestation` — TPM Quote and Certify verification through the inherited `TpmBase`
 
 ### Key Operations
@@ -338,7 +338,7 @@ When `registerSession()` is called, the system performs this verification sequen
 │  Verify Intel TDX quote or AMD SEV-SNP report                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  STEP 2a: Verified TEE and Attribute Policy                         │
-│  Check TEE state, global AMD policy, and attribute requirements     │
+│  Resolve AMD defaults; check TEE state and attribute requirements  │
 ├─────────────────────────────────────────────────────────────────────┤
 │  STEP 3: AK Collateral Verification + TEE-AK Binding               │
 │  Validate Attestation Key and bind TEE to vTPM                      │
@@ -399,9 +399,10 @@ The call evaluates ordinary metadata first. It then applies the profile and
 measurement-variant lookup to custom attributes and every reserved TEE
 attribute. The measurement-variant value replaces the matching profile value.
 Missing Boolean values mean `false`. A missing Intel TDX TCB status mask means
-`ok` only. Missing AMD SEV-SNP packed policies mean zero. The call also applies
-the mandatory exact-CPUID AMD SEV-SNP TCB and `PLATFORM_INFO` floor. It ignores
-reserved attributes assigned to the other TEE platform.
+`ok` only. Missing AMD SEV-SNP packed policies resolve to the active exact-CPUID
+registry default. The registry value is not an independent mandatory floor. A
+matching explicit base-image value and workload value may replace it. The call
+ignores reserved attributes assigned to the other TEE platform.
 
 ### Step 3: AK Collateral Verification + TEE-AK Binding
 

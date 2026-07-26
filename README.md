@@ -24,7 +24,7 @@ SessionRegistry (attestation verification and session lifecycle)
 │   └── MeasurementVariant (machine-type PCR overrides, machine attributes)
 ├── WorkloadRegistry (application PCR and attribute policies)
 │   └── WorkloadSpec (container measurements, attribute requirements, base image access control)
-├── AmdSnpSecurityPolicyRegistry (mandatory global policy for each exact AMD CPUID)
+├── AmdSnpSecurityPolicyRegistry (default policy for each exact AMD CPUID)
 ├── TeeVerifier (dispatches to DCAP/SNP attestation verifiers; supports ZK backends)
 ├── AkCollateralVerifier (Azure MAA JWT and GCP AK certificate-chain verification)
 ├── MaaKeyRegistry (Azure MAA signing-key directory)
@@ -58,7 +58,7 @@ src/
 ├── SessionRegistry.sol           # Attestation verification and session lifecycle
 ├── BaseImageRegistry.sol         # OS/platform measurement policy management
 ├── WorkloadRegistry.sol          # Application measurement policy management
-├── AmdSnpSecurityPolicyRegistry.sol # Global AMD SEV-SNP security policy by CPUID
+├── AmdSnpSecurityPolicyRegistry.sol # AMD SEV-SNP policy defaults by CPUID
 ├── MaaKeyRegistry.sol            # Microsoft Azure Attestation signing keys
 ├── TeeVerifier.sol               # TEE attestation dispatcher (DCAP / SNP / ZK)
 ├── SignatureVerifier.sol          # Cryptographic signature verification (RS256, ES256, ES256K)

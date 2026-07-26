@@ -107,7 +107,7 @@ SessionRegistry (orchestrator)
 │   └── MeasurementVariant (machine-type overrides)
 ├── WorkloadRegistry (application)
 │   └── WorkloadSpec (application PCR and attribute policy)
-├── AmdSnpSecurityPolicyRegistry (global AMD policy by exact CPUID)
+├── AmdSnpSecurityPolicyRegistry (AMD policy defaults by exact CPUID)
 ├── TeeVerifier (TEE attestation)
 ├── AkCollateralVerifier (Azure MAA and GCP AK collateral)
 └── SignatureVerifier (owner authentication)
@@ -127,7 +127,7 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 
 1. **Policy lookup** - Resolve the workload, base image, platform profile, and measurement variant.
 2. **TEE attestation** - Verify the Intel TDX quote or AMD SEV-SNP report.
-3. **Verified TEE and attribute policy** - Call `AmdSnpSecurityPolicyRegistry.verifyTeePolicy`. It evaluates ordinary attributes first, then the applicable reserved TEE attributes and the global AMD policy.
+3. **Verified TEE and attribute policy** - Call `AmdSnpSecurityPolicyRegistry.verifyTeePolicy`. It evaluates ordinary attributes first, then the applicable reserved TEE attributes. The active exact-CPUID record supplies missing AMD packed values.
 4. **AK collateral and TEE-AK binding** - Verify the TPM Attestation Key and bind it to the verified TEE report.
 5. **TPM Quote** - Verify the Quote signature, nonce, and PCR values.
 6. **TPM Certify** - Verify that the TPM signing key is certified by the AK.
@@ -191,7 +191,7 @@ they are not fields in `CVMSession`.
 - `SessionRegistry.sol` - Attestation verification and session lifecycle
 - `BaseImageRegistry.sol` - OS/platform policy management
 - `WorkloadRegistry.sol` - Application policy management
-- `AmdSnpSecurityPolicyRegistry.sol` - Mandatory AMD SEV-SNP policy by exact CPUID
+- `AmdSnpSecurityPolicyRegistry.sol` - AMD SEV-SNP policy defaults by exact CPUID
 - `MaaKeyRegistry.sol` - Microsoft Azure Attestation signing-key directory
 - `TeeVerifier.sol` - TEE attestation dispatcher
 - `SignatureVerifier.sol` - ECDSA/RSA signature verification

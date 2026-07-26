@@ -7,9 +7,11 @@
 
 ## Purpose
 
-`AmdSnpSecurityPolicyRegistry` stores the mandatory AMD SEV-SNP security floor
-for each exact processor family, model, and stepping. `SessionRegistry` calls
-it after `TeeVerifier` verifies and extracts the signed report.
+`AmdSnpSecurityPolicyRegistry` stores AMD SEV-SNP policy defaults for each
+exact processor family, model, and stepping. `SessionRegistry` calls it after
+`TeeVerifier` verifies and extracts the signed report. The record supplies a
+missing base-image or workload value. It is not an independent mandatory
+floor.
 
 The registry also evaluates reserved TEE attributes and ordinary metadata
 requirements. This keeps `SessionRegistry` below the EIP-170 deployed-code
@@ -91,13 +93,22 @@ For AMD SEV-SNP, it:
 
 1. requires an active record for the verified exact CPUID;
 2. checks debug and `POLICY.MIGRATE_MA`;
-3. checks the report against the component-wise maximum of the global and
-   base-image TCB minimums;
-4. checks the report against the component-wise maximum of the global and
-   workload TCB minimums;
-5. merges global, base-image, and workload `PLATFORM_INFO` required-set and
-   required-clear masks;
-6. rejects a mask conflict or a report that does not satisfy the merged masks.
+3. resolves the base-image TCB minimum from the measurement variant, then the
+   platform profile, then the registry default;
+4. resolves the workload TCB minimum from an explicit requirement or the
+   registry default;
+5. checks the report against the component-wise maximum of those two resolved
+   minimums;
+6. resolves base-image and workload `PLATFORM_INFO` policies with the same
+   missing-value rules;
+7. combines the two resolved required-set masks and required-clear masks;
+8. rejects a mask conflict or a report that does not satisfy the combined
+   masks.
+
+One explicit side cannot relax a registry default because the missing other
+side still resolves to that default. Matching explicit base-image and workload
+values can relax it. Verification without a workload applies only the resolved
+base-image policy.
 
 The complete packed formats are defined in the canonical
 AMD SEV-SNP security policy specification in the atakit suite.

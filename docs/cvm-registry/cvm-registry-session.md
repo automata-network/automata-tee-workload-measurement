@@ -39,7 +39,7 @@ uint256 private constant GCP_UUID_SIZE = 16;
 | `akCollateralVerifier` | `IAkCollateralVerifier` | External Azure/GCP AK collateral verification |
 | `baseImageRegistry` | `IBaseImageRegistry` | Platform policy lookup |
 | `workloadRegistry` | `IWorkloadRegistry` | Application policy lookup |
-| `amdSnpSecurityPolicyRegistry` | `IAmdSnpSecurityPolicyRegistry` | Global AMD SEV-SNP policy and verified TEE attribute evaluation |
+| `amdSnpSecurityPolicyRegistry` | `IAmdSnpSecurityPolicyRegistry` | AMD SEV-SNP defaults and verified TEE attribute evaluation |
 | `tpmAttestation` | `ITpmAttestation` | (inherited from TpmBase) TPM operations |
 
 ## Storage
@@ -185,13 +185,16 @@ replaces the matching profile mask.
 
 For AMD SEV-SNP, SessionRegistry passes the verified CPUID, four packed TCB
 values, and `PLATFORM_INFO` to `AmdSnpSecurityPolicyRegistry`. The registry
-requires an active policy for that exact CPUID. It applies the global policy
-as a floor, then applies the base-image and workload packed policies. Packed
-AMD SEV-SNP values use the same measurement-variant-first lookup. The selected
-`tcb.minimum` value is combined component by component with the global and
-workload minimums. The selected `platform-info.policy` value is merged with
-the global and workload required-set and required-clear masks. Conflicting
-masks fail.
+requires an active policy for that exact CPUID. That record supplies defaults;
+it is not an independent mandatory floor. Packed AMD SEV-SNP values use the
+same measurement-variant-first lookup. The base-image side resolves from the
+measurement variant, then platform profile, then registry default. The
+workload side resolves from an explicit requirement or the registry default.
+The effective `tcb.minimum` is the component-wise maximum of those two
+resolved values. The effective `platform-info.policy` combines only the two
+resolved required-set and required-clear masks. Conflicting masks fail.
+Matching explicit values on both sides may relax the registry default; one
+explicit side alone cannot.
 
 The contract recognizes only the six exact reserved attribute hashes listed
 in [Types, Constants & Libraries](cvm-registry-types.md). It cannot
@@ -390,7 +393,7 @@ Rotation steps:
 7. Require the inherited workload and base image to remain active, require
    the base image to remain allowed by the workload, and evaluate the current
    PCR rules with expectedPcr15=0. Rotation has no new TEE report, so it does
-   not re-evaluate verified TEE attributes or the current AMD global policy;
+   not re-evaluate verified TEE attributes or current AMD registry defaults;
    it inherits the security state accepted by the predecessor's full
    attestation.
 8. Owner signs `sha256(abi.encode(SESSION_ROTATE_KEY_MSG, chainid, address(this), opExpiresAt, oldSessionId, newSessionId))`
@@ -568,10 +571,11 @@ Platform attributes not overridden are kept, then all variant attributes are app
 
 Reserved Boolean TEE attributes use the same merge and default to `false`. The
 Intel TDX TCB mask uses the same merge and defaults to `ok`. AMD SEV-SNP packed
-values use the same merge and default to zero. Key rotation does not contain a
-new TEE report and cannot change the workload, base image, profile, or variant.
-It therefore inherits the verified launch policy and does not run the reserved
-TEE attribute check again.
+values use the same measurement-variant-first merge. A missing base-image or
+workload value resolves to the active exact-CPUID registry default. Key
+rotation does not contain a new TEE report and cannot change the workload,
+base image, profile, or variant. It therefore inherits the verified launch
+policy and does not run the reserved TEE attribute check again.
 
 This version assumes a clean cutover in which every session was created under
 this implementation. Compatibility with session storage written by an earlier

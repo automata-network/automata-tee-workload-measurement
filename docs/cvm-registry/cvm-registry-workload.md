@@ -175,7 +175,7 @@ every base image.
 2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateRequirements`)
 3. **Reserved Boolean TEE requirements**: Intel TDX debug, AMD SEV-SNP debug, and AMD SEV-SNP `MIGRATE_MA` accept only `[bytes32(0)]` or `[bytes32(0), bytes32(uint256(1))]`. Missing means `[false]`.
 4. **Intel TDX TCB requirement**: Exactly one mask is required. The mask must include `ok` and may contain only bits in `0x33f`. Missing means `ok` only.
-5. **AMD SEV-SNP packed requirements**: `tcb.minimum` and `platform-info.policy` each accept exactly one valid packed value. A missing value is packed zero and does not weaken the active global policy.
+5. **AMD SEV-SNP packed requirements**: `tcb.minimum` and `platform-info.policy` each accept exactly one valid packed value. A missing requirement resolves to the active exact-CPUID `AmdSnpSecurityPolicyRegistry` default during verification. An explicit requirement replaces that workload-side default.
 6. **Base-image set**: `baseImageIds` are stored without a `BaseImageRegistry` lookup. An empty `WHITELIST` denies every base image; an empty `BLACKLIST` allows every base image.
 7. **Signature expiry**: `block.timestamp <= opExpiresAt`
 8. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.

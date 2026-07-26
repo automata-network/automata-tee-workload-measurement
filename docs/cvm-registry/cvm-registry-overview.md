@@ -48,8 +48,9 @@ contracts require sorted PCR indexes below 24 but do not enforce a fixed
 platform-versus-workload index split.
 
 4. **Verified TEE policy** -- `TeeVerifier` extracts signed security state.
-`AmdSnpSecurityPolicyRegistry` stores the mandatory per-CPUID AMD floor and
-evaluates TEE and metadata attributes.
+`AmdSnpSecurityPolicyRegistry` stores per-CPUID AMD defaults and evaluates TEE
+and metadata attributes. An explicit value replaces a default on its policy
+side; the registry value is not an independent mandatory floor.
 
 5. **UUPS upgradeable registries** -- `BaseImageRegistry`, `WorkloadRegistry`,
 `SessionRegistry`, `AmdSnpSecurityPolicyRegistry`, and `KeyResolver` use the
