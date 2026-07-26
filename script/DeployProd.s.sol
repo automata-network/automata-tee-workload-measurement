@@ -9,6 +9,7 @@ import {DeployKeyResolver} from "./DeployKeyResolver.s.sol";
 import {DeployMaaKeyRegistry} from "./DeployMaaKeyRegistry.s.sol";
 import {DeployAkCollateralVerifier} from "./DeployAkCollateralVerifier.s.sol";
 import {DeploySessionRegistry} from "./DeploySessionRegistry.s.sol";
+import {DeployAmdSnpSecurityPolicyRegistry} from "./DeployAmdSnpSecurityPolicyRegistry.s.sol";
 import "forge-std/console.sol";
 
 /// @title DeployProd
@@ -30,6 +31,7 @@ contract DeployProd is
     DeployKeyResolver,
     DeployMaaKeyRegistry,
     DeployAkCollateralVerifier,
+    DeployAmdSnpSecurityPolicyRegistry,
     DeploySessionRegistry
 {
     function run()
@@ -42,6 +44,7 @@ contract DeployProd is
             DeployKeyResolver,
             DeployMaaKeyRegistry,
             DeployAkCollateralVerifier,
+            DeployAmdSnpSecurityPolicyRegistry,
             DeploySessionRegistry
         )
     {
@@ -57,6 +60,7 @@ contract DeployProd is
         deployKeyResolverProxy(address(0));
         deployMaaKeyRegistryProxy(address(0));
         deployAkCollateralVerifier();
+        deployAmdSnpSecurityPolicyRegistryProxy(address(0));
 
         // 3. SessionRegistry last (depends on all others)
         deploySessionRegistryProxy(address(0));

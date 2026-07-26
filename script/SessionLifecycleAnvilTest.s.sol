@@ -10,8 +10,11 @@ import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.s
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
+import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
+import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {MockSignatureVerifier} from "../src/mock/MockSignatureVerifier.sol";
 import {
@@ -84,7 +87,10 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
             reportData: reportData,
             teeType: _teeType,
             enabledTeeAttributes: _enabledTeeAttributes,
-            intelTdxTcbStatusBit: _teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
+            intelTdxTcbStatusBit: _teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
+            amdSevSnpTcbValues: bytes32(0),
+            amdSevSnpPlatformInfo: 0,
+            amdSevSnpCpuid: _teeType == TEEType.AmdSevSnp ? 0x191101 : 0
         });
     }
 
@@ -219,6 +225,7 @@ contract SessionLifecycleAnvilTest is Script {
     MockSignatureVerifier private signatureVerifier;
     BaseImageRegistry private baseImageRegistry;
     WorkloadRegistry private workloadRegistry;
+    AmdSnpSecurityPolicyRegistry private amdSnpSecurityPolicyRegistry;
     AnvilLifecycleTeeVerifier private teeVerifier;
     AnvilLifecycleTpmVerifier private tpmVerifier;
     AnvilLifecycleAkVerifier private akVerifier;
@@ -234,12 +241,30 @@ contract SessionLifecycleAnvilTest is Script {
         signatureVerifier = new MockSignatureVerifier();
         baseImageRegistry = new BaseImageRegistry(signatureVerifier);
         workloadRegistry = new WorkloadRegistry(signatureVerifier);
+        AmdSnpSecurityPolicyRegistry amdPolicyImplementation = new AmdSnpSecurityPolicyRegistry();
+        amdSnpSecurityPolicyRegistry = AmdSnpSecurityPolicyRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(amdPolicyImplementation),
+                    abi.encodeCall(AmdSnpSecurityPolicyRegistry.initialize, (vm.envAddress("OWNER")))
+                )
+            )
+        );
+        AmdSnpSecurityPolicyUpdate[] memory amdPolicies = new AmdSnpSecurityPolicyUpdate[](1);
+        amdPolicies[0] = AmdSnpSecurityPolicyUpdate(0x191101, 1, true, bytes32(0), bytes32(0));
+        amdSnpSecurityPolicyRegistry.updatePolicies(amdPolicies, keccak256("anvil-test-policy"));
         teeVerifier = new AnvilLifecycleTeeVerifier();
         teeVerifier.configure(true, TEEType.IntelTDX, 0, 0);
         tpmVerifier = new AnvilLifecycleTpmVerifier();
         akVerifier = new AnvilLifecycleAkVerifier();
         sessionRegistry = new SessionRegistry(
-            teeVerifier, tpmVerifier, signatureVerifier, akVerifier, baseImageRegistry, workloadRegistry
+            teeVerifier,
+            tpmVerifier,
+            signatureVerifier,
+            akVerifier,
+            baseImageRegistry,
+            workloadRegistry,
+            amdSnpSecurityPolicyRegistry
         );
         expectedRevertProbe = new AnvilExpectedRevertProbe();
 

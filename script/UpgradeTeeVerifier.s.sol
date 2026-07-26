@@ -14,6 +14,7 @@ import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
+import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
@@ -34,6 +35,7 @@ contract UpgradeTeeVerifier is Script {
 
     function run() public {
         vm.startBroadcast();
+        address amdSnpSecurityPolicyRegistry = vm.envAddress("AMD_SNP_SECURITY_POLICY_REGISTRY");
 
         BaseImageRegistry baseImageImpl = new BaseImageRegistry(ISignatureVerifier(SIG_VERIFIER));
         console.log("new BaseImageRegistry impl:", address(baseImageImpl));
@@ -50,7 +52,8 @@ contract UpgradeTeeVerifier is Script {
             ISignatureVerifier(SIG_VERIFIER),
             IAkCollateralVerifier(AK_COLL),
             IBaseImageRegistry(BASE_IMG),
-            IWorkloadRegistry(WORKLOAD)
+            IWorkloadRegistry(WORKLOAD),
+            IAmdSnpSecurityPolicyRegistry(amdSnpSecurityPolicyRegistry)
         );
         console.log("new SessionRegistry impl:", address(sessionImpl));
 
@@ -70,5 +73,11 @@ contract UpgradeTeeVerifier is Script {
             address(SessionRegistry(SESSION_REGISTRY_PROXY).teeVerifier()) == address(tee), "teeVerifier not rewired"
         );
         console.log("verified teeVerifier()  ->", address(tee));
+        require(
+            address(SessionRegistry(SESSION_REGISTRY_PROXY).amdSnpSecurityPolicyRegistry())
+                == amdSnpSecurityPolicyRegistry,
+            "amdSnpSecurityPolicyRegistry not rewired"
+        );
+        console.log("verified amdSnpSecurityPolicyRegistry() ->", amdSnpSecurityPolicyRegistry);
     }
 }
