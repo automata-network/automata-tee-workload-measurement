@@ -1003,6 +1003,48 @@ contract SessionLifecycleTest is Test {
         }
     }
 
+    function testAkCollateralValidFalseFailsForAzureAndGcpRegistration() public {
+        for (uint256 collateralType = 0; collateralType < 2; collateralType++) {
+            AttestationEvidence memory evidence =
+                _fullEvidence(uint8(0xe0 + collateralType), _identity(ALGO_ID_ES256K, uint8(0xe2 + collateralType)));
+            evidence.akPubCollateral.akPubCollateralType =
+                collateralType == 0 ? AkPubCollateralType.AzureMaaJwt : AkPubCollateralType.GcpCertChain;
+            bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+            _mockFullEvidence(
+                evidence,
+                ownerFingerprint,
+                sessionRegistry.getNonce(ownerFingerprint),
+                oldAk,
+                oldTpmSigningKey,
+                keccak256(evidence.teeReport.data)
+            );
+            vm.mockCall(
+                AK_COLLATERAL_VERIFIER,
+                abi.encodeCall(IAkCollateralVerifier.verifyAkCollateral, (evidence.akPubCollateral)),
+                abi.encode(
+                    AkCollateralVerificationResult({
+                        valid: false,
+                        akPub: oldAk,
+                        akPubFingerprint: LibKey.computeKeyFingerprint(oldAk),
+                        bindingHash: bytes32(0)
+                    })
+                )
+            );
+
+            vm.expectRevert(SessionRegistry.AkCollateralVerificationFailed.selector);
+            sessionRegistry.registerSession(
+                evidence,
+                oldPolicy.workloadId,
+                oldPolicy.baseImageId,
+                oldPolicy.platformProfileId,
+                oldPolicy.measurementVariantId,
+                uint64(block.timestamp + 5 minutes),
+                ownerIdentity,
+                hex"01"
+            );
+        }
+    }
+
     function testAzureReportDataMustMatchMaaBindingHashForTdxAndSnp() public {
         for (uint256 teeIndex = 0; teeIndex < 2; teeIndex++) {
             TEEType teeType = teeIndex == 0 ? TEEType.IntelTDX : TEEType.AmdSevSnp;

@@ -218,8 +218,10 @@ Input: evidence.akPubCollateral, teeVerificationResult
 Actions:
   - Call the external akCollateralVerifier.verifyAkCollateral(collateral)
     -> AkCollateralVerificationResult { valid, akPub, akPubFingerprint, bindingHash }
-  - AkCollateralVerifier reverts on every failure and returns valid=true on success.
-    SessionRegistry does not branch on this result's valid field.
+  - Revert AkCollateralVerificationFailed if !result.valid
+  - The current AkCollateralVerifier reverts on every failure and returns
+    valid=true on success. The explicit check also fails closed for any other
+    verifier implementation.
   - Platform-specific binding:
     Azure (AzureMaaJwt):
       - verifyAkCollateral (§8.3.1):
@@ -531,6 +533,7 @@ function verifySessionSignature(
 | `AttributeNotFound(bytes32 key)` | Required attribute missing |
 | `AttributeValueNotAllowed(bytes32 key, bytes32 actualValue)` | Ordinary attribute value not in allowed set |
 | `TeeVerificationFailed()` | A verifier implementation returned `valid=false` |
+| `AkCollateralVerificationFailed()` | An AK collateral verifier implementation returned `valid=false` |
 | `TeeAttributeBaseImageMismatch(bytes32 key, bytes32 declaredValue, bytes32 verifiedValue)` | Effective base-image declaration differs from the signed report |
 | `TeeAttributeValueNotAllowed(bytes32 key, bytes32 actualValue)` | Reserved workload policy does not permit the verified state |
 | `TeeAttributePolicyConflict(bytes32 key, bytes32 baseValue, bytes32 workloadValue)` | Combined AMD SEV-SNP `PLATFORM_INFO` policies require the same bit to be both set and clear |

@@ -198,6 +198,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice A TEE verifier returned valid=false instead of reverting.
     error TeeVerificationFailed();
 
+    /// @notice An AK collateral verifier returned valid=false instead of reverting.
+    error AkCollateralVerificationFailed();
+
     /// @notice The effective base-image declaration differs from the verified TEE state.
     error TeeAttributeBaseImageMismatch(bytes32 key, bytes32 declaredValue, bytes32 verifiedValue);
 
@@ -858,6 +861,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         // ─────────────────────────────────────────────────────────────────────────────────
         AkCollateralVerificationResult memory akResult =
             akCollateralVerifier.verifyAkCollateral(evidence.akPubCollateral);
+        if (!akResult.valid) {
+            revert AkCollateralVerificationFailed();
+        }
 
         // Verify TEE-AK binding and get expected PCR15 for GCP
         bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence, akResult.bindingHash);
