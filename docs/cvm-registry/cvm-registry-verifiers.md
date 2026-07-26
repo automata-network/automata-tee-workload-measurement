@@ -71,7 +71,8 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 3. Require an exact 1,184-byte report and version 3 through 5
 4. Validate signature selection, key settings, policy, `VMPL`, raw TCB,
    CPUID, `PLATFORM_INFO`, and every version-specific reserved field
-5. Reject nonzero `REPORT_ID_MA`
+5. Accept only an all-zero or all-`0xff` `REPORT_ID_MA` as no active
+   migration-agent association. Reject every other value.
 6. Require `reported_tcb <= committed_tcb <= current_tcb` component by
    component
 7. Extract `POLICY.DEBUG`, `POLICY.MIGRATE_MA`, four normalized TCB fields,
@@ -113,7 +114,7 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 | `UnsupportedSnpReportVersion(uint32 actual)` | Report version is unsupported |
 | `InvalidSnpPolicy(uint64 actual)` | Required or reserved policy bits are invalid |
 | `UnsupportedSnpVmpl(uint32 actual)` | `VMPL` is nonzero |
-| `SnpMigrationAgentNotSupported()` | `REPORT_ID_MA` is nonzero |
+| `SnpMigrationAgentNotSupported()` | `REPORT_ID_MA` is neither the all-zero nor the all-`0xff` no-association sentinel |
 | `InvalidSnpSignatureAlgorithm(uint32 actual)` | Report signature algorithm is not ECDSA P-384 with SHA-384 |
 | `InvalidSnpKeySettings(uint32 actual)` | Signing-key selection or masking-chip settings are unsupported |
 | `InvalidSnpReservedField(uint256 offset)` | A reserved report field is nonzero |

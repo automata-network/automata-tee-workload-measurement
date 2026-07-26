@@ -197,9 +197,32 @@ contract TeeVerifierSnpTest is Test {
         _verifySnp(report);
     }
 
-    function test_snp_rejects_nonzero_report_id_ma() public {
+    function test_snp_accepts_absent_report_id_ma_sentinels() public {
+        _verifySnp(_report());
+
         bytes memory report = _report();
-        report[0x160] = bytes1(uint8(1));
+        for (uint256 i = 0; i < 32; i++) {
+            report[0x160 + i] = bytes1(uint8(0xff));
+        }
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_uniform_non_sentinel_report_id_ma() public {
+        bytes memory report = _report();
+        for (uint256 i = 0; i < 32; i++) {
+            report[0x160 + i] = bytes1(uint8(1));
+        }
+
+        vm.expectRevert(TeeVerifier.SnpMigrationAgentNotSupported.selector);
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_mixed_report_id_ma() public {
+        bytes memory report = _report();
+        for (uint256 i = 0; i < 32; i++) {
+            report[0x160 + i] = bytes1(uint8(0xff));
+        }
+        report[0x160] = bytes1(0);
 
         vm.expectRevert(TeeVerifier.SnpMigrationAgentNotSupported.selector);
         _verifySnp(report);

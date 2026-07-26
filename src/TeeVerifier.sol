@@ -183,7 +183,7 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice AMD SEV-SNP reports must be requested at VMPL 0.
     error UnsupportedSnpVmpl(uint32 actual);
 
-    /// @notice AMD SEV-SNP REPORT_ID_MA is nonzero.
+    /// @notice AMD SEV-SNP REPORT_ID_MA is not a supported no-association sentinel.
     error SnpMigrationAgentNotSupported();
 
     /// @notice The AMD SEV-SNP report uses an unsupported signature algorithm.
@@ -355,6 +355,18 @@ contract TeeVerifier is ITeeVerifier {
             if (data[offset + i] != bytes1(0)) return true;
         }
         return false;
+    }
+
+    function _isAbsentSnpReportIdMa(bytes memory report) private pure returns (bool) {
+        bool allZero = true;
+        bool allOnes = true;
+        for (uint256 i = 0; i < SNP_REPORT_ID_MA_SIZE; i++) {
+            bytes1 value = report[SNP_REPORT_ID_MA_OFFSET + i];
+            if (value != bytes1(0)) allZero = false;
+            if (value != bytes1(0xff)) allOnes = false;
+            if (!allZero && !allOnes) return false;
+        }
+        return true;
     }
 
     function _readLeUint32(bytes memory data, uint256 offset) private pure returns (uint32 value) {
@@ -585,7 +597,7 @@ contract TeeVerifier is ITeeVerifier {
         if (vmpl != 0) {
             revert UnsupportedSnpVmpl(vmpl);
         }
-        if (_hasNonzeroBytes(attestationReport, SNP_REPORT_ID_MA_OFFSET, SNP_REPORT_ID_MA_SIZE)) {
+        if (!_isAbsentSnpReportIdMa(attestationReport)) {
             revert SnpMigrationAgentNotSupported();
         }
         (bytes32 tcbValues, uint64 platformInfo, uint24 cpuid) = _extractSnpSecurityState(attestationReport, version);
