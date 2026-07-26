@@ -103,6 +103,10 @@ bytes32 actualIssuerHash = keccak256(bytes(iss));
 if (actualIssuerHash != key.issuerHash) {
     revert MaaJwtIssuerMismatch(actualIssuerHash, key.issuerHash);
 }
+// Top-level iat, nbf, and exp are required; nested fields cannot substitute.
+// The same block.timestamp also enforces:
+// nbf < exp, iat < exp, iat <= block.timestamp, and
+// nbf <= block.timestamp < exp.
 ```
 
 Failure mapping:

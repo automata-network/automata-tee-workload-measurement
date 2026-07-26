@@ -68,6 +68,21 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
     /// @notice JWT claims object is missing a required field. fieldNameHash = keccak256(name).
     error MaaJwtClaimMissing(bytes32 fieldNameHash);
 
+    /// @notice A required numeric JWT claim is not a canonical unsigned 64-bit integer.
+    error MaaJwtNumericClaimMalformed(bytes32 fieldNameHash);
+
+    /// @notice The JWT validity interval is empty or its issue time is not before expiry.
+    error MaaJwtValidityWindowInvalid(uint64 issuedAt, uint64 notBefore, uint64 expiresAt);
+
+    /// @notice The JWT cannot be accepted before its `nbf` time.
+    error MaaJwtNotYetValid(uint64 notBefore, uint256 verificationTime);
+
+    /// @notice The JWT cannot be accepted at or after its `exp` time.
+    error MaaJwtExpired(uint64 expiresAt, uint256 verificationTime);
+
+    /// @notice The JWT claims an `iat` later than the verification time.
+    error MaaJwtIssuedInFuture(uint64 issuedAt, uint256 verificationTime);
+
     /// @notice kidHash lookup returned an empty / revoked / expired key
     error MaaKidNotRegistered(bytes32 kidHash);
 
@@ -97,6 +112,9 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
     bytes32 internal constant FIELD_HASH_ALG = keccak256("alg");
     bytes32 internal constant FIELD_HASH_KID = keccak256("kid");
     bytes32 internal constant FIELD_HASH_ISS = keccak256("iss");
+    bytes32 internal constant FIELD_HASH_EXP = keccak256("exp");
+    bytes32 internal constant FIELD_HASH_NBF = keccak256("nbf");
+    bytes32 internal constant FIELD_HASH_IAT = keccak256("iat");
     bytes32 internal constant FIELD_HASH_ATTESTATION_TYPE = keccak256("x-ms-attestation-type");
     bytes32 internal constant FIELD_HASH_COMPLIANCE_STATUS = keccak256("x-ms-compliance-status");
     bytes32 internal constant FIELD_HASH_TDX_REPORT_DATA = keccak256("tdx_report_data");
@@ -190,6 +208,18 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         bytes32 issHash = keccak256(bytes(iss));
         if (issHash != key.issuerHash) revert MaaJwtIssuerMismatch(issHash, key.issuerHash);
 
+        // JWT NumericDate claims use the same block timestamp as the MAA signing-key
+        // validity check above. `exp` is exclusive; `nbf` is inclusive.
+        uint64 expiresAt = _jsonExtractUint64Required(claims, "exp", FIELD_HASH_EXP);
+        uint64 notBefore = _jsonExtractUint64Required(claims, "nbf", FIELD_HASH_NBF);
+        uint64 issuedAt = _jsonExtractUint64Required(claims, "iat", FIELD_HASH_IAT);
+        if (notBefore >= expiresAt || issuedAt >= expiresAt) {
+            revert MaaJwtValidityWindowInvalid(issuedAt, notBefore, expiresAt);
+        }
+        if (block.timestamp < notBefore) revert MaaJwtNotYetValid(notBefore, block.timestamp);
+        if (block.timestamp >= expiresAt) revert MaaJwtExpired(expiresAt, block.timestamp);
+        if (block.timestamp < issuedAt) revert MaaJwtIssuedInFuture(issuedAt, block.timestamp);
+
         // x-ms-attestation-type: must be "tdxvm" or "sevsnpvm". The report_data claim name
         // differs accordingly.
         string memory attestationType =
@@ -236,11 +266,9 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         });
     }
 
-    /// @dev Extracts the string value of a top-level field `"<key>":"..."` from a flat JSON
-    ///      document. MAA claim values we read (iss, attestation-type, compliance-status,
-    ///      report_data hex strings, header kid/alg) are simple ASCII without escapes, and
-    ///      none of them sit inside a nested object — so this naive search is sufficient.
-    /// @param json Flat JSON string
+    /// @dev Extracts the string value of a top-level JSON field. MAA claim values
+    ///      read here are simple ASCII without escapes.
+    /// @param json JSON object
     /// @param fieldKey The key to search for (without quotes)
     /// @param fieldKeyHash keccak256(fieldKey) — reported in the missing-field error so the
     ///        caller can decode which field went missing (see FIELD_HASH_* constants).
@@ -251,22 +279,156 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         bytes32 fieldKeyHash,
         bool headerNotClaims
     ) private pure returns (string memory) {
-        // Search for the literal pattern: "fieldKey":"
-        string memory needle = string(abi.encodePacked('"', fieldKey, '":"'));
-        uint256 pos = LibString.indexOf(json, needle);
-        if (pos == type(uint256).max) {
+        bytes memory raw = bytes(json);
+        uint256 valStart = _jsonFindTopLevelFieldValue(raw, bytes(fieldKey));
+        if (valStart == type(uint256).max || valStart >= raw.length || raw[valStart] != 0x22) {
             if (headerNotClaims) revert MaaJwtHeaderClaimMissing(fieldKeyHash);
             revert MaaJwtClaimMissing(fieldKeyHash);
         }
-        uint256 valStart = pos + bytes(needle).length;
         // Find the closing quote of the value (no escape handling — claims we read are
         // simple ASCII strings without embedded backslashes or quotes).
-        uint256 valEnd = LibString.indexOf(json, '"', valStart);
-        if (valEnd == type(uint256).max) {
+        uint256 valEnd = valStart + 1;
+        while (valEnd < raw.length && raw[valEnd] != 0x22) {
+            if (raw[valEnd] == 0x5c) {
+                if (headerNotClaims) revert MaaJwtHeaderClaimMissing(fieldKeyHash);
+                revert MaaJwtClaimMissing(fieldKeyHash);
+            }
+            unchecked {
+                ++valEnd;
+            }
+        }
+        if (valEnd >= raw.length) {
             if (headerNotClaims) revert MaaJwtHeaderClaimMissing(fieldKeyHash);
             revert MaaJwtClaimMissing(fieldKeyHash);
         }
-        return LibString.slice(json, valStart, valEnd);
+        return LibString.slice(json, valStart + 1, valEnd);
+    }
+
+    /// @dev Extracts a required top-level JWT NumericDate claim. The value must
+    ///      use canonical JSON unsigned-integer syntax and fit in uint64.
+    function _jsonExtractUint64Required(string memory json, string memory fieldKey, bytes32 fieldKeyHash)
+        private
+        pure
+        returns (uint64 value)
+    {
+        bytes memory raw = bytes(json);
+        uint256 cursor = _jsonFindTopLevelFieldValue(raw, bytes(fieldKey));
+        if (cursor == type(uint256).max) revert MaaJwtClaimMissing(fieldKeyHash);
+        if (cursor >= raw.length || uint8(raw[cursor]) < 0x30 || uint8(raw[cursor]) > 0x39) {
+            revert MaaJwtNumericClaimMalformed(fieldKeyHash);
+        }
+
+        uint256 firstDigit = cursor;
+        uint256 parsed;
+        while (cursor < raw.length) {
+            uint8 c = uint8(raw[cursor]);
+            if (c < 0x30 || c > 0x39) break;
+            uint256 digit = c - 0x30;
+            if (parsed > (type(uint64).max - digit) / 10) {
+                revert MaaJwtNumericClaimMalformed(fieldKeyHash);
+            }
+            parsed = parsed * 10 + digit;
+            unchecked {
+                ++cursor;
+            }
+        }
+        if (cursor - firstDigit > 1 && raw[firstDigit] == 0x30) {
+            revert MaaJwtNumericClaimMalformed(fieldKeyHash);
+        }
+        while (cursor < raw.length && _isJsonWhitespace(uint8(raw[cursor]))) {
+            unchecked {
+                ++cursor;
+            }
+        }
+        if (cursor >= raw.length || (raw[cursor] != 0x2c && raw[cursor] != 0x7d)) {
+            revert MaaJwtNumericClaimMalformed(fieldKeyHash);
+        }
+        // Safe because the accumulation loop rejects every value above uint64.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint64(parsed);
+    }
+
+    /// @dev Returns the first byte of a top-level field value. Nested objects,
+    ///      nested arrays, string contents, and escaped string bytes cannot
+    ///      supply a top-level claim.
+    function _jsonFindTopLevelFieldValue(bytes memory json, bytes memory fieldKey) private pure returns (uint256) {
+        uint256 depth;
+        uint256 cursor;
+        while (cursor < json.length) {
+            uint8 c = uint8(json[cursor]);
+            if (c == 0x22) {
+                uint256 keyStart = cursor + 1;
+                cursor = keyStart;
+                bool escaped;
+                while (cursor < json.length) {
+                    c = uint8(json[cursor]);
+                    if (c == 0x5c) {
+                        escaped = true;
+                        cursor += 2;
+                        continue;
+                    }
+                    if (c == 0x22) break;
+                    unchecked {
+                        ++cursor;
+                    }
+                }
+                if (cursor >= json.length) return type(uint256).max;
+                uint256 keyEnd = cursor;
+                unchecked {
+                    ++cursor;
+                }
+                while (cursor < json.length && _isJsonWhitespace(uint8(json[cursor]))) {
+                    unchecked {
+                        ++cursor;
+                    }
+                }
+                if (
+                    !escaped && depth == 1 && cursor < json.length && json[cursor] == 0x3a
+                        && _jsonRangeEquals(json, keyStart, keyEnd, fieldKey)
+                ) {
+                    unchecked {
+                        ++cursor;
+                    }
+                    while (cursor < json.length && _isJsonWhitespace(uint8(json[cursor]))) {
+                        unchecked {
+                            ++cursor;
+                        }
+                    }
+                    return cursor;
+                }
+                continue;
+            }
+            if (c == 0x7b || c == 0x5b) {
+                unchecked {
+                    ++depth;
+                }
+            } else if (c == 0x7d || c == 0x5d) {
+                if (depth == 0) return type(uint256).max;
+                unchecked {
+                    --depth;
+                }
+            }
+            unchecked {
+                ++cursor;
+            }
+        }
+        return type(uint256).max;
+    }
+
+    function _jsonRangeEquals(bytes memory json, uint256 start, uint256 end, bytes memory expected)
+        private
+        pure
+        returns (bool)
+    {
+        if (end - start != expected.length) return false;
+        for (uint256 i = 0; i < expected.length; i++) {
+            if (json[start + i] != expected[i]) return false;
+        }
+        return true;
+    }
+
+    function _isJsonWhitespace(uint8 c) private pure returns (bool) {
+        return c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d;
     }
 
     /// @dev Hex-decodes a 128-character ASCII hex string into a (bindingHash, paddingZero) pair.

@@ -296,6 +296,10 @@ Verification steps:
 5. Verify the RS256 signature on `header || "." || claims` against the registered PKCS#1 RSA-2048 pubkey using `SignatureVerifier.verify`.
 6. Base64url-decode the claims; parse JSON; assert:
    - `iss` matches `key.issuerHash`
+   - top-level `iat`, `nbf`, and `exp` are canonical unsigned 64-bit JSON integers;
+     nested fields cannot substitute for them
+   - `nbf < exp`, `iat < exp`, `iat <= block.timestamp`, and
+     `nbf <= block.timestamp < exp`
    - `x-ms-attestation-type` in `{"tdxvm", "sevsnpvm"}`
    - `x-ms-compliance-status == "azure-compliant-cvm"`
 7. Extract the report-data claim (`tdx_report_data` for TDX, `x-ms-sevsnpvm-reportdata` for SNP); hex-decode first 32 bytes as `bindingHash`; assert next 32 bytes decode to zero.
@@ -325,6 +329,11 @@ Binding: `bindingHash = bytes32(0)`. AK is bound to TEE via PCR15 computation (v
 | `MaaJwtAlgUnsupported()` | JWT header `alg` is not `"RS256"` |
 | `MaaJwtHeaderClaimMissing()` | JWT header is missing `kid` or `alg` |
 | `MaaJwtClaimMissing()` | JWT claims is missing a required field |
+| `MaaJwtNumericClaimMalformed(bytes32 fieldNameHash)` | `iat`, `nbf`, or `exp` is not a canonical unsigned 64-bit JSON integer |
+| `MaaJwtValidityWindowInvalid(uint64 issuedAt, uint64 notBefore, uint64 expiresAt)` | `nbf >= exp` or `iat >= exp` |
+| `MaaJwtNotYetValid(uint64 notBefore, uint256 verificationTime)` | `block.timestamp < nbf` |
+| `MaaJwtExpired(uint64 expiresAt, uint256 verificationTime)` | `block.timestamp >= exp` |
+| `MaaJwtIssuedInFuture(uint64 issuedAt, uint256 verificationTime)` | `block.timestamp < iat` |
 | `MaaKidNotRegistered(bytes32 kidHash)` | `kidHash` lookup in MAA Signing Key Registry returned an empty / revoked / expired key |
 | `MaaJwtIssuerMismatch(bytes32 actual, bytes32 expected)` | `iss` claim hash does not equal `key.issuerHash` |
 | `MaaJwtComplianceFailed()` | `x-ms-compliance-status` ≠ `"azure-compliant-cvm"`, or `x-ms-attestation-type` ∉ `{"tdxvm","sevsnpvm"}` |
