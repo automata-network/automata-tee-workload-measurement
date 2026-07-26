@@ -36,8 +36,12 @@ contract TeeVerifierSnpTest is Test {
     /// @dev A deterministic, structurally valid, full-size SEV-SNP report.
     function _report() internal pure returns (bytes memory r) {
         r = new bytes(1184);
-        r[0] = bytes1(uint8(2)); // VERSION = 2, little-endian
+        r[0] = bytes1(uint8(3)); // VERSION = 3, little-endian
         r[10] = bytes1(uint8(2)); // POLICY reserved bit 17 must be one
+        r[0x34] = bytes1(uint8(1)); // ECDSA P-384 with SHA-384
+        r[0x188] = bytes1(uint8(0x19)); // CPUID family
+        r[0x189] = bytes1(uint8(0x11)); // CPUID model
+        r[0x18a] = bytes1(uint8(0x01)); // CPUID stepping
     }
 
     /// @dev The SDK's *packed* zkVM public journal (matches SEVAgentAttestation._parseJournal), with
@@ -90,6 +94,9 @@ contract TeeVerifierSnpTest is Test {
         assertEq(uint8(res.teeType), uint8(TEEType.AmdSevSnp));
         assertEq(res.enabledTeeAttributes, 0);
         assertEq(res.intelTdxTcbStatusBit, 0);
+        assertEq(res.amdSevSnpTcbValues, bytes32(0));
+        assertEq(res.amdSevSnpPlatformInfo, 0);
+        assertEq(res.amdSevSnpCpuid, 0x191101);
         // _verifyAmdSevSnp returns the full bound report as reportData.
         assertEq(res.reportData, report);
     }
@@ -127,6 +134,21 @@ contract TeeVerifierSnpTest is Test {
         );
     }
 
+    function test_snp_extracts_tcb_platform_info_and_cpuid() public {
+        bytes memory report = _report();
+        _setRawTcb(report, 0x38, 5, 1, 30, 223);
+        _setRawTcb(report, 0x180, 4, 0, 29, 222);
+        _setRawTcb(report, 0x1e0, 4, 1, 29, 222);
+        _setRawTcb(report, 0x1f0, 3, 0, 28, 221);
+        _setLeUint64(report, 0x40, 0x21);
+
+        TeeVerificationResult memory result = _verifySnp(report);
+
+        assertEq(result.amdSevSnpTcbValues, 0x00000000df1e010500000000de1d000400000000de1d010400000000dd1c0003);
+        assertEq(result.amdSevSnpPlatformInfo, 0x21);
+        assertEq(result.amdSevSnpCpuid, 0x191101);
+    }
+
     function test_snp_rejects_non_exact_report_length() public {
         bytes memory report = new bytes(1183);
 
@@ -139,6 +161,14 @@ contract TeeVerifierSnpTest is Test {
         _setLeUint32(report, 0, 6);
 
         vm.expectRevert(abi.encodeWithSelector(TeeVerifier.UnsupportedSnpReportVersion.selector, 6));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_version_two_without_signed_cpuid() public {
+        bytes memory report = _report();
+        _setLeUint32(report, 0, 2);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.UnsupportedSnpReportVersion.selector, 2));
         _verifySnp(report);
     }
 
@@ -173,6 +203,98 @@ contract TeeVerifierSnpTest is Test {
 
         vm.expectRevert(TeeVerifier.SnpMigrationAgentNotSupported.selector);
         _verifySnp(report);
+    }
+
+    function test_snp_rejects_invalid_signature_and_signing_key_fields() public {
+        bytes memory report = _report();
+        _setLeUint32(report, 0x34, 0);
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpSignatureAlgorithm.selector, 0));
+        _verifySnp(report);
+
+        report = _report();
+        _setLeUint32(report, 0x48, uint32(2) << 2);
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpKeySettings.selector, uint32(2) << 2));
+        _verifySnp(report);
+
+        report = _report();
+        _setLeUint32(report, 0x48, 2);
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpKeySettings.selector, 2));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_reserved_tcb_platform_and_report_fields() public {
+        bytes memory report = _report();
+        report[0x3a] = bytes1(uint8(1));
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpTcb.selector, 0x38, uint64(1) << 16));
+        _verifySnp(report);
+
+        report = _report();
+        _setLeUint64(report, 0x40, uint64(1) << 7);
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpPlatformInfo.selector, uint64(1) << 7));
+        _verifySnp(report);
+
+        report = _report();
+        report[0x4c] = bytes1(uint8(1));
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpReservedField.selector, 0x4c));
+        _verifySnp(report);
+
+        report = _report();
+        report[0x18b] = bytes1(uint8(1));
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpReservedField.selector, 0x18b));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_unsupported_cpuid() public {
+        bytes memory report = _report();
+        report[0x189] = bytes1(uint8(0x20));
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.UnsupportedSnpCpuid.selector, 0x192001));
+        _verifySnp(report);
+    }
+
+    function test_snp_rejects_invalid_tcb_order_but_does_not_order_launch_tcb() public {
+        bytes memory report = _report();
+        _setRawTcb(report, 0x180, 5, 0, 0, 0);
+        _setRawTcb(report, 0x1e0, 4, 0, 0, 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(TeeVerifier.InvalidSnpTcbOrder.selector, bytes32(uint256(5)), bytes32(uint256(4)))
+        );
+        _verifySnp(report);
+
+        report = _report();
+        _setRawTcb(report, 0x1f0, type(uint8).max, type(uint8).max, type(uint8).max, type(uint8).max);
+        _verifySnp(report);
+    }
+
+    function test_snp_applies_version_aware_mitigation_vector_rules() public {
+        bytes memory report = _report();
+        report[0x1f8] = bytes1(uint8(1));
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpReservedField.selector, 0x1f8));
+        _verifySnp(report);
+
+        report = _report();
+        _setLeUint32(report, 0, 5);
+        report[0x1f8] = bytes1(uint8(1));
+        report[0x200] = bytes1(uint8(1));
+        _verifySnp(report);
+
+        report[0x208] = bytes1(uint8(1));
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpReservedField.selector, 0x208));
+        _verifySnp(report);
+    }
+
+    function _setRawTcb(
+        bytes memory report,
+        uint256 offset,
+        uint8 bootloader,
+        uint8 tee,
+        uint8 snpVersion,
+        uint8 microcode
+    ) private pure {
+        report[offset] = bytes1(bootloader);
+        report[offset + 1] = bytes1(tee);
+        report[offset + 6] = bytes1(snpVersion);
+        report[offset + 7] = bytes1(microcode);
     }
 
     /// @dev Session-ID binding: getTeeReportHash reads the trailing 32 bytes of the packed journal,
@@ -220,6 +342,9 @@ contract TeeVerifierSnpTest is Test {
         assertEq(uint8(result.teeType), uint8(TEEType.IntelTDX));
         assertEq(result.enabledTeeAttributes, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT);
         assertEq(result.intelTdxTcbStatusBit, 1);
+        assertEq(result.amdSevSnpTcbValues, bytes32(0));
+        assertEq(result.amdSevSnpPlatformInfo, 0);
+        assertEq(result.amdSevSnpCpuid, 0);
     }
 
     function test_tdx_rejects_invalid_reserved_attribute_bit() public {

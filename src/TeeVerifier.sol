@@ -15,8 +15,10 @@ import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
 import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
-    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT,
+    SNP_PLATFORM_INFO_SUPPORTED_MASK
 } from "./types/Constants.sol";
+import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
 
 /// @title TeeVerifier
 /// @notice Standalone contract for verifying TEE attestation reports across multiple backends
@@ -28,7 +30,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Contract version
-    string public constant TEE_VERIFIER_VERSION = "1.2.0";
+    string public constant TEE_VERIFIER_VERSION = "1.3.0";
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
@@ -104,8 +106,25 @@ contract TeeVerifier is ITeeVerifier {
     uint256 private constant SNP_VERSION_OFFSET = 0x00;
     uint256 private constant SNP_POLICY_OFFSET = 0x08;
     uint256 private constant SNP_VMPL_OFFSET = 0x30;
+    uint256 private constant SNP_SIGNATURE_ALGORITHM_OFFSET = 0x34;
+    uint256 private constant SNP_CURRENT_TCB_OFFSET = 0x38;
+    uint256 private constant SNP_PLATFORM_INFO_OFFSET = 0x40;
+    uint256 private constant SNP_KEY_SETTINGS_OFFSET = 0x48;
+    uint256 private constant SNP_RESERVED_1_OFFSET = 0x4c;
+    uint256 private constant SNP_REPORTED_TCB_OFFSET = 0x180;
+    uint256 private constant SNP_CPUID_OFFSET = 0x188;
+    uint256 private constant SNP_CPUID_RESERVED_OFFSET = 0x18b;
+    uint256 private constant SNP_CPUID_RESERVED_SIZE = 21;
+    uint256 private constant SNP_COMMITTED_TCB_OFFSET = 0x1e0;
+    uint256 private constant SNP_CURRENT_VERSION_RESERVED_OFFSET = 0x1eb;
+    uint256 private constant SNP_COMMITTED_VERSION_RESERVED_OFFSET = 0x1ef;
+    uint256 private constant SNP_LAUNCH_TCB_OFFSET = 0x1f0;
+    uint256 private constant SNP_LAUNCH_MITIGATION_VECTOR_OFFSET = 0x1f8;
+    uint256 private constant SNP_CURRENT_MITIGATION_VECTOR_END = 0x208;
+    uint256 private constant SNP_SIGNATURE_OFFSET = 0x2a0;
     uint256 private constant SNP_REPORT_ID_MA_OFFSET = 0x160;
     uint256 private constant SNP_REPORT_ID_MA_SIZE = 32;
+    uint32 private constant SNP_SIGNATURE_ALGORITHM_ECDSA_P384_SHA384 = 1;
     uint64 private constant SNP_POLICY_RESERVED_ONE = uint64(1) << 17;
     uint64 private constant SNP_POLICY_MIGRATE_MA = uint64(1) << 18;
     uint64 private constant SNP_POLICY_DEBUG = uint64(1) << 19;
@@ -166,6 +185,27 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice AMD SEV-SNP REPORT_ID_MA is nonzero.
     error SnpMigrationAgentNotSupported();
+
+    /// @notice The AMD SEV-SNP report uses an unsupported signature algorithm.
+    error InvalidSnpSignatureAlgorithm(uint32 actual);
+
+    /// @notice The AMD SEV-SNP report uses invalid signing-key settings.
+    error InvalidSnpKeySettings(uint32 actual);
+
+    /// @notice An AMD SEV-SNP field that must be zero contains nonzero bytes.
+    error InvalidSnpReservedField(uint256 offset);
+
+    /// @notice An AMD SEV-SNP TCB value has nonzero reserved or unsupported fields.
+    error InvalidSnpTcb(uint256 offset, uint64 actual);
+
+    /// @notice The AMD SEV-SNP PLATFORM_INFO field contains unsupported bits.
+    error InvalidSnpPlatformInfo(uint64 actual);
+
+    /// @notice The AMD SEV-SNP CPUID does not identify a supported Milan or Genoa processor.
+    error UnsupportedSnpCpuid(uint24 actual);
+
+    /// @notice The signed AMD SEV-SNP TCB values have an invalid security-version order.
+    error InvalidSnpTcbOrder(bytes32 lower, bytes32 upper);
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -329,6 +369,82 @@ contract TeeVerifier is ITeeVerifier {
             | (uint64(uint8(data[offset + 6])) << 48) | (uint64(uint8(data[offset + 7])) << 56);
     }
 
+    function _normalizeSnpTcb(bytes memory report, uint256 offset) private pure returns (uint64 normalized) {
+        uint64 raw = _readLeUint64(report, offset);
+        if (
+            uint8(report[offset + 2]) != 0 || uint8(report[offset + 3]) != 0 || uint8(report[offset + 4]) != 0
+                || uint8(report[offset + 5]) != 0
+        ) {
+            revert InvalidSnpTcb(offset, raw);
+        }
+        normalized = uint64(uint8(report[offset])) | (uint64(uint8(report[offset + 1])) << 8)
+            | (uint64(uint8(report[offset + 6])) << 16) | (uint64(uint8(report[offset + 7])) << 24);
+    }
+
+    function _extractSnpSecurityState(bytes memory report, uint32 version)
+        private
+        pure
+        returns (bytes32 tcbValues, uint64 platformInfo, uint24 cpuid)
+    {
+        uint32 signatureAlgorithm = _readLeUint32(report, SNP_SIGNATURE_ALGORITHM_OFFSET);
+        if (signatureAlgorithm != SNP_SIGNATURE_ALGORITHM_ECDSA_P384_SHA384) {
+            revert InvalidSnpSignatureAlgorithm(signatureAlgorithm);
+        }
+
+        uint32 keySettings = _readLeUint32(report, SNP_KEY_SETTINGS_OFFSET);
+        uint32 signingKey = (keySettings >> 2) & 7;
+        if ((keySettings >> 5) != 0 || signingKey > 1 || (keySettings & 2) != 0) {
+            revert InvalidSnpKeySettings(keySettings);
+        }
+        if (_hasNonzeroBytes(report, SNP_RESERVED_1_OFFSET, 4)) {
+            revert InvalidSnpReservedField(SNP_RESERVED_1_OFFSET);
+        }
+
+        platformInfo = _readLeUint64(report, SNP_PLATFORM_INFO_OFFSET);
+        if ((platformInfo & ~SNP_PLATFORM_INFO_SUPPORTED_MASK) != 0) {
+            revert InvalidSnpPlatformInfo(platformInfo);
+        }
+
+        uint8 family = uint8(report[SNP_CPUID_OFFSET]);
+        uint8 model = uint8(report[SNP_CPUID_OFFSET + 1]);
+        uint8 stepping = uint8(report[SNP_CPUID_OFFSET + 2]);
+        cpuid = (uint24(family) << 16) | (uint24(model) << 8) | uint24(stepping);
+        if (family != 0x19 || model > 0x1f) {
+            revert UnsupportedSnpCpuid(cpuid);
+        }
+        if (_hasNonzeroBytes(report, SNP_CPUID_RESERVED_OFFSET, SNP_CPUID_RESERVED_SIZE)) {
+            revert InvalidSnpReservedField(SNP_CPUID_RESERVED_OFFSET);
+        }
+        if (
+            report[SNP_CURRENT_VERSION_RESERVED_OFFSET] != bytes1(0)
+                || report[SNP_COMMITTED_VERSION_RESERVED_OFFSET] != bytes1(0)
+        ) {
+            revert InvalidSnpReservedField(report[SNP_CURRENT_VERSION_RESERVED_OFFSET] != bytes1(0)
+                    ? SNP_CURRENT_VERSION_RESERVED_OFFSET
+                    : SNP_COMMITTED_VERSION_RESERVED_OFFSET);
+        }
+
+        uint64 currentTcb = _normalizeSnpTcb(report, SNP_CURRENT_TCB_OFFSET);
+        uint64 reportedTcb = _normalizeSnpTcb(report, SNP_REPORTED_TCB_OFFSET);
+        uint64 committedTcb = _normalizeSnpTcb(report, SNP_COMMITTED_TCB_OFFSET);
+        uint64 launchTcb = _normalizeSnpTcb(report, SNP_LAUNCH_TCB_OFFSET);
+        if (!AmdSnpPolicy.tcbMeetsMinimum(bytes32(uint256(committedTcb)), bytes32(uint256(reportedTcb)))) {
+            revert InvalidSnpTcbOrder(bytes32(uint256(reportedTcb)), bytes32(uint256(committedTcb)));
+        }
+        if (!AmdSnpPolicy.tcbMeetsMinimum(bytes32(uint256(currentTcb)), bytes32(uint256(committedTcb)))) {
+            revert InvalidSnpTcbOrder(bytes32(uint256(committedTcb)), bytes32(uint256(currentTcb)));
+        }
+        tcbValues = bytes32(
+            (uint256(currentTcb) << 192) | (uint256(reportedTcb) << 128) | (uint256(committedTcb) << 64)
+                | uint256(launchTcb)
+        );
+
+        uint256 reservedOffset = version < 5 ? SNP_LAUNCH_MITIGATION_VECTOR_OFFSET : SNP_CURRENT_MITIGATION_VECTOR_END;
+        if (_hasNonzeroBytes(report, reservedOffset, SNP_SIGNATURE_OFFSET - reservedOffset)) {
+            revert InvalidSnpReservedField(reservedOffset);
+        }
+    }
+
     /// @dev Extracts the full SNP attestation report from journal
     /// @param rawReport The SNP raw report bytes from VerifierJournal (already the full report)
     /// @return attestationReport The attestation report (validated and returned directly)
@@ -415,7 +531,10 @@ contract TeeVerifier is ITeeVerifier {
             reportData: quoteBody,
             teeType: TEEType.IntelTDX,
             enabledTeeAttributes: enabledTeeAttributes,
-            intelTdxTcbStatusBit: tcbStatusBit
+            intelTdxTcbStatusBit: tcbStatusBit,
+            amdSevSnpTcbValues: bytes32(0),
+            amdSevSnpPlatformInfo: 0,
+            amdSevSnpCpuid: 0
         });
     }
 
@@ -453,7 +572,7 @@ contract TeeVerifier is ITeeVerifier {
 
         bytes memory attestationReport = extractSnpAttestationReport(zkProof.rawReport);
         uint32 version = _readLeUint32(attestationReport, SNP_VERSION_OFFSET);
-        if (version < 2 || version > 5) {
+        if (version < 3 || version > 5) {
             revert UnsupportedSnpReportVersion(version);
         }
 
@@ -469,6 +588,7 @@ contract TeeVerifier is ITeeVerifier {
         if (_hasNonzeroBytes(attestationReport, SNP_REPORT_ID_MA_OFFSET, SNP_REPORT_ID_MA_SIZE)) {
             revert SnpMigrationAgentNotSupported();
         }
+        (bytes32 tcbValues, uint64 platformInfo, uint24 cpuid) = _extractSnpSecurityState(attestationReport, version);
 
         uint256 enabledTeeAttributes;
         if ((policy & SNP_POLICY_DEBUG) != 0) {
@@ -483,7 +603,10 @@ contract TeeVerifier is ITeeVerifier {
             reportData: attestationReport,
             teeType: TEEType.AmdSevSnp,
             enabledTeeAttributes: enabledTeeAttributes,
-            intelTdxTcbStatusBit: 0
+            intelTdxTcbStatusBit: 0,
+            amdSevSnpTcbValues: tcbValues,
+            amdSevSnpPlatformInfo: platformInfo,
+            amdSevSnpCpuid: cpuid
         });
     }
 }

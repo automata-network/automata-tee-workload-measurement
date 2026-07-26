@@ -101,6 +101,14 @@ struct TeeVerificationResult {
     uint256 enabledTeeAttributes;
     /// @dev One-hot Intel DCAP TCB status. Zero for non-Intel TDX reports.
     uint256 intelTdxTcbStatusBit;
+    /// @dev Packed AMD SEV-SNP CURRENT, REPORTED, COMMITTED, and LAUNCH TCB values.
+    ///      Zero for non-AMD SEV-SNP reports.
+    bytes32 amdSevSnpTcbValues;
+    /// @dev Verified AMD SEV-SNP PLATFORM_INFO field. Zero for non-AMD SEV-SNP reports.
+    uint64 amdSevSnpPlatformInfo;
+    /// @dev Verified AMD SEV-SNP CPUID as family || model || stepping.
+    ///      Zero for non-AMD SEV-SNP reports.
+    uint24 amdSevSnpCpuid;
 }
 
 /// @notice TPM report for platform binding verification
