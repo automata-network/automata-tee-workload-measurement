@@ -7,6 +7,7 @@ import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
 import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
 import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
@@ -63,6 +64,7 @@ contract SessionRegistryTest is Test {
     TeeVerifier public teeVerifier;
     MaaKeyRegistry public maaKeyRegistry;
     AkCollateralVerifier public akCollateralVerifier;
+    AmdSnpSecurityPolicyRegistry public amdSnpSecurityPolicyRegistry;
 
     address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
     address constant owner = address(0x1234);
@@ -122,9 +124,21 @@ contract SessionRegistryTest is Test {
         // Deploy AK collateral verifier separately so SessionRegistry remains under EIP-170.
         akCollateralVerifier = new AkCollateralVerifier(maaKeyRegistry, signatureVerifier, tpmAttestation);
 
+        AmdSnpSecurityPolicyRegistry amdSnpPolicyImpl = new AmdSnpSecurityPolicyRegistry();
+        ERC1967Proxy amdSnpPolicyProxy = new ERC1967Proxy(
+            address(amdSnpPolicyImpl), abi.encodeCall(AmdSnpSecurityPolicyRegistry.initialize, (owner))
+        );
+        amdSnpSecurityPolicyRegistry = AmdSnpSecurityPolicyRegistry(address(amdSnpPolicyProxy));
+
         // Deploy SessionRegistry implementation
         SessionRegistry impl = new SessionRegistry(
-            teeVerifier, tpmAttestation, signatureVerifier, akCollateralVerifier, baseImageRegistry, workloadRegistry
+            teeVerifier,
+            tpmAttestation,
+            signatureVerifier,
+            akCollateralVerifier,
+            baseImageRegistry,
+            workloadRegistry,
+            amdSnpSecurityPolicyRegistry
         );
 
         // Deploy behind ERC1967 proxy. The proxy address MUST be 0xc2cfa7345c4ec6daee4d82136ebd3483c65ef650

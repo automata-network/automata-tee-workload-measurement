@@ -15,26 +15,33 @@ library AmdSnpPolicy {
     /// @dev Each 64-bit lane currently permits bootloader, TEE, SNP, and microcode.
     ///      The FMC byte and all upper reserved bits must remain zero until Turin is supported.
     function validateTcb(bytes32 packedTcb) internal pure {
+        if (!isValidTcb(packedTcb)) revert InvalidAmdSnpTcbValue(packedTcb);
+    }
+
+    function isValidTcb(bytes32 packedTcb) internal pure returns (bool) {
         uint256 packed = uint256(packedTcb);
         for (uint256 shift = 0; shift < 256; shift += 64) {
             uint64 lane = uint64((packed >> shift) & TCB_LANE_MASK);
             if ((lane & ~TCB_SUPPORTED_COMPONENT_MASK) != 0) {
-                revert InvalidAmdSnpTcbValue(packedTcb);
+                return false;
             }
         }
+        return true;
     }
 
     /// @notice Validates the packed required-set and required-clear PLATFORM_INFO masks.
     function validatePlatformInfoPolicy(bytes32 packedPolicy) internal pure {
+        if (!isValidPlatformInfoPolicy(packedPolicy)) {
+            revert InvalidAmdSnpPlatformInfoPolicy(packedPolicy);
+        }
+    }
+
+    function isValidPlatformInfoPolicy(bytes32 packedPolicy) internal pure returns (bool) {
         uint256 packed = uint256(packedPolicy);
         uint64 requiredSet = uint64(packed);
         uint64 requiredClear = uint64(packed >> 64);
-        if (
-            (packed >> 128) != 0 || (requiredSet & ~SNP_PLATFORM_INFO_SUPPORTED_MASK) != 0
-                || (requiredClear & ~SNP_PLATFORM_INFO_SUPPORTED_MASK) != 0 || (requiredSet & requiredClear) != 0
-        ) {
-            revert InvalidAmdSnpPlatformInfoPolicy(packedPolicy);
-        }
+        return (packed >> 128) == 0 && (requiredSet & ~SNP_PLATFORM_INFO_SUPPORTED_MASK) == 0
+            && (requiredClear & ~SNP_PLATFORM_INFO_SUPPORTED_MASK) == 0 && (requiredSet & requiredClear) == 0;
     }
 
     /// @notice Returns the component-wise maximum of two packed four-lane TCB values.

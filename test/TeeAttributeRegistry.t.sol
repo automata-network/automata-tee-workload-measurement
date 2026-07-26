@@ -22,6 +22,8 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TDX_TCB_STATUS_OK,
     TDX_TCB_STATUS_CONFIGURABLE_MASK,
     TEE_ATTRIBUTE_FALSE,
@@ -57,6 +59,14 @@ contract TeeAttributeRegistryTest is Test {
         assertEq(
             TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
             bytes32(0xbc505eab3cf5643bdf24f1dee86998cd93d05a297e4c34f5e8f37bba764a8116)
+        );
+        assertEq(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+            bytes32(0x15647616165618c3cfed2ab7f083f2f7eef7f57519e43d97ab220ff7860157d2)
+        );
+        assertEq(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+            bytes32(0x279fd9a317a2dc8dfeea12391ea795ac6c21ff52977c499f910f07a27afbed7d)
         );
         assertEq(TEE_ATTRIBUTE_FALSE, bytes32(0));
         assertEq(TEE_ATTRIBUTE_TRUE, bytes32(uint256(1)));
@@ -117,6 +127,42 @@ contract TeeAttributeRegistryTest is Test {
             new Attribute[](0),
             _attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK))
         );
+    }
+
+    function test_amd_snp_packed_policies_are_not_allowed_in_measurement_variants() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+        bytes32[2] memory keys = [TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY];
+        for (uint256 i = 0; i < keys.length; i++) {
+            vm.expectRevert(
+                abi.encodeWithSelector(BaseImageRegistry.TeeAttributeNotAllowedInMeasurementVariant.selector, keys[i])
+            );
+            _addPlatformVariant(baseImageId, "test-platform", new Attribute[](0), _attributes(keys[i], bytes32(0)));
+        }
+    }
+
+    function test_base_image_accepts_and_validates_amd_snp_packed_attributes() public {
+        bytes32 validTcb = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
+        bytes32 validPlatformInfo = bytes32(uint256(0x20) | (uint256(1) << 64));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, validTcb));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, validPlatformInfo));
+
+        bytes32 invalidTcb = bytes32(uint256(1) << 32);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, invalidTcb
+            )
+        );
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, invalidTcb));
+
+        bytes32 conflictingPlatformInfo = bytes32(uint256(1) | (uint256(1) << 64));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+                conflictingPlatformInfo
+            )
+        );
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, conflictingPlatformInfo));
     }
 
     function test_add_platform_variants_rejects_relaxed_tdx_tcb_mask_on_new_profile() public {
@@ -272,6 +318,28 @@ contract TeeAttributeRegistryTest is Test {
         _expectRequirementValue(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(0)), bytes32(0));
         _expectRequirementValue(
             TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(uint256(0x401))), bytes32(uint256(0x401))
+        );
+    }
+
+    function test_workload_accepts_and_validates_amd_snp_packed_requirements() public {
+        bytes32 validTcb = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
+        bytes32 validPlatformInfo = bytes32(uint256(0x20) | (uint256(1) << 64));
+        _registerWorkload(_requirements(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, _singleValue(validTcb)));
+        _registerWorkload(
+            _requirements(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, _singleValue(validPlatformInfo))
+        );
+
+        _expectRequirementLength(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, new bytes32[](0), 0);
+        _expectRequirementLength(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, _pairValues(validPlatformInfo, validPlatformInfo), 2
+        );
+        _expectRequirementValue(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, _singleValue(bytes32(uint256(1) << 32)), bytes32(uint256(1) << 32)
+        );
+        _expectRequirementValue(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+            _singleValue(bytes32(uint256(1) | (uint256(1) << 64))),
+            bytes32(uint256(1) | (uint256(1) << 64))
         );
     }
 

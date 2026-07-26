@@ -17,6 +17,8 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TDX_TCB_STATUS_OK,
     TDX_TCB_STATUS_CONFIGURABLE_MASK,
     TEE_ATTRIBUTE_TRUE
@@ -24,6 +26,7 @@ import {
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
+import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -307,6 +310,20 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
                 }
                 uint256 mask = uint256(allowedValues[0]);
                 if ((mask & TDX_TCB_STATUS_OK) == 0 || (mask & ~TDX_TCB_STATUS_CONFIGURABLE_MASK) != 0) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[0]);
+                }
+            } else if (
+                key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM || key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
+            ) {
+                bytes32[] calldata allowedValues = requirements[i].allowedValues;
+                if (allowedValues.length != 1) {
+                    revert InvalidTeeAttributeRequirementLength(key, allowedValues.length);
+                }
+                if (
+                    (key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM && !AmdSnpPolicy.isValidTcb(allowedValues[0]))
+                        || (key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
+                            && !AmdSnpPolicy.isValidPlatformInfoPolicy(allowedValues[0]))
+                ) {
                     revert InvalidTeeAttributeRequirementValue(key, allowedValues[0]);
                 }
             } else if (

@@ -11,9 +11,12 @@ import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.s
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
+import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
+import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {MockSignatureVerifier} from "../src/mock/MockSignatureVerifier.sol";
 import {
@@ -56,6 +59,7 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT,
@@ -103,6 +107,7 @@ contract SessionLifecycleTest is Test {
     MockSignatureVerifier private signatureVerifier;
     BaseImageRegistry private baseImageRegistry;
     WorkloadRegistry private workloadRegistry;
+    AmdSnpSecurityPolicyRegistry private amdSnpSecurityPolicyRegistry;
     SessionRegistry private sessionRegistry;
 
     PublicIdentity private ownerIdentity;
@@ -124,13 +129,26 @@ contract SessionLifecycleTest is Test {
         signatureVerifier = new MockSignatureVerifier();
         baseImageRegistry = new BaseImageRegistry(signatureVerifier);
         workloadRegistry = new WorkloadRegistry(signatureVerifier);
+        AmdSnpSecurityPolicyRegistry amdPolicyImplementation = new AmdSnpSecurityPolicyRegistry();
+        amdSnpSecurityPolicyRegistry = AmdSnpSecurityPolicyRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(amdPolicyImplementation),
+                    abi.encodeCall(AmdSnpSecurityPolicyRegistry.initialize, (address(this)))
+                )
+            )
+        );
+        AmdSnpSecurityPolicyUpdate[] memory amdPolicies = new AmdSnpSecurityPolicyUpdate[](1);
+        amdPolicies[0] = AmdSnpSecurityPolicyUpdate(0x191101, 1, true, bytes32(0), bytes32(0));
+        amdSnpSecurityPolicyRegistry.updatePolicies(amdPolicies, keccak256("test-policy"));
         sessionRegistry = new SessionRegistry(
             ITeeVerifier(TEE_VERIFIER),
             ITpmAttestation(TPM_ATTESTATION),
             ISignatureVerifier(address(signatureVerifier)),
             IAkCollateralVerifier(AK_COLLATERAL_VERIFIER),
             baseImageRegistry,
-            workloadRegistry
+            workloadRegistry,
+            amdSnpSecurityPolicyRegistry
         );
 
         oldPolicy = _registerPolicy("base-v1", "workload-v1", 1 days);
@@ -608,7 +626,10 @@ contract SessionLifecycleTest is Test {
                                 reportData: "",
                                 teeType: teeType,
                                 enabledTeeAttributes: actual ? bits[keyIndex] : 0,
-                                intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
+                                intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
+                                amdSevSnpTcbValues: bytes32(0),
+                                amdSevSnpPlatformInfo: 0,
+                                amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0
                             })
                         );
 
@@ -708,7 +729,10 @@ contract SessionLifecycleTest is Test {
                 reportData: "",
                 teeType: TEEType.IntelTDX,
                 enabledTeeAttributes: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
-                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: 0
             })
         );
 
@@ -746,7 +770,10 @@ contract SessionLifecycleTest is Test {
                             reportData: "",
                             teeType: TEEType.IntelTDX,
                             enabledTeeAttributes: 0,
-                            intelTdxTcbStatusBit: actualStatus
+                            intelTdxTcbStatusBit: actualStatus,
+                            amdSevSnpTcbValues: bytes32(0),
+                            amdSevSnpPlatformInfo: 0,
+                            amdSevSnpCpuid: 0
                         })
                     );
 
@@ -806,7 +833,10 @@ contract SessionLifecycleTest is Test {
                 reportData: "",
                 teeType: TEEType.AmdSevSnp,
                 enabledTeeAttributes: 0,
-                intelTdxTcbStatusBit: 0
+                intelTdxTcbStatusBit: 0,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: 0x191101
             })
         );
 
@@ -821,6 +851,79 @@ contract SessionLifecycleTest is Test {
             hex"01"
         );
         assertTrue(sessionRegistry.isSessionActive(sessionId));
+    }
+
+    function testAmdSnpGlobalTcbPolicyRunsDuringFullRegistration() public {
+        bytes32 minimumTcb = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
+        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
+        updates[0] = AmdSnpSecurityPolicyUpdate(0x191101, 2, true, minimumTcb, bytes32(0));
+        amdSnpSecurityPolicyRegistry.updatePolicies(updates, keccak256("full-registration-policy"));
+
+        AttestationEvidence memory evidence = _fullEvidence(0xda, _identity(ALGO_ID_ES256K, 0xdb));
+        evidence.teeReport.teeType = TEEType.AmdSevSnp;
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        TeeVerificationResult memory result = TeeVerificationResult({
+            valid: true,
+            reportData: "",
+            teeType: TEEType.AmdSevSnp,
+            enabledTeeAttributes: 0,
+            intelTdxTcbStatusBit: 0,
+            amdSevSnpTcbValues: minimumTcb,
+            amdSevSnpPlatformInfo: 0,
+            amdSevSnpCpuid: 0x191101
+        });
+        _mockFullEvidenceWithResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            result
+        );
+
+        bytes32 sessionId = sessionRegistry.registerSession(
+            evidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+        assertTrue(sessionRegistry.isSessionActive(sessionId));
+
+        evidence = _fullEvidence(0xdc, _identity(ALGO_ID_ES256K, 0xdd));
+        evidence.teeReport.teeType = TEEType.AmdSevSnp;
+        result.amdSevSnpTcbValues = bytes32(uint256(minimumTcb) - 1);
+        _mockFullEvidenceWithResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            result
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SessionRegistry.TeeAttributeBaseImageMismatch.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+                minimumTcb,
+                result.amdSevSnpTcbValues
+            )
+        );
+        sessionRegistry.registerSession(
+            evidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
     }
 
     function testValidFalseFailsForAzureAndGcpRegistration() public {
@@ -842,7 +945,10 @@ contract SessionLifecycleTest is Test {
                     reportData: "",
                     teeType: TEEType.IntelTDX,
                     enabledTeeAttributes: 0,
-                    intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
+                    intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
+                    amdSevSnpTcbValues: bytes32(0),
+                    amdSevSnpPlatformInfo: 0,
+                    amdSevSnpCpuid: 0
                 })
             );
 
@@ -882,7 +988,10 @@ contract SessionLifecycleTest is Test {
                     reportData: reportData,
                     teeType: teeType,
                     enabledTeeAttributes: 0,
-                    intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
+                    intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
+                    amdSevSnpTcbValues: bytes32(0),
+                    amdSevSnpPlatformInfo: 0,
+                    amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0
                 }),
                 expectedBindingHash
             );
@@ -928,7 +1037,10 @@ contract SessionLifecycleTest is Test {
                     reportData: _azureReportData(teeType, bindingHash, bytes32(0)),
                     teeType: teeType,
                     enabledTeeAttributes: 0,
-                    intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
+                    intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
+                    amdSevSnpTcbValues: bytes32(0),
+                    amdSevSnpPlatformInfo: 0,
+                    amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0
                 }),
                 bindingHash
             );
@@ -964,7 +1076,10 @@ contract SessionLifecycleTest is Test {
                 reportData: _azureReportData(TEEType.IntelTDX, bindingHash, padding),
                 teeType: TEEType.IntelTDX,
                 enabledTeeAttributes: 0,
-                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: 0
             }),
             bindingHash
         );
@@ -1001,7 +1116,10 @@ contract SessionLifecycleTest is Test {
                 reportData: hex"00",
                 teeType: TEEType.IntelTDX,
                 enabledTeeAttributes: 0,
-                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: 0
             }),
             bytes32(0)
         );
@@ -1038,7 +1156,10 @@ contract SessionLifecycleTest is Test {
                 reportData: "",
                 teeType: TEEType.IntelTDX,
                 enabledTeeAttributes: actual ? TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT : 0,
-                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: 0
             })
         );
 
@@ -1277,7 +1398,10 @@ contract SessionLifecycleTest is Test {
                 reportData: "",
                 teeType: evidence.teeReport.teeType,
                 enabledTeeAttributes: 0,
-                intelTdxTcbStatusBit: evidence.teeReport.teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0
+                intelTdxTcbStatusBit: evidence.teeReport.teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: evidence.teeReport.teeType == TEEType.AmdSevSnp ? 0x191101 : 0
             })
         );
     }

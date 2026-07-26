@@ -21,6 +21,8 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TDX_TCB_STATUS_OK,
     TDX_TCB_STATUS_CONFIGURABLE_MASK,
     TEE_ATTRIBUTE_TRUE
@@ -33,6 +35,7 @@ import {
 } from "./interfaces/registries/IBaseImageRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
+import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -580,6 +583,13 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 if ((mask & TDX_TCB_STATUS_OK) == 0 || (mask & ~TDX_TCB_STATUS_CONFIGURABLE_MASK) != 0) {
                     revert InvalidTeeAttributeValue(key, attrs[i].value);
                 }
+            } else if (key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM && !AmdSnpPolicy.isValidTcb(attrs[i].value)) {
+                revert InvalidTeeAttributeValue(key, attrs[i].value);
+            } else if (
+                key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
+                    && !AmdSnpPolicy.isValidPlatformInfoPolicy(attrs[i].value)
+            ) {
+                revert InvalidTeeAttributeValue(key, attrs[i].value);
             }
         }
         if (len < 2) {
@@ -610,7 +620,11 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
     function _validateVariantAttributes(Attribute[] calldata attrs) private pure {
         for (uint256 i = 0; i < attrs.length; i++) {
-            if (attrs[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+            if (
+                attrs[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
+                    || attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM
+                    || attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
+            ) {
                 revert TeeAttributeNotAllowedInMeasurementVariant(attrs[i].key);
             }
         }
@@ -648,6 +662,9 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 (_isBooleanTeeAttributeKey(attrs[i].key) && attrs[i].value == TEE_ATTRIBUTE_TRUE)
                     || (attrs[i].key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
                         && uint256(attrs[i].value) != TDX_TCB_STATUS_OK)
+                    || ((attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM
+                            || attrs[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY)
+                        && attrs[i].value != bytes32(0))
             ) {
                 revert TeeAttributeOptInRequiresNewBaseImage(attrs[i].key);
             }
