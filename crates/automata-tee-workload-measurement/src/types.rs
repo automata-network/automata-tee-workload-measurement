@@ -19,6 +19,10 @@ pub const TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME: &str =
     "atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled";
 pub const TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME: &str =
     "atakit.attestation.v1.tee.intel-tdx.tcb.status.allowed";
+pub const TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_NAME: &str =
+    "atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum";
+pub const TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_NAME: &str =
+    "atakit.attestation.v1.tee.amd-sev-snp.platform-info.policy";
 
 pub static TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY: LazyLock<B256> =
     LazyLock::new(|| keccak256(TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME));
@@ -28,6 +32,10 @@ pub static TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY: LazyLock<B256> =
     LazyLock::new(|| keccak256(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME));
 pub static TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY: LazyLock<B256> =
     LazyLock::new(|| keccak256(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME));
+pub static TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_KEY: LazyLock<B256> =
+    LazyLock::new(|| keccak256(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_NAME));
+pub static TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_KEY: LazyLock<B256> =
+    LazyLock::new(|| keccak256(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_NAME));
 
 pub const TDX_TCB_STATUS_NAMES: [(&str, u16); 8] = [
     ("ok", 1 << 0),
@@ -51,6 +59,12 @@ pub fn tee_attribute_key(name: &str) -> Option<B256> {
         TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME => {
             Some(*TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY)
         }
+        TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_NAME => {
+            Some(*TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_KEY)
+        }
+        TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_NAME => {
+            Some(*TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_KEY)
+        }
         _ => None,
     }
 }
@@ -64,6 +78,10 @@ pub fn tee_attribute_name(key: B256) -> Option<&'static str> {
         Some(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME)
     } else if key == *TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY {
         Some(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME)
+    } else if key == *TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_KEY {
+        Some(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_NAME)
+    } else if key == *TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_KEY {
+        Some(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_NAME)
     } else {
         None
     }
@@ -280,14 +298,17 @@ pub struct LifecycleSessionResponse {
 #[cfg(test)]
 mod tee_attribute_tests {
     use super::{
-        TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME,
-        TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME,
+        TDX_TCB_STATUS_CONFIGURABLE_MASK, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_KEY,
+        TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_NAME, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_KEY,
+        TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_NAME,
+        TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_KEY,
+        TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_NAME,
+        TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_KEY, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_NAME,
         TEE_ATTRIBUTE_INTEL_TDX_DEBUG_KEY, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_NAME,
         TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY,
-        TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME,
-        TDX_TCB_STATUS_CONFIGURABLE_MASK,
+        TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME, tdx_tcb_status_mask, tdx_tcb_status_names,
         tee_attribute_boolean_from_value, tee_attribute_boolean_value, tee_attribute_key,
-        tee_attribute_name, tdx_tcb_status_mask, tdx_tcb_status_names,
+        tee_attribute_name,
     };
     use alloy::primitives::B256;
 
@@ -317,6 +338,18 @@ mod tee_attribute_tests {
                 .parse::<B256>()
                 .unwrap()
         );
+        assert_eq!(
+            *TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_KEY,
+            "15647616165618c3cfed2ab7f083f2f7eef7f57519e43d97ab220ff7860157d2"
+                .parse::<B256>()
+                .unwrap()
+        );
+        assert_eq!(
+            *TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_KEY,
+            "279fd9a317a2dc8dfeea12391ea795ac6c21ff52977c499f910f07a27afbed7d"
+                .parse::<B256>()
+                .unwrap()
+        );
     }
 
     #[test]
@@ -337,6 +370,14 @@ mod tee_attribute_tests {
             (
                 TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_NAME,
                 *TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED_KEY,
+            ),
+            (
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_NAME,
+                *TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_KEY,
+            ),
+            (
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_NAME,
+                *TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY_KEY,
             ),
         ] {
             assert_eq!(tee_attribute_key(name), Some(key));
