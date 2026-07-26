@@ -147,35 +147,36 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
         );
 
         bytes32 baseTcb = _effectiveAttribute(
-            profileAttributes, variantAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, bytes32(0)
+            profileAttributes, variantAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, policy.minimumTcb
         );
-        bytes32 effectiveBaseTcb = AmdSnpPolicy.maxTcb(policy.minimumTcb, baseTcb);
-        bytes32 workloadTcb = _requirementOrDefault(requirements, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, bytes32(0));
-        if (!AmdSnpPolicy.tcbMeetsMinimum(inputs.amdSevSnpTcbValues, effectiveBaseTcb)) {
+        bytes32 workloadTcb =
+            _requirementOrDefault(requirements, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, policy.minimumTcb);
+        if (!AmdSnpPolicy.tcbMeetsMinimum(inputs.amdSevSnpTcbValues, baseTcb)) {
             revert TeeAttributeBaseImageMismatch(
-                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, effectiveBaseTcb, inputs.amdSevSnpTcbValues
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, baseTcb, inputs.amdSevSnpTcbValues
             );
         }
-        bytes32 effectiveWorkloadTcb = AmdSnpPolicy.maxTcb(policy.minimumTcb, workloadTcb);
-        if (!AmdSnpPolicy.tcbMeetsMinimum(inputs.amdSevSnpTcbValues, effectiveWorkloadTcb)) {
+        if (!AmdSnpPolicy.tcbMeetsMinimum(inputs.amdSevSnpTcbValues, workloadTcb)) {
             revert TeeAttributeValueNotAllowed(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, inputs.amdSevSnpTcbValues);
         }
 
         bytes32 basePlatformInfo = _effectiveAttribute(
-            profileAttributes, variantAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(0)
+            profileAttributes,
+            variantAttributes,
+            TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+            policy.platformInfoPolicy
         );
-        bytes32 workloadPlatformInfo =
-            _requirementOrDefault(requirements, TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(0));
-        bytes32 effectiveBasePlatformInfo = _mergePlatformInfoPolicies(policy.platformInfoPolicy, basePlatformInfo);
-        if (!AmdSnpPolicy.platformInfoMatches(inputs.amdSevSnpPlatformInfo, effectiveBasePlatformInfo)) {
+        bytes32 workloadPlatformInfo = _requirementOrDefault(
+            requirements, TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, policy.platformInfoPolicy
+        );
+        if (!AmdSnpPolicy.platformInfoMatches(inputs.amdSevSnpPlatformInfo, basePlatformInfo)) {
             revert TeeAttributeBaseImageMismatch(
                 TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
-                effectiveBasePlatformInfo,
+                basePlatformInfo,
                 bytes32(uint256(inputs.amdSevSnpPlatformInfo))
             );
         }
-        bytes32 effectiveWorkloadPlatformInfo =
-            _mergePlatformInfoPolicies(effectiveBasePlatformInfo, workloadPlatformInfo);
+        bytes32 effectiveWorkloadPlatformInfo = _mergePlatformInfoPolicies(basePlatformInfo, workloadPlatformInfo);
         if (!AmdSnpPolicy.platformInfoMatches(inputs.amdSevSnpPlatformInfo, effectiveWorkloadPlatformInfo)) {
             revert TeeAttributeValueNotAllowed(
                 TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(uint256(inputs.amdSevSnpPlatformInfo))

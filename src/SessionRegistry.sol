@@ -99,7 +99,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice Workload registry for workload policy enforcement
     IWorkloadRegistry public immutable workloadRegistry;
 
-    /// @notice Global AMD SEV-SNP security policy and policy evaluator.
+    /// @notice AMD SEV-SNP registry defaults and policy evaluator.
     IAmdSnpSecurityPolicyRegistry public immutable amdSnpSecurityPolicyRegistry;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -227,7 +227,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @param akCollateralVerifier_ AK collateral verifier for Azure MAA JWT and GCP cert-chain verification
     /// @param baseImageRegistry_ Base image registry for platform profiles
     /// @param workloadRegistry_ Workload registry for workload policies
-    /// @param amdSnpSecurityPolicyRegistry_ Global AMD SEV-SNP policy registry
+    /// @param amdSnpSecurityPolicyRegistry_ AMD SEV-SNP registry defaults and policy evaluator
     constructor(
         ITeeVerifier teeVerifier_,
         ITpmAttestation tpmAttestation_,

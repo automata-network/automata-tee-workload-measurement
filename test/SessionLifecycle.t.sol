@@ -890,7 +890,7 @@ contract SessionLifecycleTest is Test {
         assertTrue(sessionRegistry.isSessionActive(sessionId));
     }
 
-    function testAmdSnpGlobalTcbPolicyRunsDuringFullRegistration() public {
+    function testAmdSnpRegistryDefaultTcbPolicyRunsDuringFullRegistration() public {
         bytes32 minimumTcb = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
         AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
         updates[0] = AmdSnpSecurityPolicyUpdate(0x191101, 2, true, minimumTcb, bytes32(0));

@@ -196,7 +196,7 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         assertEq(registry.getActivePolicy(GENOA_CPUID).minimumTcb, MINIMUM_TCB);
     }
 
-    function testVerifyAmdSnpPolicyEnforcesGlobalFloor() public {
+    function testVerifyAmdSnpPolicyUsesRegistryDefaultsWhenBothSidesAreMissing() public {
         _register(GENOA_CPUID);
         Attribute[] memory attributes = new Attribute[](0);
         AttributeRequirement[] memory requirements = new AttributeRequirement[](0);
@@ -228,14 +228,22 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
     }
 
-    function testVerifyAmdSnpPolicyAppliesVariantOverrideWithoutWeakeningGlobalFloor() public {
+    function testVerifyAmdSnpTcbPolicyAppliesVariantOverrideAndAllowsCoordinatedRelaxation() public {
         _register(GENOA_CPUID);
+        bytes32 lowerTcb = bytes32(uint256(MINIMUM_TCB) - 1);
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.amdSevSnpTcbValues = lowerTcb;
+
         Attribute[] memory profileAttributes = new Attribute[](1);
         profileAttributes[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, bytes32(uint256(MINIMUM_TCB) + 1));
         Attribute[] memory variantAttributes = new Attribute[](1);
-        variantAttributes[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, bytes32(0));
+        variantAttributes[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, lowerTcb);
+        bytes32[] memory allowedValues = new bytes32[](1);
+        allowedValues[0] = lowerTcb;
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](1);
+        requirements[0] = AttributeRequirement(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, allowedValues);
 
-        registry.verifyTeePolicy(_validInputs(), profileAttributes, variantAttributes, new AttributeRequirement[](0));
+        registry.verifyTeePolicy(inputs, profileAttributes, variantAttributes, requirements);
 
         variantAttributes = new Attribute[](0);
         vm.expectRevert(
@@ -243,10 +251,42 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
                 AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
                 TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
                 bytes32(uint256(MINIMUM_TCB) + 1),
-                MINIMUM_TCB
+                lowerTcb
             )
         );
-        registry.verifyTeePolicy(_validInputs(), profileAttributes, variantAttributes, new AttributeRequirement[](0));
+        registry.verifyTeePolicy(inputs, profileAttributes, variantAttributes, requirements);
+    }
+
+    function testVerifyAmdSnpTcbPolicyRejectsOneSidedRelaxation() public {
+        _register(GENOA_CPUID);
+        bytes32 lowerTcb = bytes32(uint256(MINIMUM_TCB) - 1);
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.amdSevSnpTcbValues = lowerTcb;
+
+        Attribute[] memory lowerBase = new Attribute[](1);
+        lowerBase[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, lowerTcb);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+                lowerTcb
+            )
+        );
+        registry.verifyTeePolicy(inputs, lowerBase, new Attribute[](0), new AttributeRequirement[](0));
+
+        bytes32[] memory allowedValues = new bytes32[](1);
+        allowedValues[0] = lowerTcb;
+        AttributeRequirement[] memory lowerWorkload = new AttributeRequirement[](1);
+        lowerWorkload[0] = AttributeRequirement(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, allowedValues);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+                MINIMUM_TCB,
+                lowerTcb
+            )
+        );
+        registry.verifyTeePolicy(inputs, new Attribute[](0), new Attribute[](0), lowerWorkload);
     }
 
     function testVerifyIntelTdxTcbPolicyAppliesVariantOverride() public view {
@@ -283,7 +323,7 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
 
         registry.verifyTeePolicy(inputs, profileAttributes, variantAttributes, new AttributeRequirement[](0));
 
-        bytes32 effectiveProfilePolicy = bytes32(uint256(0x20) | (uint256(0x11) << 64));
+        bytes32 effectiveProfilePolicy = bytes32(uint256(1) << 68);
         vm.expectRevert(
             abi.encodeWithSelector(
                 AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
@@ -314,15 +354,51 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
 
         attributes = new Attribute[](1);
         attributes[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(uint256(1)));
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.amdSevSnpPlatformInfo = 0x21;
         vm.expectRevert(
             abi.encodeWithSelector(
                 AmdSnpSecurityPolicyRegistry.TeeAttributePolicyConflict.selector,
                 TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
-                PLATFORM_INFO_POLICY,
-                bytes32(uint256(1))
+                bytes32(uint256(1)),
+                PLATFORM_INFO_POLICY
             )
         );
-        registry.verifyTeePolicy(_validInputs(), attributes, new Attribute[](0), new AttributeRequirement[](0));
+        registry.verifyTeePolicy(inputs, attributes, new Attribute[](0), new AttributeRequirement[](0));
+    }
+
+    function testVerifyAmdSnpPlatformInfoPolicyAllowsCoordinatedRelaxationAndRejectsOneSidedRelaxation() public {
+        _register(GENOA_CPUID);
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.amdSevSnpPlatformInfo = 0;
+
+        Attribute[] memory lowerBase = new Attribute[](1);
+        lowerBase[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(0));
+        bytes32[] memory allowedValues = new bytes32[](1);
+        allowedValues[0] = bytes32(0);
+        AttributeRequirement[] memory lowerWorkload = new AttributeRequirement[](1);
+        lowerWorkload[0] = AttributeRequirement(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, allowedValues);
+
+        registry.verifyTeePolicy(inputs, lowerBase, new Attribute[](0), lowerWorkload);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+                bytes32(0)
+            )
+        );
+        registry.verifyTeePolicy(inputs, lowerBase, new Attribute[](0), new AttributeRequirement[](0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+                PLATFORM_INFO_POLICY,
+                bytes32(0)
+            )
+        );
+        registry.verifyTeePolicy(inputs, new Attribute[](0), new Attribute[](0), lowerWorkload);
     }
 
     function testVerifyAmdSnpBooleanAndGenericAttributes() public {
@@ -413,8 +489,6 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
     function testVerifyAmdSnpPlatformInfoPolicyMatrix() public {
         _register(GENOA_CPUID);
         bytes32 requireBitFour = bytes32(uint256(1) << 4);
-        bytes32 globalAndBitFour = bytes32(uint256(0x30) | (uint256(1) << 64));
-
         for (uint256 actualMode = 0; actualMode < 2; actualMode++) {
             for (uint256 baseMode = 0; baseMode < 3; baseMode++) {
                 for (uint256 workloadMode = 0; workloadMode < 3; workloadMode++) {
@@ -440,7 +514,7 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
                             abi.encodeWithSelector(
                                 AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
                                 TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
-                                globalAndBitFour,
+                                requireBitFour,
                                 bytes32(uint256(0x20))
                             )
                         );
