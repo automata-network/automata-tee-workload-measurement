@@ -217,7 +217,7 @@ TEE platform are not evaluated for the current session.
 Input: evidence.akPubCollateral, teeVerificationResult
 Actions:
   - Call the external akCollateralVerifier.verifyAkCollateral(collateral)
-    -> AkCollateralVerificationResult { valid, akPub, akPubFingerprint, bindingHash }
+    -> AkCollateralVerificationResult { valid, akPub, akPubFingerprint, teeType, bindingHash }
   - Revert AkCollateralVerificationFailed if !result.valid
   - The current AkCollateralVerifier reverts on every failure and returns
     valid=true on success. The explicit check also fails closed for any other
@@ -234,6 +234,8 @@ Actions:
           x-ms-sevsnpvm-reportdata (SNP); next 32 bytes must be zero
         - Assert sha256(hclVarData) equals those 32 bytes
         - Parse HCLAkPub from hclVarData using the §14.3-scoped JWK parser
+      - Require akResult.teeType == teeResult.teeType; otherwise revert
+        AzureMaaTeeTypeMismatch
       - akResult.bindingHash = sha256(hclVarData)
       - For TDX, extract the 64-byte REPORT_DATA at quote-body offset 520
       - For SNP, extract the 64-byte REPORT_DATA at report offset 0x50
@@ -289,13 +291,14 @@ Output: sessionId, sessionKeyFingerprint
 ```
 Input: pcrValues from TPM quote, PolicyContext, expectedPcr15
 Actions:
-  - Merge platform invariants with variant overrides via _mergePcrSpecs()
-    (overrides replace invariants at matching pcrIndex using bitmask approach)
+  - Union platform invariants with variant PCR specs via _mergePcrSpecs()
+    (a variant entry at an invariant pcrIndex REVERTS PcrVariantOverridesInvariant;
+     invariants always hold and are never replaced)
   - Evaluate merged PCR specs against measured values (_evaluatePcrSpecs)
   - Evaluate workload PCR specs against measured values (_evaluatePcrSpecs)
     NOTE: SessionRegistry does not enforce a hard platform-vs-workload PCR index split; it evaluates whatever sorted specs the registries provide
   - For each PCR spec:
-    STATIC: pcrValue.value == matchData[0]
+    STATIC: require exactly one matchData entry, then pcrValue.value == matchData[0]
     DYNAMIC_SUBSET: pcrValue.eventLogHashes must be non-empty AND every matchData entry must occur in the event log (order irrelevant; extra observed events permitted)
       (empty event log is rejected — the TPM lib skips the value↔events hash-chain check when
       events are empty, so accepting empty would let an attacker submit any `value` and bypass
@@ -304,7 +307,7 @@ Actions:
       as a subsequence (same empty-event-log rejection rationale)
   - If expectedPcr15 != 0: verify measured PCR15 value matches expectedPcr15
 Output: All PCR checks pass, or the contract reverts with
-`PCRStaticMismatch`, `PCREventLogEmpty`, `PCRSubsetLandmarkMissing`,
+`InvalidStaticMatchDataLength`, `PCRStaticMismatch`, `PCREventLogEmpty`, `PCRSubsetLandmarkMissing`,
 `PCRSubsequenceLandmarkMissing`, `PCRNotFound`, or `GcpPcr15Mismatch`
 ```
 
@@ -488,7 +491,7 @@ provider resources.
 | `getSessionId(sessionFingerprint)` | `bytes32` | Lookup by session key fingerprint |
 | `getSessionOwner(sessionId)` | `bytes32` | Owner fingerprint |
 | `isSessionActive(sessionId)` | `bool` | exists && !revoked && block.timestamp <= sessionExpiresAt && !workloadRegistry.isWorkloadRevoked(workloadId) && !baseImageRegistry.isBaseImageRevoked(baseImageId). **Cascades**: revoking the underlying workload or base image flips every dependent session inactive on the next read. |
-| `isSessionExpired(sessionId)` | `bool` | `block.timestamp > sessionExpiresAt` (false if not exists) |
+| `isSessionExpired(sessionId)` | `bool` | `block.timestamp > sessionExpiresAt`; reverts `SessionNotFound` if the id is unknown |
 | `getNonce(ownerFingerprint)` | `uint256` | Current nonce for replay protection |
 
 ### `verifySessionSignature`
@@ -520,10 +523,12 @@ function verifySessionSignature(
 | `UnsupportedAzureTeeType(TEEType teeType)` | Azure collateral paired with an unsupported TEE |
 | `UnsupportedGcpTeeType(TEEType teeType)` | GCP collateral paired with an unsupported TEE |
 | `UnsupportedAkCollateralForBinding(AkPubCollateralType collateralType)` | No TEE-to-AK binding rule for the collateral type |
+| `AzureMaaTeeTypeMismatch(TEEType teeReportType, TEEType maaTeeType)` | The independently verified TEE report type differs from the MAA-authenticated `x-ms-attestation-type` |
 | `AzureTeeReportDataTooShort(uint256 actualLength, uint256 minRequired)` | Verified Azure TEE result cannot contain the 64-byte `REPORT_DATA` |
 | `AzureTeeReportDataMismatch(bytes32 actualBindingHash, bytes32 expectedBindingHash, bytes32 actualPadding)` | Verified Azure TEE report does not contain the MAA-signed HCL binding followed by 32 zero bytes |
 | `GcpTdxRtmr3Mismatch(bytes actualRtmr3, bytes expectedRtmr3)` | GCP TDX RTMR3 binding mismatch |
 | `SessionKeyDelegationFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint)` | Delegation signature invalid |
+| `InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength)` | A `STATIC` PCR spec does not contain exactly one expected value |
 | `PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected)` | Static PCR mismatch |
 | `PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType)` | Dynamic PCR supplied no events |
 | `PCRSubsetLandmarkMissing(uint8 pcrIndex, uint256 matchIdx, bytes32 matchHash)` | Required dynamic-subset landmark absent from the observed event log |
@@ -567,7 +572,7 @@ expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, ad
 ```
 
 ### PCR Merge Semantics
-Uses bitmask-based merge: allocate 24-slot array, apply overrides first (building overrideMask), then insert invariants not covered by overrideMask, then compact.
+Uses a bitmask-based union: allocate a 24-slot array, place the variant specs first (building overrideMask), then insert every invariant — reverting `PcrVariantOverridesInvariant` if overrideMask already covers that index — then compact. A profile invariant always holds and is never dropped in favour of a variant spec.
 
 ### Attribute Merge Semantics
 Platform attributes not overridden are kept, then all variant attributes are appended. Array is trimmed via assembly.

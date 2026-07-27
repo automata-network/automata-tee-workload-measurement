@@ -51,6 +51,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
+    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
     error DuplicateRequirementKey(bytes32 key);
     error InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
     error InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue);
@@ -289,10 +290,12 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
                 revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
             PcrVerifyType vt = pcrs[i].verifyType;
-            if (
-                (vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE)
-                    && pcrs[i].matchData.length == 0
-            ) {
+            uint256 matchDataLength = pcrs[i].matchData.length;
+            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
+                revert InvalidStaticMatchDataLength(idx, matchDataLength);
+            }
+            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
+            {
                 revert EmptyMatchData(idx);
             }
             prevIdx = idx;

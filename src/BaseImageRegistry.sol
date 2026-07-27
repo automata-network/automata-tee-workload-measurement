@@ -77,8 +77,14 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
+    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
     error DuplicateAttributeKey(bytes32 key);
     error InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue);
+    /// @notice A measurement variant pins a PCR index that its platform profile already declares
+    ///         invariant. Profile invariants always hold; a variant may only pin indices the
+    ///         profile leaves unpinned. To make a PCR machine-type dependent, publish a base image
+    ///         whose profile does not list it as an invariant.
+    error VariantOverridesInvariantPcr(bytes32 platformProfileId, uint8 pcrIndex);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
     // ============================================================================
@@ -219,9 +225,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
 
             // Validate and store measurement variants
+            uint256 invariantMask = _pcrIndexMask(profile.invariants);
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
+
+                _requireNoInvariantOverlap(platformProfileId, invariantMask, variant.overridePcrs);
 
                 // Compute variant ID
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
@@ -371,10 +380,15 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
             }
 
-            // Append measurement variants for this profile
+            // Append measurement variants for this profile. Overlap is checked against the
+            // STORED invariants, not the submitted ones: for an already-registered profile the
+            // submitted metadata is dropped, so the stored specs are the only authority.
+            uint256 invariantMask = _storedPcrIndexMask(_platformProfiles[platformProfileId].platformProfile.invariants);
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
+
+                _requireNoInvariantOverlap(platformProfileId, invariantMask, variant.overridePcrs);
 
                 // Compute variant ID (deterministic from profile + variant name)
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
@@ -547,17 +561,14 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             if (i > 0 && idx <= prevIdx) {
                 revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
-            // DYNAMIC variants with empty matchData would accept any reported
-            // event log (subset of nothing is always nothing) or trivially
-            // satisfy the subsequence condition — neither is a meaningful
-            // policy. STATIC is allowed to have any matchData length here
-            // (the session-evaluator reads matchData[0]), since a zero-length
-            // STATIC array reverts at session time with an array-bounds panic.
             PcrVerifyType vt = pcrs[i].verifyType;
-            if (
-                (vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE)
-                    && pcrs[i].matchData.length == 0
-            ) {
+            uint256 matchDataLength = pcrs[i].matchData.length;
+            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
+                revert InvalidStaticMatchDataLength(idx, matchDataLength);
+            }
+            // A dynamic policy with no required landmark would accept trivially.
+            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
+            {
                 revert EmptyMatchData(idx);
             }
             prevIdx = idx;
@@ -609,6 +620,38 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             }
             used[slot] = true;
             keys[slot] = key;
+        }
+    }
+
+    /// @dev Bitmask of the PCR indices a spec list pins. `_validatePcrSpecsSorted` has already
+    ///      rejected any index >= 24, so the shift cannot overflow the mask.
+    function _pcrIndexMask(PcrSpec[] calldata pcrs) private pure returns (uint256 mask) {
+        uint256 len = pcrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            mask |= uint256(1) << pcrs[i].pcrIndex;
+        }
+    }
+
+    /// @dev Storage-reading counterpart of `_pcrIndexMask`, for an already-registered profile.
+    function _storedPcrIndexMask(PcrSpec[] storage pcrs) private view returns (uint256 mask) {
+        uint256 len = pcrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            mask |= uint256(1) << pcrs[i].pcrIndex;
+        }
+    }
+
+    /// @dev Rejects a variant that pins a PCR index its platform profile declares invariant.
+    function _requireNoInvariantOverlap(
+        bytes32 platformProfileId,
+        uint256 invariantMask,
+        PcrSpec[] calldata overridePcrs
+    ) private pure {
+        uint256 len = overridePcrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 pcrIndex = overridePcrs[i].pcrIndex;
+            if ((invariantMask & (uint256(1) << pcrIndex)) != 0) {
+                revert VariantOverridesInvariantPcr(platformProfileId, pcrIndex);
+            }
         }
     }
 

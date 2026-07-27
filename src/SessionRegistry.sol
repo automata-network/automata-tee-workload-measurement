@@ -115,7 +115,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @dev Session fingerprint to session ID mapping
     mapping(bytes32 => bytes32) private _sessionFingerprintsToIds;
 
-    /// @dev Storage gap for future upgrades (4 existing mappings → 46-slot gap)
+    /// @dev Storage gap for future upgrades (3 existing mappings → 47-slot gap)
     uint256[47] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -155,6 +155,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice Azure verified TEE result is too short to contain the 64-byte report_data
     error AzureTeeReportDataTooShort(uint256 actualLength, uint256 minRequired);
 
+    /// @notice The TEE type authenticated by the Azure MAA JWT differs from the verified report.
+    error AzureMaaTeeTypeMismatch(TEEType teeReportType, TEEType maaTeeType);
+
     /// @notice AK collateral type fell through both Azure and GCP branches during binding
     error UnsupportedAkCollateralForBinding(AkPubCollateralType collateralType);
 
@@ -167,6 +170,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     /// @notice STATIC PCR measured value does not match the spec
     error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
+
+    /// @notice STATIC requires exactly one expected final PCR value.
+    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
 
     /// @notice DYNAMIC PCR spec rejected because the measured event log is empty
     ///         (no event-hash chain to cross-check against the PCR value)
@@ -188,6 +194,12 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     /// @notice Required PCR index from the spec is missing in the measured set
     error PCRNotFound(uint8 pcrIndex);
+
+    /// @notice The measurement variant pins a PCR index that its platform profile already
+    ///         declares invariant. Invariants always hold, so this is rejected rather than
+    ///         resolved in the variant's favour. BaseImageRegistry rejects such a variant at
+    ///         registration; reaching this means pre-existing storage violates the rule.
+    error PcrVariantOverridesInvariant(uint8 pcrIndex);
 
     /// @notice Attribute not found
     error AttributeNotFound(bytes32 key);
@@ -482,7 +494,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     function isSessionExpired(bytes32 sessionId) external view returns (bool) {
         CVMSessionStorage storage sessionStorage = _sessions[sessionId];
         if (!sessionStorage.exists) {
-            return false;
+            revert SessionNotFound();
         }
         return block.timestamp > sessionStorage.session.sessionExpiresAt;
     }
@@ -863,6 +875,12 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             akCollateralVerifier.verifyAkCollateral(evidence.akPubCollateral);
         if (!akResult.valid) {
             revert AkCollateralVerificationFailed();
+        }
+        if (
+            evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt
+                && akResult.teeType != teeResult.teeType
+        ) {
+            revert AzureMaaTeeTypeMismatch(teeResult.teeType, akResult.teeType);
         }
 
         // Verify TEE-AK binding and get expected PCR15 for GCP
@@ -1251,10 +1269,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     // Internal Helpers - PCR Evaluation
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Merges platform invariants with variant overrides (variant replaces at matching pcrIndex)
+    /// @dev Unions platform invariants with the variant's PCR specs. A profile invariant always
+    ///      holds: a variant may only pin PCR indices the profile leaves unpinned, never restate
+    ///      or relax one. BaseImageRegistry rejects an overlapping variant at registration; this
+    ///      check re-enforces the invariant at evaluation time so no storage state — including
+    ///      anything written by an earlier implementation — can silently drop a profile invariant.
     /// @param invariants Platform profile invariants
-    /// @param overrides Variant PCR overrides
-    /// @return merged Effective PCR specifications
+    /// @param overrides Variant PCR specs (must not collide with `invariants`)
+    /// @return merged Effective PCR specifications, sorted ascending by pcrIndex
     function _mergePcrSpecs(PcrSpec[] memory invariants, PcrSpec[] memory overrides)
         private
         pure
@@ -1266,7 +1288,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         uint256 overrideMask = 0;
         uint256 presentMask = 0;
 
-        // Apply overrides while building overrideMask
+        // Place the variant specs while building overrideMask
         uint256 overridesLen = overrides.length;
         for (uint256 i = 0; i < overridesLen;) {
             uint256 idx = uint256(overrides[i].pcrIndex);
@@ -1280,15 +1302,18 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             }
         }
 
-        // Insert invariants that are not overridden
+        // Insert every invariant. An invariant is non-negotiable, so a variant spec at the
+        // same index is a conflict rather than an override — fail closed instead of dropping
+        // the stricter platform-level spec.
         uint256 invariantsLen = invariants.length;
         for (uint256 i = 0; i < invariantsLen;) {
             uint256 idx = uint256(invariants[i].pcrIndex);
             uint256 bit = (uint256(1) << idx);
-            if ((overrideMask & bit) == 0) {
-                merged[idx] = invariants[i];
-                presentMask |= bit;
+            if ((overrideMask & bit) != 0) {
+                revert PcrVariantOverridesInvariant(uint8(idx));
             }
+            merged[idx] = invariants[i];
+            presentMask |= bit;
             unchecked {
                 ++i;
             }
@@ -1374,6 +1399,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @param measured Measured PCR value
     function _evaluateSinglePcr(PcrSpec memory spec, PcrValue memory measured) internal pure {
         if (spec.verifyType == PcrVerifyType.STATIC) {
+            uint256 matchDataLength = spec.matchData.length;
+            if (matchDataLength != 1) {
+                revert InvalidStaticMatchDataLength(spec.pcrIndex, matchDataLength);
+            }
             // STATIC: exact value match
             if (measured.value != spec.matchData[0]) {
                 revert PCRStaticMismatch(spec.pcrIndex, measured.value, spec.matchData[0]);

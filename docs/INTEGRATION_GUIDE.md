@@ -209,6 +209,10 @@ bytes32 owner = sessionRegistry.getSessionOwner(sessionId);
 bool expired = sessionRegistry.isSessionExpired(sessionId);
 ```
 
+`isSessionExpired` reverts `SessionNotFound` when `sessionId` is unknown. Use
+`isSessionActive` when the caller needs one fail-closed Boolean for both unknown
+and inactive sessions.
+
 ### Querying Registry Data
 
 ```solidity

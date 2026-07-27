@@ -320,7 +320,7 @@ TEE attribute policy and the active AMD SEV-SNP registry defaults.
 - `getSession(sessionId)` → `CVMSession`
 - `getSessionOwner(sessionId)` → owner fingerprint
 - `isSessionActive(sessionId)` → true if not revoked and not expired
-- `isSessionExpired(sessionId)` → true if past TTL
+- `isSessionExpired(sessionId)` → true if past TTL; reverts `SessionNotFound` for an unknown id
 - `getNonce(ownerFingerprint)` → current nonce for replay protection
 
 ---
@@ -456,7 +456,7 @@ The TPM signing key's signature over this message proves the session key is auth
 ### Step 7: PCR Policy Evaluation
 
 Evaluates all measurement policies:
-1. Merges PlatformProfile invariant PCRs with MeasurementVariant override PCRs (variant overrides platform at matching indices)
+1. Unions PlatformProfile invariant PCRs with MeasurementVariant PCRs. Profile invariants always hold: a variant entry at an index the profile pins reverts `PcrVariantOverridesInvariant` rather than replacing it
 2. Evaluates effective PCR specs against measured values from the TPM quote
 3. Evaluates WorkloadSpec PCR specs against measured values
 4. For GCP: additionally validates that measured PCR 15 matches the expected binding value computed in Step 3
@@ -507,7 +507,7 @@ Three strategies for matching measured PCR values against policy specifications:
 ### STATIC — Exact Value Match
 
 ```
-matchData[0] must exactly equal the PCR final value
+`matchData` must contain exactly one entry, and `matchData[0]` must exactly equal the PCR final value
 ```
 
 Use for deterministic measurements that never change (e.g., firmware hash, bootloader hash). The PCR value is computed as a sequential hash chain of events, producing a single final value that must match exactly.

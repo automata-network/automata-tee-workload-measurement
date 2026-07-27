@@ -20,6 +20,7 @@ import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.s
 // when the parent inherits them via `contract X is Y`. Keeping a parallel
 // declaration with matching signatures makes `vm.expectPartialRevert` work.
 error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
+error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
 error PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType);
 error PCRSubsetLandmarkMissing(uint8 pcrIndex, uint256 matchIdx, bytes32 matchHash);
 error PCRSubsequenceLandmarkMissing(uint8 pcrIndex, uint256 matchedCount, uint256 expectedCount);
@@ -60,6 +61,25 @@ contract PcrEvalEmptyEventLogTest is Test {
 
     function _measured(bytes32[] memory events) internal pure returns (PcrValue memory) {
         return PcrValue({pcrIndex: 0, value: bytes32(0), eventLogHashes: events});
+    }
+
+    // ─── STATIC ──────────────────────────────────────────────────────────────────
+
+    function testStatic_RevertsUnlessMatchDataHasExactlyOneEntry() public {
+        for (uint256 length = 0; length <= 2; length += 2) {
+            PcrSpec memory spec =
+                PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: new bytes32[](length)});
+            vm.expectRevert(abi.encodeWithSelector(InvalidStaticMatchDataLength.selector, uint8(0), length));
+            harness.evaluateSinglePcr(spec, _measured(new bytes32[](0)));
+        }
+    }
+
+    function testStatic_AcceptsExactlyOneMatchDataEntry() public view {
+        bytes32[] memory matchData = new bytes32[](1);
+        matchData[0] = bytes32(uint256(0xa1));
+        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: matchData});
+        PcrValue memory measured = PcrValue({pcrIndex: 0, value: matchData[0], eventLogHashes: new bytes32[](0)});
+        harness.evaluateSinglePcr(spec, measured);
     }
 
     // ─── DYNAMIC_SUBSET ──────────────────────────────────────────────────────────

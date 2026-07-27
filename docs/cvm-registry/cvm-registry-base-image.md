@@ -65,7 +65,7 @@ BaseImage (e.g. "automata-linux v0.1.6")
         ├── attributes: Attribute[]   (key-value metadata)
         └── MeasurementVariant[] (e.g. "n2d-standard-2", "c3-standard-4")
               ├── name: string
-              ├── overridePcrs: PcrSpec[]  (replaces invariants at matching pcrIndex)
+              ├── overridePcrs: PcrSpec[]  (indices the profile leaves unpinned; disjoint from invariants)
               └── attributes: Attribute[] (replaces profile attrs at matching key)
 ```
 
@@ -177,6 +177,7 @@ function addPlatformVariants(
 | `InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex)` | PCR specs are not strictly ascending by index |
 | `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
 | `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
+| `InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength)` | `STATIC` spec does not contain exactly one `matchData` entry |
 | `DuplicateAttributeKey(bytes32 key)` | Repeated key in attributes array |
 | `InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue)` | A reserved Boolean is invalid, the Intel TDX TCB mask omits `ok` or contains a non-configurable bit, or an AMD SEV-SNP packed value has an invalid layout |
 | `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not in whitelist |
@@ -195,7 +196,7 @@ function addPlatformVariants(
 
 ## Validation Rules
 
-1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24` (enforced by `_validatePcrSpecsSorted`)
+1. **PCR shape and ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, every `pcrIndex` must be `< 24`, `STATIC` must contain exactly one `matchData` entry, and both dynamic types must contain at least one (enforced by `_validatePcrSpecsSorted`)
 2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateAttributes`, uses an in-memory hash table)
 3. **Reserved Boolean TEE attribute values**: Intel TDX debug, AMD SEV-SNP debug, and AMD SEV-SNP `MIGRATE_MA` accept only the canonical Boolean encodings. Missing means `false`.
 4. **Intel TDX TCB mask**: The mask must include `ok` and may contain only bits in `0x33f`. Missing means `ok` only.
@@ -214,7 +215,7 @@ Contract starts **paused** (`_pause()` called in `initialize`). Owner must eithe
 ## Internal Helpers
 
 - `_checkRegistrationAllowed(ownerFingerprint)` -- Reverts NotWhitelisted if paused AND not whitelisted
-- `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order and index range (< 24); also reverts `EmptyMatchData` for `DYNAMIC_*` specs with zero-length `matchData`
+- `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order, index range (< 24), exact-one `STATIC` cardinality, and non-empty `DYNAMIC_*` cardinality
 - `_validateAttributes(Attribute[])` -- Validates reserved verified TEE attribute values and checks attribute-key uniqueness
 
 ## Implementation Nuance

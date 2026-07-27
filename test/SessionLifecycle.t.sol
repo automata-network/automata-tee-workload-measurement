@@ -155,6 +155,11 @@ contract SessionLifecycleTest is Test {
         newPolicy = _registerPolicy("base-v2", "workload-v2", 7 days);
     }
 
+    function testIsSessionExpiredRejectsUnknownSession() public {
+        vm.expectRevert(SessionRegistry.SessionNotFound.selector);
+        sessionRegistry.isSessionExpired(keccak256("unknown-session"));
+    }
+
     function testRotateKeyInheritsPolicyAkAndAbsoluteExpiry() public {
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         bytes32 oldSessionId = keccak256("old-rotate-session");
@@ -1026,6 +1031,7 @@ contract SessionLifecycleTest is Test {
                         valid: false,
                         akPub: oldAk,
                         akPubFingerprint: LibKey.computeKeyFingerprint(oldAk),
+                        teeType: evidence.teeReport.teeType,
                         bindingHash: bytes32(0)
                     })
                 )
@@ -1136,6 +1142,61 @@ contract SessionLifecycleTest is Test {
             );
             assertTrue(sessionRegistry.isSessionActive(sessionId));
         }
+    }
+
+    function testAzureRejectsMaaTeeTypeThatDiffersFromVerifiedReport() public {
+        AttestationEvidence memory evidence = _fullEvidence(0xca, _identity(ALGO_ID_ES256K, 0xcb));
+        evidence.teeReport.teeType = TEEType.IntelTDX;
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        bytes32 bindingHash = keccak256("Azure HCL binding");
+        _mockFullEvidenceWithBindingResult(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data),
+            TeeVerificationResult({
+                valid: true,
+                reportData: _azureReportData(TEEType.IntelTDX, bindingHash, bytes32(0)),
+                teeType: TEEType.IntelTDX,
+                enabledTeeAttributes: 0,
+                intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
+                amdSevSnpTcbValues: bytes32(0),
+                amdSevSnpPlatformInfo: 0,
+                amdSevSnpCpuid: 0
+            }),
+            bindingHash
+        );
+        vm.mockCall(
+            AK_COLLATERAL_VERIFIER,
+            abi.encodeCall(IAkCollateralVerifier.verifyAkCollateral, (evidence.akPubCollateral)),
+            abi.encode(
+                AkCollateralVerificationResult({
+                    valid: true,
+                    akPub: oldAk,
+                    akPubFingerprint: LibKey.computeKeyFingerprint(oldAk),
+                    teeType: TEEType.AmdSevSnp,
+                    bindingHash: bindingHash
+                })
+            )
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SessionRegistry.AzureMaaTeeTypeMismatch.selector, TEEType.IntelTDX, TEEType.AmdSevSnp
+            )
+        );
+        sessionRegistry.registerSession(
+            evidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
     }
 
     function testAzureReportDataRejectsNonzeroPadding() public {
@@ -1543,6 +1604,7 @@ contract SessionLifecycleTest is Test {
                     valid: true,
                     akPub: akPub,
                     akPubFingerprint: LibKey.computeKeyFingerprint(akPub),
+                    teeType: teeResult.teeType,
                     bindingHash: bindingHash
                 })
             )

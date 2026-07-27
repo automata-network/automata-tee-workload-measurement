@@ -306,6 +306,10 @@ Verification steps:
 8. Assert `sha256(hclVarData) == bindingHash`.
 9. Parse `HCLAkPub` from `hclVarData` using the §14.3-scoped JWK parser, construct `PublicIdentity` with `typeId = ALGO_ID_RS256`.
 
+The verifier maps `x-ms-attestation-type` to the returned `teeType`
+(`tdxvm` → `IntelTDX`, `sevsnpvm` → `AmdSevSnp`). `SessionRegistry` requires
+this value to equal `TeeVerificationResult.teeType`.
+
 Binding: `sha256(hclVarData)` is returned as `bindingHash`. `SessionRegistry`
 requires the verified Intel TDX or AMD SEV-SNP report's 64-byte `REPORT_DATA`
 to equal `bindingHash || bytes32(0)`. This joins the independently verified raw

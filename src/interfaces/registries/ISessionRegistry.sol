@@ -124,9 +124,10 @@ interface ISessionRegistry {
     /// @return True if the session is active
     function isSessionActive(bytes32 sessionId) external view returns (bool);
 
-    /// @notice Check if a session is expired
+    /// @notice Check if a known session is expired
     /// @param sessionId The session identifier
     /// @return True if the session is expired
+    /// @dev Reverts with SessionNotFound when sessionId is unknown
     function isSessionExpired(bytes32 sessionId) external view returns (bool);
 
     /// @notice Get the current nonce for an owner (for replay protection)

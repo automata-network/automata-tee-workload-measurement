@@ -9,7 +9,7 @@ import {AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVer
 import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
 import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {AkPubCollateral, AkPubCollateralType} from "../src/types/Evidence.sol";
+import {AkPubCollateral, AkPubCollateralType, TEEType} from "../src/types/Evidence.sol";
 import {PublicIdentity} from "../src/types/Common.sol";
 import {ALGO_ID_ES256K, ALGO_ID_RS256} from "../src/types/Constants.sol";
 import {LibString} from "@solady/utils/LibString.sol";
@@ -82,6 +82,7 @@ contract AkCollateralVerifierMaaTest is Test {
         AkCollateralVerificationResult memory r = verifier.verifyAkCollateral(c);
 
         assertTrue(r.valid, "valid");
+        assertEq(uint8(r.teeType), uint8(TEEType.IntelTDX), "MAA tee type");
         assertEq(r.bindingHash, bindingHash, "bindingHash equals sha256(hclVarData)");
         assertEq(r.akPub.typeId, ALGO_ID_RS256, "akPub typeId is RS256");
         assertGt(r.akPub.key.length, 0, "akPub key non-empty");
@@ -102,6 +103,7 @@ contract AkCollateralVerifierMaaTest is Test {
         AkCollateralVerificationResult memory r = verifier.verifyAkCollateral(c);
 
         assertTrue(r.valid, "valid");
+        assertEq(uint8(r.teeType), uint8(TEEType.AmdSevSnp), "MAA tee type");
         assertEq(r.bindingHash, bindingHash, "bindingHash matches");
     }
 

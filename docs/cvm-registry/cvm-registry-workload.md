@@ -155,6 +155,7 @@ every base image.
 | `InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex)` | PCR specs are not strictly ascending |
 | `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
 | `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
+| `InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength)` | `STATIC` spec does not contain exactly one `matchData` entry |
 | `DuplicateRequirementKey(bytes32 key)` | Repeated key in requirements array |
 | `InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength)` | A reserved Boolean has the wrong number of values, or an Intel TDX or AMD SEV-SNP packed requirement does not contain exactly one value |
 | `InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue)` | A reserved Boolean is invalid, the Intel TDX TCB mask is invalid, or an AMD SEV-SNP packed value has an invalid layout |
@@ -171,7 +172,7 @@ every base image.
 
 ## Validation Rules
 
-1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24`
+1. **PCR shape and ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, every `pcrIndex` must be `< 24`, `STATIC` must contain exactly one `matchData` entry, and both dynamic types must contain at least one
 2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateRequirements`)
 3. **Reserved Boolean TEE requirements**: Intel TDX debug, AMD SEV-SNP debug, and AMD SEV-SNP `MIGRATE_MA` accept only `[bytes32(0)]` or `[bytes32(0), bytes32(uint256(1))]`. Missing means `[false]`.
 4. **Intel TDX TCB requirement**: Exactly one mask is required. The mask must include `ok` and may contain only bits in `0x33f`. Missing means `ok` only.

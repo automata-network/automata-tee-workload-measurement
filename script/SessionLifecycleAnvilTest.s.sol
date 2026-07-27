@@ -118,7 +118,11 @@ contract AnvilLifecycleAkVerifier is IAkCollateralVerifier {
     {
         PublicIdentity memory akPub = _akPub;
         return AkCollateralVerificationResult({
-            valid: true, akPub: akPub, akPubFingerprint: LibKey.computeKeyFingerprint(akPub), bindingHash: bytes32(0)
+            valid: true,
+            akPub: akPub,
+            akPubFingerprint: LibKey.computeKeyFingerprint(akPub),
+            teeType: TEEType.IntelTDX,
+            bindingHash: bytes32(0)
         });
     }
 }

@@ -62,7 +62,7 @@ struct PlatformProfile {
 
 struct MeasurementVariant {
     string name;                // e.g. "n2d-standard-2", "c3-standard-4"
-    PcrSpec[] overridePcrs;     // Replaces platform invariants at matching pcrIndex
+    PcrSpec[] overridePcrs;     // Indices the profile leaves unpinned; MUST be disjoint from invariants
     Attribute[] attributes;     // Replaces platform attributes at matching key
 }
 ```
@@ -292,6 +292,7 @@ struct AkCollateralVerificationResult {
     bool valid;
     PublicIdentity akPub;
     bytes32 akPubFingerprint;
+    TEEType teeType;       // Azure: authenticated x-ms-attestation-type; ignored for GCP
     bytes32 bindingHash;   // Azure: sha256(hclVarData) (asserted equal to MAA JWT's
                            //   tdx_report_data / x-ms-sevsnpvm-reportdata claim prefix
                            //   inside verifyAkCollateral, then matched against the

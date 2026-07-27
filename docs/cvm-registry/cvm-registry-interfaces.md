@@ -347,6 +347,7 @@ struct AkCollateralVerificationResult {
     bool valid;
     PublicIdentity akPub;
     bytes32 akPubFingerprint;
+    TEEType teeType;
     bytes32 bindingHash;
 }
 
@@ -354,8 +355,10 @@ function verifyAkCollateral(AkPubCollateral calldata collateral)
     external returns (AkCollateralVerificationResult memory result);
 ```
 
-For Azure, `bindingHash` is the MAA-verified `sha256(hclVarData)`. For GCP it
-is zero because `SessionRegistry` applies the TEE-to-vTPM PCR15 binding.
+For Azure, `teeType` is authenticated by the MAA JWT's
+`x-ms-attestation-type` claim and `bindingHash` is the MAA-verified
+`sha256(hclVarData)`. For GCP, `teeType` is ignored and `bindingHash` is zero
+because `SessionRegistry` applies the TEE-to-vTPM PCR15 binding.
 
 ---
 
