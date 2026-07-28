@@ -82,6 +82,13 @@ maa-key-registrar sync ... -y
 
 `--dry-run` is the safe path on a production multisig: print the commands, hand them to whoever drives the safe, no hot key required.
 
+> **Revoked kids require separate handling.** The current `sync` command sees
+> a revoked kid as missing because `hasMaaSigningKey` returns `false`, then
+> calls `upsertMaaSigningKey`, which clears `revoked`. Do not run automated
+> `sync` after an emergency revocation while that kid remains in JWKS unless
+> the automation excludes the kid. Restoring a revoked kid must be a deliberate
+> owner action.
+
 ### `revoke` — revoke one kid
 
 ```sh

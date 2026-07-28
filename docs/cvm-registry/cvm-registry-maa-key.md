@@ -174,6 +174,15 @@ Recommended off-chain watcher behaviour:
 3. Any new kid → submit `upsertMaaSigningKey`. Any on-chain kid no longer in JWKS and past `notAfter` → no action needed (verifier will reject naturally). Suspected compromise → `revokeMaaSigningKey` immediately.
 4. Page on: JWKS fetch failure for > 24h, any registered kid that is < 7 days from `notAfter` and no successor has appeared.
 
+Revocation is not sticky. `upsertMaaSigningKey` always writes
+`revoked = false`. The current `maa-key-registrar sync` command calls
+`hasMaaSigningKey`, which returns `false` for a revoked kid, classifies that kid
+as missing, and upserts it again if it remains in JWKS. After an emergency
+revocation, stop automated `sync` for that endpoint or add an operator-side
+denylist until the revoked kid disappears from JWKS. A safer registrar should
+represent `revoked` as a separate state and require an explicit operation to
+restore it.
+
 The watcher is intentionally out of scope for the contract repo and the portal repo. It is operator infrastructure; treat it the same way you would treat a CA-cert renewal cron job.
 
 ## Pre-Deployment Checklist
@@ -194,7 +203,11 @@ Failure mode without these: every Azure CVM `chain submit` aborts at `MaaKidNotR
 - **Per-region knob is intentionally absent.** `AkCollateralVerifier` holds a single `IMaaKeyRegistry` immutable reference; there is no per-region routing on chain. Different regions' kids coexist in the same mapping. The portal-side region selector (`AZURE_MAA_REGION_DEFAULT`) only decides *which* MAA endpoint signs the JWT; the on-chain side simply looks up whichever kid is in the JWT header.
 - **No event-replay for state reconstruction.** Unlike `KeyResolver` (which is idempotent and re-emission-free), `MaaSigningKeyUpserted` is emitted on every upsert including overwrites. Indexers tracking the current set must take the last event per `kidHash`, not the first.
 - **No issuer-to-region map.** The contract does not enforce that a given kid only verifies JWTs from a specific MAA endpoint URL beyond the `issuerHash` field; if an admin upserts the same kid with two different issuer strings (sequentially, since the mapping is keyed only by `kidHash`), only the latest survives. This is intentional — MAA reuses `kid` strings only within a single endpoint, so collisions are not expected.
-- **`notAfter` boundary is inclusive on upsert, exclusive on verify.** `upsertMaaSigningKey` accepts `notAfter == block.timestamp` (`require !(notAfter < block.timestamp)`), but the verifier rejects when `block.timestamp > key.notAfter`. There is a single-second window where a key can be upserted and then immediately rejected; in practice irrelevant given Microsoft's months-long validity periods.
+- **`notAfter` is inclusive on both upsert and verify.** `upsertMaaSigningKey`
+  accepts `notAfter == block.timestamp`, and the verifier also accepts that
+  exact timestamp because it rejects only when
+  `block.timestamp > key.notAfter`. The key becomes invalid when the block
+  timestamp advances past `notAfter`; there is no boundary mismatch.
 
 ## Relationship to Other Contracts
 
