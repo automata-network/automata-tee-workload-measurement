@@ -475,6 +475,37 @@ The predecessor's revocation state is screened before the ownership check,
 matching `revokeSession`'s ordering. Revocation state is already public through
 `getSession` and `isSessionActive`, so the ordering discloses nothing.
 
+#### Succession provenance: claimed versus proven
+
+Uniqueness of the succession link is not the same as proof of it, and
+consumers should not read one as the other.
+
+The link `recoverSession` asserts is **claimed by the owner**. The only
+signature covering the `(oldSessionId, newSessionId)` pair is the owner's
+lifecycle signature, and the owner is an external key. Nothing in a recovery
+shows that the successor CVM has any relationship to the machine that ran the
+predecessor. Recovering onto entirely different hardware is legitimate and
+expected, because recovery exists for the case where the predecessor is gone.
+
+The link `renewSession` asserts is **proven by the predecessor**. It requires a
+signature from the predecessor's own attested TPM signing key over
+`SESSION_RENEW_DOMAIN`, both session IDs, and `keccak256(abi.encode(newEvidence))`.
+That is a statement from the predecessor CVM authorizing this specific
+successor with this specific evidence, which is also why renewal requires the
+predecessor to still be active.
+
+For an indexer or relying party:
+
+| Event | Cardinality | What the link proves |
+|---|---|---|
+| `SessionRecovered` | at most one per predecessor | owner intent only |
+| `SessionRenewed` | at most one per predecessor | predecessor vTPM authorized this successor |
+
+Treat `SessionRecovered` as an owner-declared succession, useful for following
+an operator's intended lineage. Treat `SessionRenewed` as machine continuity.
+Neither event, on its own, substitutes for checking that the successor session
+is active and bound to the policy you expect.
+
 ## Cloud Instance and Session Lifetime
 
 `SessionRegistry` verifies a cryptographic TEE, vTPM, and key chain. It does
