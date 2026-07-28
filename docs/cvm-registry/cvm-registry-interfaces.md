@@ -431,7 +431,7 @@ function getMaaSigningKey(bytes32 kidHash) external view returns (MaaSigningKey 
 function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
 ```
 
-Admin authentication: `OwnableUpgradeable.onlyOwner` (EVM tx). No off-chain-signed envelope; the EVM tx nonce supplies replay protection. Validation: pubkey non-empty, issuerHash non-zero, `notAfter >= block.timestamp` (boundary inclusive); revoke reverts `KidNotRegistered` for never-registered kids. Upsert overwrites any existing record (resets `revoked = false`).
+Admin authentication: `OwnableUpgradeable.onlyOwner` (EVM tx). No off-chain-signed envelope; the EVM tx nonce supplies replay protection. Validation: pubkey non-empty, issuerHash non-zero, `notAfter >= block.timestamp` (boundary inclusive); revoke reverts `KidNotRegistered` for never-registered kids. Upsert inserts a new record or replaces an active record. Upsert reverts `KidRevoked(kidHash)` for a previously revoked `kidHash`; revocation is permanent for that `kidHash`.
 
 ---
 

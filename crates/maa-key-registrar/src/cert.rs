@@ -4,7 +4,7 @@
 //! 1. `pkcs1Pubkey` — DER PKCS#1 `RSAPublicKey` (SEQUENCE { INTEGER n, INTEGER e }).
 //!    The X.509 `SubjectPublicKeyInfo` wraps this in an AlgorithmIdentifier
 //!    + BIT STRING; for the `rsaEncryption` OID (1.2.840.113549.1.1.1) the
-//!    BIT STRING contents are the PKCS#1 `RSAPublicKey` directly.
+//!      BIT STRING contents are the PKCS#1 `RSAPublicKey` directly.
 //! 2. `notAfter` — Unix seconds from the leaf cert's validity window.
 
 use anyhow::{Context, Result, bail};
@@ -36,8 +36,7 @@ pub fn parse_leaf_x5c(x5c_b64: &str) -> Result<ParsedLeaf> {
         .decode(x5c_b64.trim())
         .context("base64-decoding x5c[0]")?;
 
-    let (_, cert) = X509Certificate::from_der(&der)
-        .context("parsing X.509 DER from x5c[0]")?;
+    let (_, cert) = X509Certificate::from_der(&der).context("parsing X.509 DER from x5c[0]")?;
 
     // ── Algorithm must be RSA ──────────────────────────────────────────
     let spki = cert.public_key();

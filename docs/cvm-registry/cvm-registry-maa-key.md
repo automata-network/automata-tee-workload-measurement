@@ -56,7 +56,9 @@ function upsertMaaSigningKey(
 
 - Owner-only.
 - Validates: `pkcs1Pubkey` non-empty, `issuerHash != bytes32(0)`, `notAfter >= block.timestamp` (boundary inclusive).
-- Overwrites any existing record at `kidHash` and resets `revoked = false`.
+- Inserts a new record or replaces an existing active record.
+- Reverts `KidRevoked(kidHash)` if the `kidHash` was previously revoked.
+  Revocation is permanent for that `kidHash`.
 - Emits `MaaSigningKeyUpserted(kidHash, issuerHash, notAfter)`.
 
 ### `revokeMaaSigningKey`
@@ -67,7 +69,10 @@ function revokeMaaSigningKey(bytes32 kidHash) external onlyOwner;
 
 - Owner-only.
 - Reverts `KidNotRegistered` if the kid was never registered (empty `pkcs1Pubkey`).
-- Sets `revoked = true`. Subsequent JWT verifications under this kid revert `MaaKidNotRegistered` regardless of `notAfter`.
+- Sets `revoked = true`. Subsequent JWT verifications under this kid revert
+  `MaaKidNotRegistered` regardless of `notAfter`.
+- Subsequent `upsertMaaSigningKey` calls for the same `kidHash` revert
+  `KidRevoked`. There is no restore or un-revoke operation.
 - Emits `MaaSigningKeyRevoked(kidHash)`.
 
 ### `getMaaSigningKey` / `hasMaaSigningKey`
@@ -87,6 +92,7 @@ function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
 | `EmptyIssuerHash()` | `issuerHash == bytes32(0)` on upsert |
 | `NotAfterInPast(uint64 notAfter, uint64 nowTs)` | `notAfter < block.timestamp` on upsert |
 | `KidNotRegistered(bytes32 kidHash)` | `revokeMaaSigningKey` on a kid that was never upserted |
+| `KidRevoked(bytes32 kidHash)` | `upsertMaaSigningKey` on a kid that was previously revoked |
 
 ## Verifier Integration
 
@@ -170,18 +176,20 @@ Microsoft policy: a fresh MAA RSA-2048 signing cert appears in `/certs` ~2 month
 Recommended off-chain watcher behaviour:
 
 1. Every N minutes (suggested 30-60), `GET <endpoint>/certs` for every region you support.
-2. Compute `kidHash` for each key in the response. Compare against the on-chain registry via `hasMaaSigningKey`.
-3. Any new kid → submit `upsertMaaSigningKey`. Any on-chain kid no longer in JWKS and past `notAfter` → no action needed (verifier will reject naturally). Suspected compromise → `revokeMaaSigningKey` immediately.
+2. Compute `kidHash` for each key in the response. Read the complete on-chain
+   record via `getMaaSigningKey` so active, missing, and revoked records remain
+   distinct.
+3. Any new kid → submit `upsertMaaSigningKey`. Any revoked kid → report and
+   skip it permanently. Any on-chain kid no longer in JWKS and past `notAfter`
+   → no action needed (the verifier will reject it naturally). Suspected
+   compromise → `revokeMaaSigningKey` immediately.
 4. Page on: JWKS fetch failure for > 24h, any registered kid that is < 7 days from `notAfter` and no successor has appeared.
 
-Revocation is not sticky. `upsertMaaSigningKey` always writes
-`revoked = false`. The current `maa-key-registrar sync` command calls
-`hasMaaSigningKey`, which returns `false` for a revoked kid, classifies that kid
-as missing, and upserts it again if it remains in JWKS. After an emergency
-revocation, stop automated `sync` for that endpoint or add an operator-side
-denylist until the revoked kid disappears from JWKS. A safer registrar should
-represent `revoked` as a separate state and require an explicit operation to
-restore it.
+Revocation is permanent for each `kidHash`. `upsertMaaSigningKey` rejects a
+revoked `kidHash` with `KidRevoked`. The `maa-key-registrar status` command
+reports the `revoked` state separately. The `maa-key-registrar sync` command
+skips revoked keys, including when `--force` is used. If Microsoft replaces a
+revoked certificate, the replacement must use a new `kid`.
 
 The watcher is intentionally out of scope for the contract repo and the portal repo. It is operator infrastructure; treat it the same way you would treat a CA-cert renewal cron job.
 

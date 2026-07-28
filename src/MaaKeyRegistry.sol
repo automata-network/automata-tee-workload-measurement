@@ -29,6 +29,9 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
     /// @notice Attempted to revoke a kid that was never registered
     error KidNotRegistered(bytes32 kidHash);
 
+    /// @notice Attempted to upsert a kid that was permanently revoked
+    error KidRevoked(bytes32 kidHash);
+
     // ============================================================================
     // Storage
     // ============================================================================
@@ -63,6 +66,7 @@ contract MaaKeyRegistry is IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable 
         external
         onlyOwner
     {
+        if (_keys[kidHash].revoked) revert KidRevoked(kidHash);
         if (pkcs1Pubkey.length == 0) revert EmptyPubkey();
         if (issuerHash == bytes32(0)) revert EmptyIssuerHash();
         if (notAfter < block.timestamp) revert NotAfterInPast(notAfter, uint64(block.timestamp));
