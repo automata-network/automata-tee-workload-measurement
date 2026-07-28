@@ -326,6 +326,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             revert Unauthorized(ownerFingerprint, _baseImages[baseImageId].owner);
         }
 
+        // Appending a variant publishes a new selectable policy branch that may declare its own
+        // reserved TEE attributes, so it is gated exactly like a fresh registration. Without this
+        // an owner removed from the whitelist could still widen the policy of a base image they
+        // registered while whitelisted.
+        _checkRegistrationAllowed(ownerFingerprint);
+
         // Validate PCR ordering and attribute uniqueness for all profiles and variants
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
