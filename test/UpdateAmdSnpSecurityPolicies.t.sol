@@ -16,10 +16,13 @@ contract UpdateAmdSnpSecurityPoliciesTest is Test {
         string memory policyJson = string.concat(
             '{"policies":[{',
             '"cpuid":1638657,',
+            '"expectedRevision":6,',
             '"revision":7,',
             '"active":true,',
             '"minimumTcb":"0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004",',
-            '"platformInfoPolicy":"0x0000000000000000000000000000000000000000000000000000000000000020"',
+            '"platformInfoPolicy":"0x0000000000000000000000000000000000000000000000000000000000000020",',
+            '"requiredLaunchMitigationVector":3,',
+            '"requiredCurrentMitigationVector":5',
             "}]}"
         );
 
@@ -28,9 +31,12 @@ contract UpdateAmdSnpSecurityPoliciesTest is Test {
 
         assertEq(policies.length, 1);
         assertEq(policies[0].cpuid, 0x190101);
+        assertEq(policies[0].expectedRevision, 6);
         assertEq(policies[0].revision, 7);
         assertTrue(policies[0].active);
         assertEq(policies[0].minimumTcb, 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004);
         assertEq(policies[0].platformInfoPolicy, 0x0000000000000000000000000000000000000000000000000000000000000020);
+        assertEq(policies[0].requiredLaunchMitigationVector, 3);
+        assertEq(policies[0].requiredCurrentMitigationVector, 5);
     }
 }

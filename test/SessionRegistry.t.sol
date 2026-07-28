@@ -10,8 +10,8 @@ import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
 import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
-import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
-import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
+import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
 import {TeeVerifier} from "../src/TeeVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -415,9 +415,9 @@ contract SessionRegistryTest is Test {
             PublicIdentity memory decodedOwnerIdentity,
             bytes memory ownerSignature
         ) = abi.decode(params, (AttestationEvidence, bytes32, bytes32, bytes32, bytes32, uint64, PublicIdentity, bytes));
-
-        // Warp to before expiration if needed
-        vm.warp(1770567955);
+        // The historical fixture predates session-key proof of possession. Preserve its
+        // TPM delegation signature and add a test-only possession signature.
+        evidence.sessionKeySignature = abi.encode(evidence.sessionKeySignature, bytes("possession"));
 
         // Call registerSession
         sessionId = sessionRegistry.registerSession(
@@ -473,7 +473,7 @@ contract SessionRegistryTest is Test {
         // console.logBytes32(variantId);
 
         // TODO: Replace with actual session registration calldata
-        bytes32 sessionId = _registerSessionDirect(sessionCalldata());
+        bytes32 sessionId = _registerSessionWithCalldata(sessionCalldata());
 
         // Option 2: Decode and call (allows inspection of params)
         // bytes memory sessionCalldata = hex"...";

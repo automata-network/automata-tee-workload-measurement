@@ -256,12 +256,17 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         return _whitelist[fingerprint];
     }
 
-    /// @notice Pauses the contract
+    /// @notice Returns true when only whitelisted owners may register workloads.
+    function registrationRestricted() public view override returns (bool) {
+        return paused();
+    }
+
+    /// @notice Restricts registration to whitelisted owners.
     function pause() external onlyOwner {
         _pause();
     }
 
-    /// @notice Unpauses the contract
+    /// @notice Restores permissionless registration.
     function unpause() external onlyOwner {
         _unpause();
     }
@@ -270,10 +275,10 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     // Internal Functions
     // ============================================================================
 
-    /// @dev Checks if registration is allowed based on pause state and whitelist
+    /// @dev Checks if registration is allowed based on restriction state and whitelist
     /// @param ownerFingerprint The owner's fingerprint
     function _checkRegistrationAllowed(bytes32 ownerFingerprint) private view {
-        if (paused() && !_whitelist[ownerFingerprint]) {
+        if (registrationRestricted() && !_whitelist[ownerFingerprint]) {
             revert NotWhitelisted(ownerFingerprint);
         }
     }

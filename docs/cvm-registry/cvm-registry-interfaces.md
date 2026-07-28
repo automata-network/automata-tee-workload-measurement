@@ -299,6 +299,9 @@ struct VerifiedTeePolicyInputs {
     bytes32 amdSevSnpTcbValues;
     uint64 amdSevSnpPlatformInfo;
     uint24 amdSevSnpCpuid;
+    uint32 amdSevSnpReportVersion;
+    uint64 amdSevSnpLaunchMitigationVector;
+    uint64 amdSevSnpCurrentMitigationVector;
 }
 
 struct AmdSnpSecurityPolicy {
@@ -307,14 +310,19 @@ struct AmdSnpSecurityPolicy {
     bytes32 sourceDigest;
     uint64 revision;
     bool active;
+    uint64 requiredLaunchMitigationVector;
+    uint64 requiredCurrentMitigationVector;
 }
 
 struct AmdSnpSecurityPolicyUpdate {
     uint24 cpuid;
+    uint64 expectedRevision;
     uint64 revision;
     bool active;
     bytes32 minimumTcb;
     bytes32 platformInfoPolicy;
+    uint64 requiredLaunchMitigationVector;
+    uint64 requiredCurrentMitigationVector;
 }
 
 function updatePolicies(
@@ -605,4 +613,4 @@ Note: Nitro Enclave verifier is **not yet integrated** into `TeeVerifier` -- the
 
 7. **IKeyResolver has `IdentityRegistered` event** -- emits `(fingerprint, typeId)` on new registrations.
 
-8. **Whitelist events/functions are NOT in interfaces** -- `addToWhitelist`, `removeFromWhitelist`, `isWhitelisted`, `WhitelistAdded`, `WhitelistRemoved` are implementation-only (in BaseImageRegistry and WorkloadRegistry contracts, not their interfaces). Same for `pause()`/`unpause()`.
+8. **Whitelist events/functions are NOT in interfaces** -- `addToWhitelist`, `removeFromWhitelist`, `isWhitelisted`, `WhitelistAdded`, `WhitelistRemoved`, `pause()`, and `unpause()` are implementation-only. `registrationRestricted()` is the interface-level status query.

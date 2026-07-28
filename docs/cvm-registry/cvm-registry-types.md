@@ -163,6 +163,9 @@ struct TeeVerificationResult {
     bytes32 amdSevSnpTcbValues;
     uint64 amdSevSnpPlatformInfo;
     uint24 amdSevSnpCpuid;
+    uint32 amdSevSnpReportVersion;
+    uint64 amdSevSnpLaunchMitigationVector;
+    uint64 amdSevSnpCurrentMitigationVector;
 }
 ```
 
@@ -250,7 +253,7 @@ struct AttestationEvidence {
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
     AkPubCollateral akPubCollateral;
-    bytes sessionKeySignature;     // TPM signing key's signature delegating session key
+    bytes sessionKeySignature;     // abi.encode(TPM delegation signature, session-key possession signature)
     PublicIdentity sessionKey;     // The session key being delegated to
 }
 

@@ -30,7 +30,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Contract version
-    string public constant TEE_VERIFIER_VERSION = "1.3.0";
+    string public constant TEE_VERIFIER_VERSION = "1.4.0";
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
@@ -120,6 +120,7 @@ contract TeeVerifier is ITeeVerifier {
     uint256 private constant SNP_COMMITTED_VERSION_RESERVED_OFFSET = 0x1ef;
     uint256 private constant SNP_LAUNCH_TCB_OFFSET = 0x1f0;
     uint256 private constant SNP_LAUNCH_MITIGATION_VECTOR_OFFSET = 0x1f8;
+    uint256 private constant SNP_CURRENT_MITIGATION_VECTOR_OFFSET = 0x200;
     uint256 private constant SNP_CURRENT_MITIGATION_VECTOR_END = 0x208;
     uint256 private constant SNP_SIGNATURE_OFFSET = 0x2a0;
     uint256 private constant SNP_REPORT_ID_MA_OFFSET = 0x160;
@@ -285,17 +286,12 @@ contract TeeVerifier is ITeeVerifier {
         // Allocate quote body buffer
         quoteBody = new bytes(bodySize);
 
-        // Copy quote body from output[11:11+bodySize] using assembly
+        // MCOPY copies exactly bodySize bytes. This avoids the old ceiling-rounded mload/mstore
+        // loop, whose final mload read up to 31 bytes beyond the logical end of output.
         assembly ("memory-safe") {
             let src := add(add(output, 0x20), DCAP_QUOTE_BODY_OFFSET)
             let dst := add(quoteBody, 0x20)
-
-            // Copy in 32-byte chunks (ceiling division to handle non-aligned sizes)
-            let chunks := div(add(bodySize, 31), 32)
-            for { let i := 0 } lt(i, chunks) { i := add(i, 1) } {
-                let offset := mul(i, 32)
-                mstore(add(dst, offset), mload(add(src, offset)))
-            }
+            mcopy(dst, src, bodySize)
         }
     }
 
@@ -546,7 +542,10 @@ contract TeeVerifier is ITeeVerifier {
             intelTdxTcbStatusBit: tcbStatusBit,
             amdSevSnpTcbValues: bytes32(0),
             amdSevSnpPlatformInfo: 0,
-            amdSevSnpCpuid: 0
+            amdSevSnpCpuid: 0,
+            amdSevSnpReportVersion: 0,
+            amdSevSnpLaunchMitigationVector: 0,
+            amdSevSnpCurrentMitigationVector: 0
         });
     }
 
@@ -609,6 +608,12 @@ contract TeeVerifier is ITeeVerifier {
         if ((policy & SNP_POLICY_MIGRATE_MA) != 0) {
             enabledTeeAttributes |= TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT;
         }
+        uint64 launchMitigationVector;
+        uint64 currentMitigationVector;
+        if (version == 5) {
+            launchMitigationVector = _readLeUint64(attestationReport, SNP_LAUNCH_MITIGATION_VECTOR_OFFSET);
+            currentMitigationVector = _readLeUint64(attestationReport, SNP_CURRENT_MITIGATION_VECTOR_OFFSET);
+        }
 
         return TeeVerificationResult({
             valid: true,
@@ -618,7 +623,10 @@ contract TeeVerifier is ITeeVerifier {
             intelTdxTcbStatusBit: 0,
             amdSevSnpTcbValues: tcbValues,
             amdSevSnpPlatformInfo: platformInfo,
-            amdSevSnpCpuid: cpuid
+            amdSevSnpCpuid: cpuid,
+            amdSevSnpReportVersion: version,
+            amdSevSnpLaunchMitigationVector: launchMitigationVector,
+            amdSevSnpCurrentMitigationVector: currentMitigationVector
         });
     }
 }

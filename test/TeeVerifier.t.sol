@@ -5,8 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {TeeVerifier} from "../src/TeeVerifier.sol";
 import {ISnpAttestation, VerificationResult} from "../src/interfaces/external/ISnpAttestation.sol";
 import {IDcapAttestation} from "../src/interfaces/external/IDcapAttestation.sol";
-import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
-import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
+import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.sol";
 import {
     TeeReport,
     TEEType,
@@ -97,6 +97,9 @@ contract TeeVerifierSnpTest is Test {
         assertEq(res.amdSevSnpTcbValues, bytes32(0));
         assertEq(res.amdSevSnpPlatformInfo, 0);
         assertEq(res.amdSevSnpCpuid, 0x191101);
+        assertEq(res.amdSevSnpReportVersion, 3);
+        assertEq(res.amdSevSnpLaunchMitigationVector, 0);
+        assertEq(res.amdSevSnpCurrentMitigationVector, 0);
         // _verifyAmdSevSnp returns the full bound report as reportData.
         assertEq(res.reportData, report);
     }
@@ -297,9 +300,12 @@ contract TeeVerifierSnpTest is Test {
 
         report = _report();
         _setLeUint32(report, 0, 5);
-        report[0x1f8] = bytes1(uint8(1));
-        report[0x200] = bytes1(uint8(1));
-        _verifySnp(report);
+        _setLeUint64(report, 0x1f8, 0x0123_4567_89ab_cdef);
+        _setLeUint64(report, 0x200, 0xfedc_ba98_7654_3210);
+        TeeVerificationResult memory result = _verifySnp(report);
+        assertEq(result.amdSevSnpReportVersion, 5);
+        assertEq(result.amdSevSnpLaunchMitigationVector, 0x0123_4567_89ab_cdef);
+        assertEq(result.amdSevSnpCurrentMitigationVector, 0xfedc_ba98_7654_3210);
 
         report[0x208] = bytes1(uint8(1));
         vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidSnpReservedField.selector, 0x208));
@@ -368,6 +374,9 @@ contract TeeVerifierSnpTest is Test {
         assertEq(result.amdSevSnpTcbValues, bytes32(0));
         assertEq(result.amdSevSnpPlatformInfo, 0);
         assertEq(result.amdSevSnpCpuid, 0);
+        assertEq(result.amdSevSnpReportVersion, 0);
+        assertEq(result.amdSevSnpLaunchMitigationVector, 0);
+        assertEq(result.amdSevSnpCurrentMitigationVector, 0);
     }
 
     function test_tdx_rejects_invalid_reserved_attribute_bit() public {

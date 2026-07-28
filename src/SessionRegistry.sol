@@ -168,6 +168,12 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice Session key delegation signature failed verification
     error SessionKeyDelegationFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint);
 
+    /// @notice Session key proof-of-possession signature failed verification
+    error SessionKeyPossessionFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint);
+
+    /// @notice Another active session already owns the session key fingerprint
+    error SessionFingerprintInUse(bytes32 sessionKeyFingerprint, bytes32 activeSessionId);
+
     /// @notice STATIC PCR measured value does not match the spec
     error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
 
@@ -340,6 +346,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
         // Revoke session
         sessionStorage.isRevoked = true;
+        _clearSessionFingerprint(sessionId, sessionStorage.session.sessionKeyFingerprint);
 
         emit SessionRevoked(sessionId, ownerFingerprint);
     }
@@ -408,6 +415,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         );
 
         predecessor.isRevoked = true;
+        _clearSessionFingerprint(oldSessionId, predecessor.session.sessionKeyFingerprint);
         emit SessionRevoked(oldSessionId, ownerFingerprint);
         _finalizeFullSession(
             result, workloadId, baseImageId, platformProfileId, measurementVariantId, newEvidence.sessionKey
@@ -452,6 +460,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
         if (!predecessor.isRevoked) {
             predecessor.isRevoked = true;
+            _clearSessionFingerprint(oldSessionId, predecessor.session.sessionKeyFingerprint);
             emit SessionRevoked(oldSessionId, ownerFingerprint);
         }
         _finalizeFullSession(
@@ -474,7 +483,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     }
 
     function getSessionId(bytes32 sessionFingerprint) external view returns (bytes32 sessionId) {
-        return _sessionFingerprintsToIds[sessionFingerprint];
+        sessionId = _sessionFingerprintsToIds[sessionFingerprint];
+        if (sessionId == bytes32(0) || !_isSessionActive(_sessions[sessionId])) {
+            return bytes32(0);
+        }
     }
 
     function getSessionOwner(bytes32 sessionId) external view returns (bytes32 ownerFingerprint) {
@@ -808,6 +820,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         _requireSignature(ownerIdentity, message, ownerSignature);
 
         _sessions[oldSessionId].isRevoked = true;
+        _clearSessionFingerprint(oldSessionId, _sessions[oldSessionId].session.sessionKeyFingerprint);
         emit SessionRevoked(oldSessionId, ctx.ownerFingerprint);
 
         _createSession(
@@ -861,7 +874,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 intelTdxTcbStatusBit: teeResult.intelTdxTcbStatusBit,
                 amdSevSnpTcbValues: teeResult.amdSevSnpTcbValues,
                 amdSevSnpPlatformInfo: teeResult.amdSevSnpPlatformInfo,
-                amdSevSnpCpuid: teeResult.amdSevSnpCpuid
+                amdSevSnpCpuid: teeResult.amdSevSnpCpuid,
+                amdSevSnpReportVersion: teeResult.amdSevSnpReportVersion,
+                amdSevSnpLaunchMitigationVector: teeResult.amdSevSnpLaunchMitigationVector,
+                amdSevSnpCurrentMitigationVector: teeResult.amdSevSnpCurrentMitigationVector
             }),
             profileAttributes,
             variantAttributes,
@@ -1039,7 +1055,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     /// @dev Verifies session key delegation signature
     /// @param certifiedKey The certified TPM signing key
-    /// @param sessionKeySignature The delegation signature
+    /// @param sessionKeySignature abi.encode(TPM delegation signature, session-key proof-of-possession signature)
     /// @param sessionKey The session key being delegated to
     /// @param baseImageId The base image identifier
     /// @param workloadId The workload identifier
@@ -1054,6 +1070,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 sessionId
     ) private view returns (bytes32 sessionKeyFingerprint) {
         sessionKeyFingerprint = LibKey.computeKeyFingerprint(sessionKey);
+        (bytes memory tpmDelegationSignature, bytes memory sessionKeyPossessionSignature) =
+            abi.decode(sessionKeySignature, (bytes, bytes));
 
         bytes32 delegationMessage = keccak256(
             abi.encode(
@@ -1067,8 +1085,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             )
         );
 
-        if (!signatureVerifier.verify(certifiedKey, delegationMessage, sessionKeySignature)) {
+        if (!signatureVerifier.verify(certifiedKey, delegationMessage, tpmDelegationSignature)) {
             revert SessionKeyDelegationFailed(delegationMessage, sessionKeyFingerprint);
+        }
+        if (!signatureVerifier.verify(sessionKey, delegationMessage, sessionKeyPossessionSignature)) {
+            revert SessionKeyPossessionFailed(delegationMessage, sessionKeyFingerprint);
         }
 
         return sessionKeyFingerprint;
@@ -1107,6 +1128,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @dev Creates a new session and updates related storage
     /// @param params Session parameters for the new session
     function _createSession(SessionParams memory params) private {
+        bytes32 mappedSessionId = _sessionFingerprintsToIds[params.sessionKeyFingerprint];
+        if (mappedSessionId != bytes32(0) && _isSessionActive(_sessions[mappedSessionId])) {
+            revert SessionFingerprintInUse(params.sessionKeyFingerprint, mappedSessionId);
+        }
+
         _sessions[params.sessionId] = CVMSessionStorage({
             exists: true,
             isRevoked: false,
@@ -1125,6 +1151,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         });
 
         _sessionFingerprintsToIds[params.sessionKeyFingerprint] = params.sessionId;
+    }
+
+    /// @dev Clears the reverse lookup only when it still points at the session being revoked.
+    function _clearSessionFingerprint(bytes32 sessionId, bytes32 sessionKeyFingerprint) private {
+        if (_sessionFingerprintsToIds[sessionKeyFingerprint] == sessionId) {
+            delete _sessionFingerprintsToIds[sessionKeyFingerprint];
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════

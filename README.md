@@ -35,13 +35,16 @@ SessionRegistry (attestation verification and session lifecycle)
 The usual PCR split is a convention. The contracts require sorted PCR indexes
 below 24 but do not enforce a fixed platform-versus-workload range.
 
-`TeeVerifier` extracts six reserved Intel TDX and AMD SEV-SNP security-policy
-inputs from verified reports. `SessionRegistry` sends the effective profile,
+`TeeVerifier` extracts six authorable Intel TDX and AMD SEV-SNP
+security-policy inputs plus the AMD SEV-SNP report version and version-5
+mitigation vectors from verified reports. `SessionRegistry` sends the effective profile,
 variant, and workload attributes to `AmdSnpSecurityPolicyRegistry`. That
 registry evaluates ordinary metadata first, then only the reserved attributes
 for the verified TEE type. Intel TDX TCB status uses a configurable one-hot
 mask. AMD SEV-SNP TCB and `PLATFORM_INFO` checks also require the active
-`AmdSnpSecurityPolicyRegistry` record for the report's exact CPUID.
+`AmdSnpSecurityPolicyRegistry` record for the report's exact CPUID. That
+record also applies mandatory mitigation-vector masks that authors cannot
+override.
 
 **Key Principles:**
 - **Separation of Concerns** — Base images (privileged OS), workloads (unprivileged apps), and sessions (runtime identity) are managed independently

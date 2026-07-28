@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {IDcapAttestation} from "../interfaces/external/IDcapAttestation.sol";
+import {IDcapAttestation} from "../../src/interfaces/external/IDcapAttestation.sol";
 
 /// @title MockAutomataDcapAttestation
 /// @notice Mock DCAP attestation verifier for testing with real TDX quotes

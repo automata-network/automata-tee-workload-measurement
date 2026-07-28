@@ -96,7 +96,7 @@ function registerBaseImage(
 - Registers new base image with hierarchical profiles and variants
 - `measurementVariants` is a 2D array: `measurementVariants[i]` maps to `platformProfiles[i]`
 - Computes owner fingerprint, verifies signature over `sha256(abi.encode(BASEIMAGE_REGISTER_MSG, chainid, address(this), opExpiresAt, spec, platformProfiles, measurementVariants))`
-- Registration allowed when: unpaused OR owner is whitelisted (uses `_checkRegistrationAllowed`, NOT `whenNotPaused` modifier)
+- Registration allowed when: `registrationRestricted()` is false, or the owner is whitelisted
 - Validates: signature expiry, array length match, PCR order, attribute uniqueness
 - Emits: `BaseImageRegistered`, `PlatformProfileRegistered`, `MeasurementVariantRegistered`
 
@@ -157,6 +157,7 @@ function addPlatformVariants(
 | `isWhitelisted(bytes32)` | Check whitelist status |
 | `pause()` | Pause registration |
 | `unpause()` | Unpause registration |
+| `registrationRestricted()` | True when only whitelisted owners may register or update |
 
 ## Errors
 
@@ -206,7 +207,7 @@ function addPlatformVariants(
 8. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
 9. **Signature expiry**: `block.timestamp <= opExpiresAt`
 10. **Owner match**: Signer fingerprint must match stored owner for updates/deactivation
-11. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
+11. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration.
 
 ## Initialization
 

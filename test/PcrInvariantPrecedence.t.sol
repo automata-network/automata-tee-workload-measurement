@@ -17,7 +17,7 @@ import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistr
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
-import {MockSignatureVerifier} from "../src/mock/MockSignatureVerifier.sol";
+import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {
     AccessMode,
@@ -292,7 +292,7 @@ contract PcrInvariantPrecedenceTest is Test {
                     })
                 )
             }),
-            sessionKeySignature: bytes("delegation"),
+            sessionKeySignature: abi.encode(bytes("delegation"), bytes("possession")),
             sessionKey: _identity(ALGO_ID_ES256K, 0x52),
             rotationSignature: bytes("rotation"),
             oldTpmSigningKey: tpmSigningKey,
@@ -432,7 +432,7 @@ contract PcrInvariantPrecedenceTest is Test {
         });
         evidence.akPubCollateral =
             AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: bytes("")});
-        evidence.sessionKeySignature = bytes("delegation");
+        evidence.sessionKeySignature = abi.encode(bytes("delegation"), bytes("possession"));
         evidence.sessionKey = _identity(ALGO_ID_ES256K, 0x04);
     }
 
@@ -449,7 +449,10 @@ contract PcrInvariantPrecedenceTest is Test {
                     intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
                     amdSevSnpTcbValues: bytes32(0),
                     amdSevSnpPlatformInfo: 0,
-                    amdSevSnpCpuid: 0
+                    amdSevSnpCpuid: 0,
+                    amdSevSnpReportVersion: 0,
+                    amdSevSnpLaunchMitigationVector: 0,
+                    amdSevSnpCurrentMitigationVector: 0
                 })
             )
         );

@@ -48,7 +48,7 @@ uint256 private constant GCP_UUID_SIZE = 16;
 |---|---|---|
 | `_sessions` | `mapping(bytes32 => CVMSessionStorage)` | Session state |
 | `_ownerNonces` | `mapping(bytes32 => uint256)` | Replay protection per owner |
-| `_sessionFingerprintsToIds` | `mapping(bytes32 => bytes32)` | Session key fingerprint -> session ID |
+| `_sessionFingerprintsToIds` | `mapping(bytes32 => bytes32)` | Session key fingerprint -> active session ID |
 | `__gap` | `uint256[47]` | Storage gap |
 
 ## Storage Struct
@@ -151,7 +151,7 @@ Input: evidence.teeReport
 Actions:
   - Call teeVerifier.verifyTeeReport(teeReport)
   - Revert TeeVerificationFailed if !result.valid
-Output: TeeVerificationResult { valid, reportData (full quote body or report), teeType, enabledTeeAttributes, intelTdxTcbStatusBit, amdSevSnpTcbValues, amdSevSnpPlatformInfo, amdSevSnpCpuid }
+Output: TeeVerificationResult { valid, reportData (full quote body or report), teeType, enabledTeeAttributes, intelTdxTcbStatusBit, amdSevSnpTcbValues, amdSevSnpPlatformInfo, amdSevSnpCpuid, amdSevSnpReportVersion, amdSevSnpLaunchMitigationVector, amdSevSnpCurrentMitigationVector }
 ```
 
 ### Step 2a: Verified TEE and Attribute Policy
@@ -183,8 +183,9 @@ base-image mask and workload mask each default to `0x1`, which permits only
 `ok`. Both masks must contain the verified bit. A measurement-variant mask
 replaces the matching profile mask.
 
-For AMD SEV-SNP, SessionRegistry passes the verified CPUID, four packed TCB
-values, and `PLATFORM_INFO` to `AmdSnpSecurityPolicyRegistry`. The registry
+For AMD SEV-SNP, SessionRegistry passes the verified CPUID, report version,
+four packed TCB values, `PLATFORM_INFO`, `LAUNCH_MIT_VECTOR`, and
+`CURRENT_MIT_VECTOR` to `AmdSnpSecurityPolicyRegistry`. The registry
 requires an active policy for that exact CPUID. That record supplies defaults;
 it is not an independent mandatory floor. Packed AMD SEV-SNP values use the
 same measurement-variant-first lookup. The base-image side resolves from the
@@ -195,6 +196,10 @@ resolved values. The effective `platform-info.policy` combines only the two
 resolved required-set and required-clear masks. Conflicting masks fail.
 Matching explicit values on both sides may relax the registry default; one
 explicit side alone cannot.
+
+The registry's two mitigation-vector masks always apply. A nonzero mask
+requires report version 5, and the matching signed vector must contain every
+required bit. Base-image and workload policy cannot replace these masks.
 
 The contract recognizes only the six exact reserved attribute hashes listed
 in [Types, Constants & Libraries](cvm-registry-types.md). It cannot
@@ -282,7 +287,10 @@ Actions:
   - sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
   - Revert SessionAlreadyExists if session exists
   - Delegation message = keccak256(abi.encode(DELEGATION_DOMAIN, block.chainid, address(this), baseImageId, workloadId, sessionId, sessionKeyFingerprint))
-  - Verify: signatureVerifier.verify(certifiedKey, delegationMessage, sessionKeySignature)
+  - Decode sessionKeySignature as abi.encode(tpmDelegationSignature, sessionKeyPossessionSignature)
+  - Verify the certified TPM key signed delegationMessage
+  - Verify the session key signed the same delegationMessage
+  - The second signature proves possession of the private session key
   - Revert SessionKeyDelegationFailed if invalid
 Output: sessionId, sessionKeyFingerprint
 ```
@@ -339,6 +347,7 @@ Actions:
     - If workloadSpec.sessionTtl == 0: block.timestamp + DEFAULT_CVM_TTL (30 days)
     - Else: block.timestamp + workloadSpec.sessionTtl
   - Store session with registeredAt = block.timestamp, sessionExpiresAt computed above
+  - Reject the write if the fingerprint maps to another active session
   - Map sessionKeyFingerprint -> sessionId in _sessionFingerprintsToIds
   - Emit SessionRegistered + AttestationKeysRevealed
 Output: sessionId
@@ -373,6 +382,7 @@ function revokeSession(
 ```
 
 - Sets `isRevoked = true`
+- Clears `_sessionFingerprintsToIds` when it still points at this session
 - Requires owner signature over `sha256(abi.encode(SESSION_REVOKE_MSG, chainid, address(this), opExpiresAt, sessionId))`
 - Emits: `SessionRevoked`
 
@@ -488,7 +498,7 @@ provider resources.
 | Function | Returns | Notes |
 |---|---|---|
 | `getSession(sessionId)` | `CVMSession` | Reverts if not found |
-| `getSessionId(sessionFingerprint)` | `bytes32` | Lookup by session key fingerprint |
+| `getSessionId(sessionFingerprint)` | `bytes32` | Lookup by session key fingerprint; returns zero when no active session owns it |
 | `getSessionOwner(sessionId)` | `bytes32` | Owner fingerprint |
 | `isSessionActive(sessionId)` | `bool` | exists && !revoked && block.timestamp <= sessionExpiresAt && !workloadRegistry.isWorkloadRevoked(workloadId) && !baseImageRegistry.isBaseImageRevoked(baseImageId). **Cascades**: revoking the underlying workload or base image flips every dependent session inactive on the next read. |
 | `isSessionExpired(sessionId)` | `bool` | `block.timestamp > sessionExpiresAt`; reverts `SessionNotFound` if the id is unknown |

@@ -88,6 +88,11 @@ contract SignatureVerifier is ISignatureVerifier {
         view
         returns (bool valid)
     {
+        // P-256 TPM firmware may return either mathematically valid s value. The atakit
+        // portal normalizes TPM-produced signatures to low-s before submission, but this
+        // verifier still accepts high-s for compatibility with other existing producers.
+        // Enforce low-s here only after every P-256 producer performs the same normalization.
+
         // Validate key format: must be 65 bytes starting with 0x04
         if (key.length != 65 || key[0] != 0x04) {
             return false;

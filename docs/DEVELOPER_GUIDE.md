@@ -43,7 +43,7 @@ The system is composed of six contract groups with strict separation of concerns
 - **BaseImageRegistry** — Defines platform images and their expected PCR measurement specifications. Managed by base image publishers.
 - **WorkloadRegistry** — Defines application-level policies including base image access control, attribute requirements, and PCR constraints. Managed by workload developers.
 - **SessionRegistry** — Orchestrates the full attestation verification workflow, creates on-chain session identities, and manages session lifecycle.
-- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
+- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults plus mandatory mitigation-vector masks for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
 - **AkCollateralVerifier** — Separately deployed Azure MAA JWT and GCP AK certificate-chain verifier.
 - **MaaKeyRegistry** — Stores the owner-managed Microsoft Azure Attestation signing keys used by `AkCollateralVerifier`.
 - **TeeVerifier** — Stateless dispatcher for TEE attestation reports. Routes to DCAP (Intel TDX) or SNP (AMD SEV-SNP) verifiers. Supports ZK proof backends (RiscZero, SP1).
@@ -384,7 +384,8 @@ Supports three verification backends: `Solidity` (on-chain), `ZkRiscZero`, `ZkSu
 
 Returns a `TeeVerificationResult` containing `valid`, the validated report
 body, the verified TEE type, three Boolean-state bits, the one-hot Intel DCAP
-TCB status, and the AMD SEV-SNP TCB, `PLATFORM_INFO`, and CPUID state.
+TCB status, and the AMD SEV-SNP TCB, `PLATFORM_INFO`, CPUID, report-version,
+`LAUNCH_MIT_VECTOR`, and `CURRENT_MIT_VECTOR` state.
 `SessionRegistry` explicitly rejects `valid == false`.
 
 ### Step 2a: Verified TEE and Attribute Policy

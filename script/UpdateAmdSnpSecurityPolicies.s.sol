@@ -13,8 +13,11 @@ import {
 struct AmdSnpSecurityPolicyJson {
     bool active;
     uint24 cpuid;
+    uint64 expectedRevision;
     bytes32 minimumTcb;
     bytes32 platformInfoPolicy;
+    uint64 requiredCurrentMitigationVector;
+    uint64 requiredLaunchMitigationVector;
     uint64 revision;
 }
 
@@ -33,10 +36,13 @@ contract UpdateAmdSnpSecurityPolicies is Script {
         for (uint256 i = 0; i < parsed.length; i++) {
             policies[i] = AmdSnpSecurityPolicyUpdate({
                 cpuid: parsed[i].cpuid,
+                expectedRevision: parsed[i].expectedRevision,
                 revision: parsed[i].revision,
                 active: parsed[i].active,
                 minimumTcb: parsed[i].minimumTcb,
-                platformInfoPolicy: parsed[i].platformInfoPolicy
+                platformInfoPolicy: parsed[i].platformInfoPolicy,
+                requiredLaunchMitigationVector: parsed[i].requiredLaunchMitigationVector,
+                requiredCurrentMitigationVector: parsed[i].requiredCurrentMitigationVector
             });
         }
     }

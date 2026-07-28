@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {ISignatureVerifier} from "../interfaces/ISignatureVerifier.sol";
-import {PublicIdentity} from "../types/Common.sol";
+import {ISignatureVerifier} from "../../src/interfaces/ISignatureVerifier.sol";
+import {PublicIdentity} from "../../src/types/Common.sol";
 
 /// @title MockSignatureVerifier
 /// @notice Mock signature verifier for development/testing that accepts all signatures

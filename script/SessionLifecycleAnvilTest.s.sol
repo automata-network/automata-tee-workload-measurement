@@ -16,7 +16,7 @@ import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/inte
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
-import {MockSignatureVerifier} from "../src/mock/MockSignatureVerifier.sol";
+import {MockSignatureVerifier} from "../test/mocks/MockSignatureVerifier.sol";
 import {
     AccessMode,
     Attribute,
@@ -90,7 +90,10 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
             intelTdxTcbStatusBit: _teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
             amdSevSnpTcbValues: bytes32(0),
             amdSevSnpPlatformInfo: 0,
-            amdSevSnpCpuid: _teeType == TEEType.AmdSevSnp ? 0x191101 : 0
+            amdSevSnpCpuid: _teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
+            amdSevSnpReportVersion: _teeType == TEEType.AmdSevSnp ? 3 : 0,
+            amdSevSnpLaunchMitigationVector: 0,
+            amdSevSnpCurrentMitigationVector: 0
         });
     }
 
@@ -255,7 +258,7 @@ contract SessionLifecycleAnvilTest is Script {
             )
         );
         AmdSnpSecurityPolicyUpdate[] memory amdPolicies = new AmdSnpSecurityPolicyUpdate[](1);
-        amdPolicies[0] = AmdSnpSecurityPolicyUpdate(0x191101, 1, true, bytes32(0), bytes32(0));
+        amdPolicies[0] = AmdSnpSecurityPolicyUpdate(0x191101, 0, 1, true, bytes32(0), bytes32(0), 0, 0);
         amdSnpSecurityPolicyRegistry.updatePolicies(amdPolicies, keccak256("anvil-test-policy"));
         teeVerifier = new AnvilLifecycleTeeVerifier();
         teeVerifier.configure(true, TEEType.IntelTDX, 0, 0);
@@ -296,7 +299,7 @@ contract SessionLifecycleAnvilTest is Script {
         SessionKeyRotationEvidence memory rotation = SessionKeyRotationEvidence({
             tpmQuoteReport: _quoteReport(0x22),
             tpmCertifyReport: _certifyReport(0x23),
-            sessionKeySignature: hex"02",
+            sessionKeySignature: abi.encode(hex"02", hex"03"),
             sessionKey: rotatedSessionKey,
             rotationSignature: hex"03",
             oldTpmSigningKey: firstTpm,
@@ -563,7 +566,7 @@ contract SessionLifecycleAnvilTest is Script {
         evidence.tpmQuoteReport = _quoteReport(marker);
         evidence.tpmCertifyReport = _certifyReport(marker);
         evidence.akPubCollateral = AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: ""});
-        evidence.sessionKeySignature = hex"01";
+        evidence.sessionKeySignature = abi.encode(hex"01", hex"02");
         evidence.sessionKey = sessionKey;
     }
 

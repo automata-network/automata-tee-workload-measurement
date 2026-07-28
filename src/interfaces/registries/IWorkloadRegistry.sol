@@ -80,6 +80,9 @@ interface IWorkloadRegistry {
     /// @return True if the workload is revoked
     function isWorkloadRevoked(bytes32 workloadId) external view returns (bool);
 
+    /// @notice Returns true when only whitelisted owners may register workloads.
+    function registrationRestricted() external view returns (bool);
+
     /// @notice Check if a base image is allowed for a workload
     /// @param workloadId The workload identifier
     /// @param baseImageId The base image identifier

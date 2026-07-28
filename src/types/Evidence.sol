@@ -109,6 +109,15 @@ struct TeeVerificationResult {
     /// @dev Verified AMD SEV-SNP CPUID as family || model || stepping.
     ///      Zero for non-AMD SEV-SNP reports.
     uint24 amdSevSnpCpuid;
+    /// @dev Verified AMD SEV-SNP attestation report format version.
+    ///      Zero for non-AMD SEV-SNP reports.
+    uint32 amdSevSnpReportVersion;
+    /// @dev Verified AMD SEV-SNP version-5 LAUNCH_MIT_VECTOR.
+    ///      Zero for report versions before 5 and for non-AMD SEV-SNP reports.
+    uint64 amdSevSnpLaunchMitigationVector;
+    /// @dev Verified AMD SEV-SNP version-5 CURRENT_MIT_VECTOR.
+    ///      Zero for report versions before 5 and for non-AMD SEV-SNP reports.
+    uint64 amdSevSnpCurrentMitigationVector;
 }
 
 /// @notice TPM report for platform binding verification
@@ -173,8 +182,11 @@ struct AttestationEvidence {
     TpmReport tpmCertifyReport;
     /// @dev Attestation Key public key collateral
     AkPubCollateral akPubCollateral;
-    /// @dev Delegation signature by tpmSigningKey over keccak256(abi.encode(
-    ///      DELEGATION_DOMAIN, baseImageId, workloadId, sessionId, sessionKeyFingerprint))
+    /// @dev abi.encode(bytes tpmDelegationSignature, bytes sessionKeyPossessionSignature).
+    ///      Both signatures cover keccak256(abi.encode(DELEGATION_DOMAIN, chainId,
+    ///      sessionRegistry, baseImageId, workloadId, sessionId, sessionKeyFingerprint)).
+    ///      The TPM signature binds the session key to the attested TPM. The session-key
+    ///      signature proves that the registrant owns the private key for sessionKey.
     bytes sessionKeySignature;
     /// @dev Session public key (operational key for application use)
     PublicIdentity sessionKey;
@@ -184,6 +196,7 @@ struct AttestationEvidence {
 struct SessionKeyRotationEvidence {
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
+    /// @dev Same two-signature ABI encoding as AttestationEvidence.sessionKeySignature.
     bytes sessionKeySignature;
     PublicIdentity sessionKey;
     bytes rotationSignature;

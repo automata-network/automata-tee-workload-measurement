@@ -36,7 +36,7 @@ uint256 constant SNP_REPORT_SIZE = 1184;
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "1.3.0";
+string public constant TEE_VERIFIER_VERSION = "1.4.0";
 ```
 
 ### Functions
@@ -76,8 +76,10 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 6. Require `reported_tcb <= committed_tcb <= current_tcb` component by
    component
 7. Extract `POLICY.DEBUG`, `POLICY.MIGRATE_MA`, four normalized TCB fields,
-   `PLATFORM_INFO`, and exact CPUID
-8. Return the raw report with `valid=true`.
+   `PLATFORM_INFO`, exact CPUID, and report version
+8. For version 5, extract `LAUNCH_MIT_VECTOR` and `CURRENT_MIT_VECTOR`.
+   Earlier versions return zero for both vectors.
+9. Return the raw report with `valid=true`.
 
 `AmdSnpSecurityPolicyRegistry` checks the extracted AMD state against the
 resolved base-image and workload policies. Its active exact-CPUID record

@@ -5,6 +5,7 @@ import "forge-std/Script.sol";
 import "forge-std/console.sol";
 import {TeeVerifier} from "../src/TeeVerifier.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
+import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
@@ -22,7 +23,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 
 /// @notice One-shot Hoodi upgrade: deploy the verified TEE attribute registry
 ///         implementations, a fresh TeeVerifier, and an ABI-compatible
-///         AkCollateralVerifier, then UUPS-upgrade all three existing registry
+///         AkCollateralVerifier, then UUPS-upgrade all four existing registry
 ///         proxies in place.
 contract UpgradeTeeVerifier is Script {
     address constant SESSION_REGISTRY_PROXY = 0xB247950fBBFCE245641e433AFd7d8884328CE5A1;
@@ -39,6 +40,9 @@ contract UpgradeTeeVerifier is Script {
     function run() public {
         vm.startBroadcast();
         address amdSnpSecurityPolicyRegistry = vm.envAddress("AMD_SNP_SECURITY_POLICY_REGISTRY");
+
+        AmdSnpSecurityPolicyRegistry amdSnpSecurityPolicyImpl = new AmdSnpSecurityPolicyRegistry();
+        console.log("new AmdSnpSecurityPolicyRegistry impl:", address(amdSnpSecurityPolicyImpl));
 
         BaseImageRegistry baseImageImpl = new BaseImageRegistry(ISignatureVerifier(SIG_VERIFIER));
         console.log("new BaseImageRegistry impl:", address(baseImageImpl));
@@ -73,7 +77,13 @@ contract UpgradeTeeVerifier is Script {
         );
         console.log("new SessionRegistry impl:", address(sessionImpl));
 
-        // Upgrade order matters. SessionRegistry MUST go first so the evaluation-time guard
+        // Upgrade order matters. AmdSnpSecurityPolicyRegistry MUST go first because
+        // VerifiedTeePolicyInputs gained three fields. The new SessionRegistry call would use
+        // a selector that the old policy-registry implementation does not expose.
+        UUPSUpgradeable(amdSnpSecurityPolicyRegistry).upgradeToAndCall(address(amdSnpSecurityPolicyImpl), "");
+        console.log("AmdSnpSecurityPolicyRegistry proxy upgraded:", amdSnpSecurityPolicyRegistry);
+
+        // SessionRegistry MUST go before BaseImageRegistry so the evaluation-time guard
         // (PcrVariantOverridesInvariant) is live before BaseImageRegistry starts rejecting
         // overlapping variants at registration. The reverse order leaves a window in which a
         // variant that pins a profile invariant can still be registered while nothing refuses

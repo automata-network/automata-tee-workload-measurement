@@ -27,7 +27,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title AmdSnpSecurityPolicyRegistry
-/// @notice Stores the default AMD SEV-SNP TCB and PLATFORM_INFO policy for each exact CPUID.
+/// @notice Stores AMD SEV-SNP TCB, PLATFORM_INFO, and mitigation-vector policy for each exact CPUID.
 contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableUpgradeable, UUPSUpgradeable {
     mapping(uint24 => AmdSnpSecurityPolicy) private _policies;
 
@@ -40,8 +40,18 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
     error PolicyNotFound(uint24 cpuid);
     error PolicyNotActive(uint24 cpuid);
     error InvalidPolicyRevision(uint24 cpuid, uint64 actual, uint64 expectedMinimum);
+    error PolicyRevisionMismatch(uint24 cpuid, uint64 actual, uint64 expected);
     error PolicyRevisionConflict(uint24 cpuid, uint64 revision);
-    error InvalidInactivePolicy(uint24 cpuid, bytes32 minimumTcb, bytes32 platformInfoPolicy);
+    error InvalidInactivePolicy(
+        uint24 cpuid,
+        bytes32 minimumTcb,
+        bytes32 platformInfoPolicy,
+        uint64 requiredLaunchMitigationVector,
+        uint64 requiredCurrentMitigationVector
+    );
+    error SnpMitigationPolicyRequiresReportVersion(uint32 actualVersion, uint32 requiredVersion);
+    error SnpLaunchMitigationVectorMissing(uint64 requiredMask, uint64 actual);
+    error SnpCurrentMitigationVectorMissing(uint64 requiredMask, uint64 actual);
     error TeeAttributeBaseImageMismatch(bytes32 key, bytes32 declaredValue, bytes32 verifiedValue);
     error TeeAttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
     error TeeAttributePolicyConflict(bytes32 key, bytes32 baseValue, bytes32 workloadValue);
@@ -130,6 +140,28 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
         AmdSnpSecurityPolicy storage policy = _policies[inputs.amdSevSnpCpuid];
         if (policy.revision == 0) revert PolicyNotFound(inputs.amdSevSnpCpuid);
         if (!policy.active) revert PolicyNotActive(inputs.amdSevSnpCpuid);
+        if (
+            (policy.requiredLaunchMitigationVector != 0 || policy.requiredCurrentMitigationVector != 0)
+                && inputs.amdSevSnpReportVersion != 5
+        ) {
+            revert SnpMitigationPolicyRequiresReportVersion(inputs.amdSevSnpReportVersion, 5);
+        }
+        if (
+            inputs.amdSevSnpLaunchMitigationVector & policy.requiredLaunchMitigationVector
+                != policy.requiredLaunchMitigationVector
+        ) {
+            revert SnpLaunchMitigationVectorMissing(
+                policy.requiredLaunchMitigationVector, inputs.amdSevSnpLaunchMitigationVector
+            );
+        }
+        if (
+            inputs.amdSevSnpCurrentMitigationVector & policy.requiredCurrentMitigationVector
+                != policy.requiredCurrentMitigationVector
+        ) {
+            revert SnpCurrentMitigationVectorMissing(
+                policy.requiredCurrentMitigationVector, inputs.amdSevSnpCurrentMitigationVector
+            );
+        }
 
         _verifyBooleanAttribute(
             TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
@@ -189,8 +221,17 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
         bool exists = stored.revision != 0;
 
         if (!update.active) {
-            if (update.minimumTcb != bytes32(0) || update.platformInfoPolicy != bytes32(0)) {
-                revert InvalidInactivePolicy(update.cpuid, update.minimumTcb, update.platformInfoPolicy);
+            if (
+                update.minimumTcb != bytes32(0) || update.platformInfoPolicy != bytes32(0)
+                    || update.requiredLaunchMitigationVector != 0 || update.requiredCurrentMitigationVector != 0
+            ) {
+                revert InvalidInactivePolicy(
+                    update.cpuid,
+                    update.minimumTcb,
+                    update.platformInfoPolicy,
+                    update.requiredLaunchMitigationVector,
+                    update.requiredCurrentMitigationVector
+                );
             }
             if (!exists) revert PolicyNotFound(update.cpuid);
         } else {
@@ -198,32 +239,45 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
             AmdSnpPolicy.validatePlatformInfoPolicy(update.platformInfoPolicy);
         }
 
-        if (!exists) {
-            if (update.revision == 0) {
-                revert InvalidPolicyRevision(update.cpuid, update.revision, 1);
-            }
-        } else if (update.revision < stored.revision) {
-            uint64 expectedMinimum = stored.revision == type(uint64).max ? type(uint64).max : stored.revision + 1;
-            revert InvalidPolicyRevision(update.cpuid, update.revision, expectedMinimum);
-        } else if (update.revision == stored.revision) {
+        if (exists && update.revision == stored.revision) {
             bool same = stored.active == update.active
                 && (!update.active
                     || (stored.minimumTcb == update.minimumTcb
-                        && stored.platformInfoPolicy == update.platformInfoPolicy));
+                        && stored.platformInfoPolicy == update.platformInfoPolicy
+                        && stored.requiredLaunchMitigationVector == update.requiredLaunchMitigationVector
+                        && stored.requiredCurrentMitigationVector == update.requiredCurrentMitigationVector));
             if (!same) revert PolicyRevisionConflict(update.cpuid, update.revision);
             return;
+        }
+
+        if (stored.revision != update.expectedRevision) {
+            revert PolicyRevisionMismatch(update.cpuid, stored.revision, update.expectedRevision);
+        }
+
+        if (update.revision == 0 || update.revision <= stored.revision) {
+            uint64 expectedMinimum = stored.revision == type(uint64).max ? type(uint64).max : stored.revision + 1;
+            revert InvalidPolicyRevision(update.cpuid, update.revision, expectedMinimum);
         }
 
         if (update.active) {
             stored.minimumTcb = update.minimumTcb;
             stored.platformInfoPolicy = update.platformInfoPolicy;
+            stored.requiredLaunchMitigationVector = update.requiredLaunchMitigationVector;
+            stored.requiredCurrentMitigationVector = update.requiredCurrentMitigationVector;
         }
         stored.sourceDigest = sourceDigest;
         stored.revision = update.revision;
         stored.active = update.active;
 
         emit AmdSnpSecurityPolicyUpdated(
-            update.cpuid, update.revision, update.active, stored.minimumTcb, stored.platformInfoPolicy, sourceDigest
+            update.cpuid,
+            update.revision,
+            update.active,
+            stored.minimumTcb,
+            stored.platformInfoPolicy,
+            stored.requiredLaunchMitigationVector,
+            stored.requiredCurrentMitigationVector,
+            sourceDigest
         );
     }
 

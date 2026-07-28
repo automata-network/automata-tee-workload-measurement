@@ -175,6 +175,9 @@ interface IBaseImageRegistry {
     /// @return True if the base image is revoked
     function isBaseImageRevoked(bytes32 baseImageId) external view returns (bool);
 
+    /// @notice Returns true when only whitelisted owners may register or update base images.
+    function registrationRestricted() external view returns (bool);
+
     /// @notice Check if a measurement variant exists
     /// @param variantId The variant identifier
     /// @return True if the variant exists

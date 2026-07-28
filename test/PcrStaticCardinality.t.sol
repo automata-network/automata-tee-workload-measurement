@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
-import {MockSignatureVerifier} from "../src/mock/MockSignatureVerifier.sol";
+import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
 import {
     AccessMode,
     Attribute,

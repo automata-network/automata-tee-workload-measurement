@@ -61,6 +61,8 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         assertEq(policy.sourceDigest, SOURCE_DIGEST);
         assertEq(policy.revision, 1);
         assertTrue(policy.active);
+        assertEq(policy.requiredLaunchMitigationVector, 0);
+        assertEq(policy.requiredCurrentMitigationVector, 0);
     }
 
     function testSameRevisionAndStateIsIdempotentAndKeepsSourceDigest() public {
@@ -76,10 +78,27 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         assertEq(registry.getPolicy(GENOA_CPUID).sourceDigest, SOURCE_DIGEST);
     }
 
+    function testRejectsUpdatePreparedAgainstStaleRevision() public {
+        _register(GENOA_CPUID);
+        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
+        updates[0] = _activeUpdate(GENOA_CPUID, 2);
+
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, keccak256("revision-2"));
+
+        updates[0] = _activeUpdate(GENOA_CPUID, 3);
+        updates[0].expectedRevision = 1;
+        vm.expectRevert(
+            abi.encodeWithSelector(AmdSnpSecurityPolicyRegistry.PolicyRevisionMismatch.selector, GENOA_CPUID, 2, 1)
+        );
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, keccak256("stale-revision-3"));
+    }
+
     function testDeactivatePreservesPolicyAndReactivateRequiresNewRevision() public {
         _register(GENOA_CPUID);
         AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
-        updates[0] = AmdSnpSecurityPolicyUpdate(GENOA_CPUID, 2, false, bytes32(0), bytes32(0));
+        updates[0] = AmdSnpSecurityPolicyUpdate(GENOA_CPUID, 1, 2, false, bytes32(0), bytes32(0), 0, 0);
 
         vm.prank(OWNER);
         registry.updatePolicies(updates, keccak256("deactivate"));
@@ -136,6 +155,20 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         );
         vm.prank(OWNER);
         registry.updatePolicies(updates, SOURCE_DIGEST);
+
+        updates[0] = AmdSnpSecurityPolicyUpdate(GENOA_CPUID, 1, 2, false, bytes32(0), bytes32(0), 1, 0);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.InvalidInactivePolicy.selector,
+                GENOA_CPUID,
+                bytes32(0),
+                bytes32(0),
+                uint64(1),
+                uint64(0)
+            )
+        );
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, SOURCE_DIGEST);
     }
 
     function testRejectsUnsupportedCpuidAndMalformedPolicy() public {
@@ -167,7 +200,7 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         vm.prank(OWNER);
         registry.updatePolicies(updates, SOURCE_DIGEST);
 
-        updates[0] = AmdSnpSecurityPolicyUpdate(GENOA_CPUID, 1, false, bytes32(0), bytes32(0));
+        updates[0] = AmdSnpSecurityPolicyUpdate(GENOA_CPUID, 0, 1, false, bytes32(0), bytes32(0), 0, 0);
         vm.expectRevert(abi.encodeWithSelector(AmdSnpSecurityPolicyRegistry.PolicyNotFound.selector, GENOA_CPUID));
         vm.prank(OWNER);
         registry.updatePolicies(updates, SOURCE_DIGEST);
@@ -194,6 +227,91 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
 
         assertEq(AmdSnpSecurityPolicyRegistryV2(address(registry)).implementationVersion(), 2);
         assertEq(registry.getActivePolicy(GENOA_CPUID).minimumTcb, MINIMUM_TCB);
+    }
+
+    function testLegacyStoredPolicyReadsZeroMitigationMasksAndCanBeUpdated() public {
+        bytes32 baseSlot = keccak256(abi.encode(uint256(GENOA_CPUID), uint256(0)));
+        vm.store(address(registry), baseSlot, MINIMUM_TCB);
+        vm.store(address(registry), bytes32(uint256(baseSlot) + 1), PLATFORM_INFO_POLICY);
+        vm.store(address(registry), bytes32(uint256(baseSlot) + 2), SOURCE_DIGEST);
+        vm.store(address(registry), bytes32(uint256(baseSlot) + 3), bytes32(uint256(1) | (uint256(1) << 64)));
+
+        AmdSnpSecurityPolicy memory legacy = registry.getActivePolicy(GENOA_CPUID);
+        assertEq(legacy.revision, 1);
+        assertTrue(legacy.active);
+        assertEq(legacy.requiredLaunchMitigationVector, 0);
+        assertEq(legacy.requiredCurrentMitigationVector, 0);
+
+        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
+        updates[0] = _activeUpdate(GENOA_CPUID, 2);
+        updates[0].requiredLaunchMitigationVector = 0x03;
+        updates[0].requiredCurrentMitigationVector = 0x05;
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, keccak256("mitigation-policy"));
+
+        AmdSnpSecurityPolicy memory updated = registry.getActivePolicy(GENOA_CPUID);
+        assertEq(updated.minimumTcb, MINIMUM_TCB);
+        assertEq(updated.platformInfoPolicy, PLATFORM_INFO_POLICY);
+        assertEq(updated.requiredLaunchMitigationVector, 0x03);
+        assertEq(updated.requiredCurrentMitigationVector, 0x05);
+    }
+
+    function testVerifyAmdSnpMitigationVectorsRequireVersionFiveAndAllRequiredBits() public {
+        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
+        updates[0] = _activeUpdate(GENOA_CPUID, 1);
+        updates[0].requiredLaunchMitigationVector = 0x03;
+        updates[0].requiredCurrentMitigationVector = 0x05;
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, SOURCE_DIGEST);
+
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        Attribute[] memory attributes = new Attribute[](0);
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](0);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.SnpMitigationPolicyRequiresReportVersion.selector, uint32(3), uint32(5)
+            )
+        );
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+
+        inputs.amdSevSnpReportVersion = 6;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.SnpMitigationPolicyRequiresReportVersion.selector, uint32(6), uint32(5)
+            )
+        );
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+
+        inputs.amdSevSnpReportVersion = 5;
+        inputs.amdSevSnpLaunchMitigationVector = 0x07;
+        inputs.amdSevSnpCurrentMitigationVector = 0x0d;
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+
+        inputs.amdSevSnpLaunchMitigationVector = 0x02;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.SnpLaunchMitigationVectorMissing.selector, uint64(0x03), uint64(0x02)
+            )
+        );
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+
+        inputs.amdSevSnpLaunchMitigationVector = 0x03;
+        inputs.amdSevSnpCurrentMitigationVector = 0x04;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.SnpCurrentMitigationVectorMissing.selector, uint64(0x05), uint64(0x04)
+            )
+        );
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+    }
+
+    function testZeroMitigationMasksAcceptVersionThreeReport() public {
+        _register(GENOA_CPUID);
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        assertEq(inputs.amdSevSnpReportVersion, 3);
+
+        Attribute[] memory attributes = new Attribute[](0);
+        registry.verifyTeePolicy(inputs, attributes, attributes, new AttributeRequirement[](0));
     }
 
     function testVerifyAmdSnpPolicyUsesRegistryDefaultsWhenBothSidesAreMissing() public {
@@ -297,7 +415,10 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
             intelTdxTcbStatusBit: configurationNeeded,
             amdSevSnpTcbValues: bytes32(0),
             amdSevSnpPlatformInfo: 0,
-            amdSevSnpCpuid: 0
+            amdSevSnpCpuid: 0,
+            amdSevSnpReportVersion: 0,
+            amdSevSnpLaunchMitigationVector: 0,
+            amdSevSnpCurrentMitigationVector: 0
         });
         Attribute[] memory profileAttributes = new Attribute[](1);
         profileAttributes[0] = Attribute(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK));
@@ -541,7 +662,9 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
     }
 
     function _activeUpdate(uint24 cpuid, uint64 revision) private pure returns (AmdSnpSecurityPolicyUpdate memory) {
-        return AmdSnpSecurityPolicyUpdate(cpuid, revision, true, MINIMUM_TCB, PLATFORM_INFO_POLICY);
+        uint64 expectedRevision = revision == 0 ? 1 : revision - 1;
+        return
+            AmdSnpSecurityPolicyUpdate(cpuid, expectedRevision, revision, true, MINIMUM_TCB, PLATFORM_INFO_POLICY, 0, 0);
     }
 
     function _validInputs() private pure returns (VerifiedTeePolicyInputs memory) {
@@ -551,7 +674,10 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
             intelTdxTcbStatusBit: 0,
             amdSevSnpTcbValues: MINIMUM_TCB,
             amdSevSnpPlatformInfo: 0x20,
-            amdSevSnpCpuid: GENOA_CPUID
+            amdSevSnpCpuid: GENOA_CPUID,
+            amdSevSnpReportVersion: 3,
+            amdSevSnpLaunchMitigationVector: 0,
+            amdSevSnpCurrentMitigationVector: 0
         });
     }
 }

@@ -3,9 +3,9 @@ pragma solidity ^0.8.27;
 
 import {Script, console} from "forge-std/Script.sol";
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
-import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
-import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
-import {MockTpmAttestation} from "../src/mock/MockTpmAttestation.sol";
+import {MockAutomataDcapAttestation} from "../test/mocks/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "../test/mocks/MockAutomataSnpAttestation.sol";
+import {MockTpmAttestation} from "../test/mocks/MockTpmAttestation.sol";
 import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";

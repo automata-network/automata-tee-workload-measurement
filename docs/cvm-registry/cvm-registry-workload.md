@@ -87,7 +87,7 @@ function registerWorkload(
 - Registers workload with full policy specification
 - `spec.sessionTtl` is consumed later by `SessionRegistry`; `sessionTtl == 0` means "use `DEFAULT_CVM_TTL` (30 days)"
 - Computes owner fingerprint, verifies signature over `sha256(abi.encode(WORKLOAD_REGISTER_MSG, chainid, address(this), opExpiresAt, spec))`
-- Registration allowed when: unpaused OR owner is whitelisted (uses `_checkRegistrationAllowed`, NOT `whenNotPaused`)
+- Registration allowed when: `registrationRestricted()` is false, or the owner is whitelisted
 - Populates `_baseImageSet` mapping for efficient `isBaseImageAllowed` lookups
 - Validates: signature expiry, PCR order, requirement key uniqueness
 - Emits: `WorkloadRegistered`
@@ -141,6 +141,7 @@ every base image.
 | `isWhitelisted(bytes32)` | Check whitelist status |
 | `pause()` | Pause registration |
 | `unpause()` | Unpause registration |
+| `registrationRestricted()` | True when only whitelisted owners may register |
 
 ## Errors
 
@@ -179,7 +180,7 @@ every base image.
 5. **AMD SEV-SNP packed requirements**: `tcb.minimum` and `platform-info.policy` each accept exactly one valid packed value. A missing requirement resolves to the active exact-CPUID `AmdSnpSecurityPolicyRegistry` default during verification. An explicit requirement replaces that workload-side default.
 6. **Base-image set**: `baseImageIds` are stored without a `BaseImageRegistry` lookup. An empty `WHITELIST` denies every base image; an empty `BLACKLIST` allows every base image.
 7. **Signature expiry**: `block.timestamp <= opExpiresAt`
-8. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
+8. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration.
 
 ## Initialization
 

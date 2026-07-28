@@ -11,6 +11,9 @@ struct VerifiedTeePolicyInputs {
     bytes32 amdSevSnpTcbValues;
     uint64 amdSevSnpPlatformInfo;
     uint24 amdSevSnpCpuid;
+    uint32 amdSevSnpReportVersion;
+    uint64 amdSevSnpLaunchMitigationVector;
+    uint64 amdSevSnpCurrentMitigationVector;
 }
 
 struct AmdSnpSecurityPolicy {
@@ -19,14 +22,22 @@ struct AmdSnpSecurityPolicy {
     bytes32 sourceDigest;
     uint64 revision;
     bool active;
+    /// @dev Required bits in a version-5 report's LAUNCH_MIT_VECTOR.
+    uint64 requiredLaunchMitigationVector;
+    /// @dev Required bits in a version-5 report's CURRENT_MIT_VECTOR.
+    uint64 requiredCurrentMitigationVector;
 }
 
 struct AmdSnpSecurityPolicyUpdate {
     uint24 cpuid;
+    /// @dev Revision that must currently be stored. Use zero when creating a policy.
+    uint64 expectedRevision;
     uint64 revision;
     bool active;
     bytes32 minimumTcb;
     bytes32 platformInfoPolicy;
+    uint64 requiredLaunchMitigationVector;
+    uint64 requiredCurrentMitigationVector;
 }
 
 interface IAmdSnpSecurityPolicyRegistry {
@@ -36,6 +47,8 @@ interface IAmdSnpSecurityPolicyRegistry {
         bool active,
         bytes32 minimumTcb,
         bytes32 platformInfoPolicy,
+        uint64 requiredLaunchMitigationVector,
+        uint64 requiredCurrentMitigationVector,
         bytes32 sourceDigest
     );
 

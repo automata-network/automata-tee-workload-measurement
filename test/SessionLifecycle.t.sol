@@ -18,7 +18,7 @@ import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
-import {MockSignatureVerifier} from "../src/mock/MockSignatureVerifier.sol";
+import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
 import {
     AccessMode,
     Attribute,
@@ -49,6 +49,7 @@ import {
 import {
     ALGO_ID_ES256,
     ALGO_ID_ES256K,
+    DELEGATION_DOMAIN,
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
     SESSION_DOMAIN,
@@ -139,7 +140,7 @@ contract SessionLifecycleTest is Test {
             )
         );
         AmdSnpSecurityPolicyUpdate[] memory amdPolicies = new AmdSnpSecurityPolicyUpdate[](1);
-        amdPolicies[0] = AmdSnpSecurityPolicyUpdate(0x191101, 1, true, bytes32(0), bytes32(0));
+        amdPolicies[0] = AmdSnpSecurityPolicyUpdate(0x191101, 0, 1, true, bytes32(0), bytes32(0), 0, 0);
         amdSnpSecurityPolicyRegistry.updatePolicies(amdPolicies, keccak256("test-policy"));
         sessionRegistry = new SessionRegistry(
             ITeeVerifier(TEE_VERIFIER),
@@ -158,6 +159,109 @@ contract SessionLifecycleTest is Test {
     function testIsSessionExpiredRejectsUnknownSession() public {
         vm.expectRevert(SessionRegistry.SessionNotFound.selector);
         sessionRegistry.isSessionExpired(keccak256("unknown-session"));
+    }
+
+    function testRegisterSessionRequiresSessionKeyProofOfPossession() public {
+        AttestationEvidence memory evidence = _fullEvidence(0x05, _identity(ALGO_ID_ES256K, 0x06));
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        _mockFullEvidence(
+            evidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(evidence.teeReport.data)
+        );
+
+        bytes32 sessionId = _sessionId(evidence.tpmQuoteReport, keccak256(evidence.teeReport.data));
+        bytes32 sessionKeyFingerprint = LibKey.computeKeyFingerprint(evidence.sessionKey);
+        bytes32 delegationMessage = keccak256(
+            abi.encode(
+                DELEGATION_DOMAIN,
+                block.chainid,
+                address(sessionRegistry),
+                oldPolicy.baseImageId,
+                oldPolicy.workloadId,
+                sessionId,
+                sessionKeyFingerprint
+            )
+        );
+        (, bytes memory possessionSignature) = abi.decode(evidence.sessionKeySignature, (bytes, bytes));
+        vm.mockCall(
+            address(signatureVerifier),
+            abi.encodeCall(ISignatureVerifier.verify, (evidence.sessionKey, delegationMessage, possessionSignature)),
+            abi.encode(false)
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SessionRegistry.SessionKeyPossessionFailed.selector, delegationMessage, sessionKeyFingerprint
+            )
+        );
+        sessionRegistry.registerSession(
+            evidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+    }
+
+    function testSessionFingerprintCannotBeClaimedByAnotherActiveSessionAndClearsOnRevoke() public {
+        PublicIdentity memory sessionKey = _identity(ALGO_ID_ES256K, 0x08);
+        AttestationEvidence memory firstEvidence = _fullEvidence(0x07, sessionKey);
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        _mockFullEvidence(
+            firstEvidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(firstEvidence.teeReport.data)
+        );
+        bytes32 firstSessionId = sessionRegistry.registerSession(
+            firstEvidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+        bytes32 sessionKeyFingerprint = LibKey.computeKeyFingerprint(sessionKey);
+        assertEq(sessionRegistry.getSessionId(sessionKeyFingerprint), firstSessionId);
+
+        AttestationEvidence memory secondEvidence = _fullEvidence(0x09, sessionKey);
+        _mockFullEvidence(
+            secondEvidence,
+            ownerFingerprint,
+            sessionRegistry.getNonce(ownerFingerprint),
+            oldAk,
+            oldTpmSigningKey,
+            keccak256(secondEvidence.teeReport.data)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SessionRegistry.SessionFingerprintInUse.selector, sessionKeyFingerprint, firstSessionId
+            )
+        );
+        sessionRegistry.registerSession(
+            secondEvidence,
+            oldPolicy.workloadId,
+            oldPolicy.baseImageId,
+            oldPolicy.platformProfileId,
+            oldPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
+
+        sessionRegistry.revokeSession(firstSessionId, uint64(block.timestamp + 5 minutes), ownerIdentity, hex"01");
+        assertEq(sessionRegistry.getSessionId(sessionKeyFingerprint), bytes32(0));
     }
 
     function testRotateKeyInheritsPolicyAkAndAbsoluteExpiry() public {
@@ -614,8 +718,9 @@ contract SessionLifecycleTest is Test {
                 for (uint256 baseMode = 0; baseMode < 3; baseMode++) {
                     for (uint256 workloadMode = 0; workloadMode < 3; workloadMode++) {
                         PolicyIds memory policy = _registerTeePolicy(keys[keyIndex], baseMode, workloadMode, 0, 0);
+                        uint8 evidenceMarker = uint8(nextTeePolicyVersion);
                         AttestationEvidence memory evidence =
-                            _fullEvidence(uint8(nextTeePolicyVersion), _identity(ALGO_ID_ES256K, 0xa0));
+                            _fullEvidence(evidenceMarker, _identity(ALGO_ID_ES256K, evidenceMarker));
                         evidence.teeReport.teeType = teeType;
                         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
                         uint256 nonce = sessionRegistry.getNonce(ownerFingerprint);
@@ -634,7 +739,10 @@ contract SessionLifecycleTest is Test {
                                 intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
                                 amdSevSnpTcbValues: bytes32(0),
                                 amdSevSnpPlatformInfo: 0,
-                                amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0
+                                amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
+                                amdSevSnpReportVersion: teeType == TEEType.AmdSevSnp ? 3 : 0,
+                                amdSevSnpLaunchMitigationVector: 0,
+                                amdSevSnpCurrentMitigationVector: 0
                             })
                         );
 
@@ -704,7 +812,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: TDX_TCB_STATUS_CONFIGURATION_NEEDED,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: 0
+                amdSevSnpCpuid: 0,
+                amdSevSnpReportVersion: 0,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             })
         );
 
@@ -774,7 +885,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: 0
+                amdSevSnpCpuid: 0,
+                amdSevSnpReportVersion: 0,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             })
         );
 
@@ -797,8 +911,9 @@ contract SessionLifecycleTest is Test {
             for (uint256 baseMode = 0; baseMode < 3; baseMode++) {
                 for (uint256 workloadMode = 0; workloadMode < 3; workloadMode++) {
                     PolicyIds memory policy = _registerTdxTcbPolicy(baseMode, workloadMode);
+                    uint8 evidenceMarker = uint8(nextTeePolicyVersion);
                     AttestationEvidence memory evidence =
-                        _fullEvidence(uint8(nextTeePolicyVersion), _identity(ALGO_ID_ES256K, 0xb0));
+                        _fullEvidence(evidenceMarker, _identity(ALGO_ID_ES256K, evidenceMarker));
                     bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
                     _mockFullEvidenceWithResult(
                         evidence,
@@ -815,7 +930,10 @@ contract SessionLifecycleTest is Test {
                             intelTdxTcbStatusBit: actualStatus,
                             amdSevSnpTcbValues: bytes32(0),
                             amdSevSnpPlatformInfo: 0,
-                            amdSevSnpCpuid: 0
+                            amdSevSnpCpuid: 0,
+                            amdSevSnpReportVersion: 0,
+                            amdSevSnpLaunchMitigationVector: 0,
+                            amdSevSnpCurrentMitigationVector: 0
                         })
                     );
 
@@ -878,7 +996,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: 0,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: 0x191101
+                amdSevSnpCpuid: 0x191101,
+                amdSevSnpReportVersion: 3,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             })
         );
 
@@ -898,7 +1019,7 @@ contract SessionLifecycleTest is Test {
     function testAmdSnpRegistryDefaultTcbPolicyRunsDuringFullRegistration() public {
         bytes32 minimumTcb = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
         AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
-        updates[0] = AmdSnpSecurityPolicyUpdate(0x191101, 2, true, minimumTcb, bytes32(0));
+        updates[0] = AmdSnpSecurityPolicyUpdate(0x191101, 1, 2, true, minimumTcb, bytes32(0), 0, 0);
         amdSnpSecurityPolicyRegistry.updatePolicies(updates, keccak256("full-registration-policy"));
 
         AttestationEvidence memory evidence = _fullEvidence(0xda, _identity(ALGO_ID_ES256K, 0xdb));
@@ -912,7 +1033,10 @@ contract SessionLifecycleTest is Test {
             intelTdxTcbStatusBit: 0,
             amdSevSnpTcbValues: minimumTcb,
             amdSevSnpPlatformInfo: 0,
-            amdSevSnpCpuid: 0x191101
+            amdSevSnpCpuid: 0x191101,
+            amdSevSnpReportVersion: 3,
+            amdSevSnpLaunchMitigationVector: 0,
+            amdSevSnpCurrentMitigationVector: 0
         });
         _mockFullEvidenceWithResult(
             evidence,
@@ -990,7 +1114,10 @@ contract SessionLifecycleTest is Test {
                     intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
                     amdSevSnpTcbValues: bytes32(0),
                     amdSevSnpPlatformInfo: 0,
-                    amdSevSnpCpuid: 0
+                    amdSevSnpCpuid: 0,
+                    amdSevSnpReportVersion: 0,
+                    amdSevSnpLaunchMitigationVector: 0,
+                    amdSevSnpCurrentMitigationVector: 0
                 })
             );
 
@@ -1076,7 +1203,10 @@ contract SessionLifecycleTest is Test {
                     intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
                     amdSevSnpTcbValues: bytes32(0),
                     amdSevSnpPlatformInfo: 0,
-                    amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0
+                    amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
+                    amdSevSnpReportVersion: teeType == TEEType.AmdSevSnp ? 3 : 0,
+                    amdSevSnpLaunchMitigationVector: 0,
+                    amdSevSnpCurrentMitigationVector: 0
                 }),
                 expectedBindingHash
             );
@@ -1125,7 +1255,10 @@ contract SessionLifecycleTest is Test {
                     intelTdxTcbStatusBit: teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
                     amdSevSnpTcbValues: bytes32(0),
                     amdSevSnpPlatformInfo: 0,
-                    amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0
+                    amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
+                    amdSevSnpReportVersion: teeType == TEEType.AmdSevSnp ? 3 : 0,
+                    amdSevSnpLaunchMitigationVector: 0,
+                    amdSevSnpCurrentMitigationVector: 0
                 }),
                 bindingHash
             );
@@ -1164,7 +1297,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: 0
+                amdSevSnpCpuid: 0,
+                amdSevSnpReportVersion: 0,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             }),
             bindingHash
         );
@@ -1219,7 +1355,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: 0
+                amdSevSnpCpuid: 0,
+                amdSevSnpReportVersion: 0,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             }),
             bindingHash
         );
@@ -1259,7 +1398,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: 0
+                amdSevSnpCpuid: 0,
+                amdSevSnpReportVersion: 0,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             }),
             bytes32(0)
         );
@@ -1281,8 +1423,8 @@ contract SessionLifecycleTest is Test {
 
     function _assertVariantOverride(bytes32 key, uint256 profileMode, uint256 variantMode, bool actual) private {
         PolicyIds memory policy = _registerTeePolicy(key, profileMode, 2, variantMode, 0);
-        AttestationEvidence memory evidence =
-            _fullEvidence(uint8(nextTeePolicyVersion), _identity(ALGO_ID_ES256K, 0xd0));
+        uint8 evidenceMarker = uint8(nextTeePolicyVersion);
+        AttestationEvidence memory evidence = _fullEvidence(evidenceMarker, _identity(ALGO_ID_ES256K, evidenceMarker));
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         _mockFullEvidenceWithResult(
             evidence,
@@ -1299,7 +1441,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: 0
+                amdSevSnpCpuid: 0,
+                amdSevSnpReportVersion: 0,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             })
         );
 
@@ -1486,7 +1631,8 @@ contract SessionLifecycleTest is Test {
         evidence.tpmCertifyReport = _certifyReport(marker);
         evidence.akPubCollateral =
             AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: abi.encode(marker)});
-        evidence.sessionKeySignature = abi.encodePacked("delegation-", marker);
+        evidence.sessionKeySignature =
+            abi.encode(abi.encodePacked("delegation-", marker), abi.encodePacked("possession-", marker));
         evidence.sessionKey = sessionKey;
     }
 
@@ -1498,7 +1644,8 @@ contract SessionLifecycleTest is Test {
     ) private pure returns (SessionKeyRotationEvidence memory evidence) {
         evidence.tpmQuoteReport = _quoteReport(marker);
         evidence.tpmCertifyReport = _certifyReport(marker);
-        evidence.sessionKeySignature = abi.encodePacked("delegation-", marker);
+        evidence.sessionKeySignature =
+            abi.encode(abi.encodePacked("delegation-", marker), abi.encodePacked("possession-", marker));
         evidence.sessionKey = sessionKey;
         evidence.rotationSignature = abi.encodePacked("rotation-", marker);
         evidence.oldTpmSigningKey = predecessorTpmSigningKey;
@@ -1555,7 +1702,10 @@ contract SessionLifecycleTest is Test {
                 intelTdxTcbStatusBit: evidence.teeReport.teeType == TEEType.IntelTDX ? TDX_TCB_STATUS_OK : 0,
                 amdSevSnpTcbValues: bytes32(0),
                 amdSevSnpPlatformInfo: 0,
-                amdSevSnpCpuid: evidence.teeReport.teeType == TEEType.AmdSevSnp ? 0x191101 : 0
+                amdSevSnpCpuid: evidence.teeReport.teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
+                amdSevSnpReportVersion: evidence.teeReport.teeType == TEEType.AmdSevSnp ? 3 : 0,
+                amdSevSnpLaunchMitigationVector: 0,
+                amdSevSnpCurrentMitigationVector: 0
             })
         );
     }
