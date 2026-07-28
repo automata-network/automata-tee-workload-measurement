@@ -375,25 +375,40 @@ function publicIdentityToCertPubkey(PublicIdentity memory identity) → CertPubk
 
 ### AmdSnpPolicy.sol (`src/lib/AmdSnpPolicy.sol`)
 
-Validation and comparison helpers for the two packed AMD SEV-SNP policy
-values.
+The single definition of the packed AMD SEV-SNP policy formats and of the
+supported-silicon window. `TeeVerifier` and `AmdSnpSecurityPolicyRegistry` both
+depend on it so the two never drift.
 
 ```solidity
 function validateTcb(bytes32 packedTcb)
 function isValidTcb(bytes32 packedTcb) → bool
-function maxTcb(bytes32 left, bytes32 right) → bytes32
 function tcbMeetsMinimum(bytes32 actual, bytes32 minimum) → bool
 
 function validatePlatformInfoPolicy(bytes32 packedPolicy)
 function isValidPlatformInfoPolicy(bytes32 packedPolicy) → bool
-function mergePlatformInfoPolicies(bytes32 left, bytes32 right) → bytes32
+function tryMergePlatformInfoPolicies(bytes32 left, bytes32 right) → (bool ok, bytes32 merged)
 function platformInfoMatches(uint64 actual, bytes32 packedPolicy) → bool
+
+function isSupportedCpuid(uint24 cpuid) → bool
 ```
 
-`validateTcb` reverts
-`InvalidAmdSnpTcbValue(bytes32 actual)`. `validatePlatformInfoPolicy` and a
-conflicting direct merge revert
+`validateTcb` reverts `InvalidAmdSnpTcbValue(bytes32 actual)` and
+`validatePlatformInfoPolicy` reverts
 `InvalidAmdSnpPlatformInfoPolicy(bytes32 actual)`.
+
+`tryMergePlatformInfoPolicies` does not revert. It returns `ok = false` when
+one side requires a bit set that the other requires cleared, leaving the caller
+to report the conflict in its own terms — `AmdSnpSecurityPolicyRegistry` raises
+`TeeAttributePolicyConflict(key, baseValue, workloadValue)`, which names the
+attribute and both contributing values. `merged` is only meaningful when `ok`
+is true.
+
+`isSupportedCpuid` accepts AMD family `0x19`, models `0x00` through `0x1f`
+(Milan and Genoa), and does not constrain the stepping byte; policy is keyed on
+the exact CPUID including stepping. `TeeVerifier` applies it when extracting a
+report and the registry applies it when admitting a policy, so widening the
+window means redeploying `TeeVerifier` as well — see the runbook in
+[Verifiers](cvm-registry-verifiers.md).
 
 ### LibBytes.sol (`src/lib/LibBytes.sol`)
 

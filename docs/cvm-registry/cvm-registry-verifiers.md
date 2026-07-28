@@ -73,8 +73,10 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
    CPUID, `PLATFORM_INFO`, and every version-specific reserved field
 5. Accept only an all-zero or all-`0xff` `REPORT_ID_MA` as no active
    migration-agent association. Reject every other value.
-6. Require `reported_tcb <= committed_tcb <= current_tcb` component by
-   component
+6. Require `reported_tcb <= committed_tcb <= current_tcb` and
+   `launch_tcb <= committed_tcb`, component by component. `LAUNCH_TCB` is the
+   `COMMITTED_TCB` captured at launch and `COMMITTED_TCB` only ever advances,
+   so it can never exceed the current value.
 7. Extract `POLICY.DEBUG`, `POLICY.MIGRATE_MA`, four normalized TCB fields,
    `PLATFORM_INFO`, exact CPUID, and report version
 8. For version 5, extract `LAUNCH_MIT_VECTOR` and `CURRENT_MIT_VECTOR`.
@@ -85,6 +87,46 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 resolved base-image and workload policies. Its active exact-CPUID record
 supplies any missing packed value. See
 [AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
+
+#### Runbook: vendor firmware introduces a new bit or version
+
+`TeeVerifier` rejects every field value it does not recognize. That is
+deliberate — an unknown bit is unreviewed silicon or firmware behaviour, and
+admitting it would attest to a configuration nobody has evaluated. The cost is
+that a vendor change can halt attestation for a platform until the verifier is
+redeployed. Know this before it happens in production rather than during an
+incident.
+
+The gates that a vendor change can trip:
+
+| Gate | Location | Rejects |
+|---|---|---|
+| `SNP_PLATFORM_INFO_SUPPORTED_MASK` (`0x3f`) | `TeeVerifier`, `AmdSnpPolicy` | `PLATFORM_INFO` bit 6 or above |
+| SNP report version `3..5` | `TeeVerifier` | A version-6 report |
+| SNP `POLICY` bit 26 and above | `TeeVerifier` | A newly defined policy bit |
+| `AmdSnpPolicy.isSupportedCpuid` | `TeeVerifier`, `AmdSnpSecurityPolicyRegistry` | Family other than `0x19`, or model above `0x1f` (Turin) |
+| TD_ATTRIBUTES reserved masks | `TeeVerifier` | A newly defined Intel TDX attribute bit |
+| DCAP TCB statuses `6`, `7`, and above `9` | `TeeVerifier` | An unrecognized DCAP status |
+
+**`TeeVerifier` is not upgradeable.** It holds its vendor verifier addresses as
+immutables and sits behind no proxy, and `SessionRegistry.teeVerifier` is
+likewise immutable. Widening any gate above is therefore a two-contract
+operation, not a policy edit:
+
+1. Deploy a new `TeeVerifier` with the widened constants.
+2. Deploy a new `SessionRegistry` implementation constructed against that
+   address and `upgradeToAndCall` the `SessionRegistry` proxy.
+3. Only then relax the corresponding policy, if any.
+
+`script/UpgradeTeeVerifier.s.sol` performs both steps and asserts the rewiring
+afterwards. Note the ordering constraint already encoded there: upgrade
+`AmdSnpSecurityPolicyRegistry` **first**, because `SessionRegistry` calls
+`verifyTeePolicy` with the current `VerifiedTeePolicyInputs` layout.
+
+`AmdSnpSecurityPolicyRegistry` is a UUPS proxy and *is* upgradeable, so
+`isSupportedCpuid` is shared between the two contracts to keep the supported
+window defined once. Widening it in the registry alone still has no effect —
+`TeeVerifier` rejects the report before the registry is ever consulted.
 
 #### Helper Functions
 
@@ -124,7 +166,7 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 | `InvalidSnpTcb(uint256 offset, uint64 actual)` | A TCB field has nonzero reserved bytes |
 | `InvalidSnpPlatformInfo(uint64 actual)` | `PLATFORM_INFO` contains an unsupported bit |
 | `UnsupportedSnpCpuid(uint24 actual)` | CPUID is outside AMD family `0x19`, model `0x00` through `0x1f` |
-| `InvalidSnpTcbOrder(bytes32 lower, bytes32 upper)` | TCB fields do not satisfy reported ≤ committed ≤ current; launch TCB has no ordering rule |
+| `InvalidSnpTcbOrder(bytes32 lower, bytes32 upper)` | TCB fields do not satisfy reported ≤ committed ≤ current, or launch ≤ committed |
 
 ---
 

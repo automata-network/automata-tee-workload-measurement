@@ -133,6 +133,28 @@ function addPlatformVariants(
   - Existing variant ids → reverts `MeasurementVariantAlreadyExists(variantId)`.
   - Every new profile and variant may contain fully validated custom and reserved attributes. A variant attribute replaces the matching stored profile attribute for sessions that select that variant.
   - Adding a variant does not change an existing policy branch. The new variant id is immutable after it is stored. The verified TEE report and workload policy still gate every new session that selects it.
+- Gated by the same whitelist check as `registerBaseImage`: allowed when `registrationRestricted()` is false, or the owner is whitelisted. An appended variant is a new selectable policy branch that may declare its own reserved TEE attributes, so an owner removed from the whitelist cannot widen a base image they registered while whitelisted.
+
+#### Scope of the append-only guarantee
+
+Append-only immutability is **per variant id**, not per base image. A session
+records its `measurementVariantId`, and that branch's stored `overridePcrs` and
+attributes never change. It does not follow that the set of policies reachable
+under a given `baseImageId` is fixed: the owner may append a further variant
+that declares different reserved TEE attributes, and a registrant is free to
+select it. A variant with an empty `overridePcrs` adds no measurement
+constraint of its own.
+
+Two limits bound what an appended branch can do. The workload leg is evaluated
+independently and resolves to the `AmdSnpSecurityPolicyRegistry` default
+whenever the workload states nothing, so a base-image-side relaxation alone
+cannot go below that default. And the whitelist gate above applies to the
+append itself.
+
+A relying party that needs a fixed policy must therefore pin the
+`measurementVariantId` (or the `platformProfileId` plus its variant set), not
+the `baseImageId` alone. See `cvm-registry-amd-snp-policy.md` for how the two
+legs combine.
 - Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), opExpiresAt, baseImageId, platformProfiles, measurementVariants))`.
 - Emits: `BaseImageUpdated`, `PlatformProfileRegistered` (only for newly-created profiles), `MeasurementVariantRegistered` (per new variant).
 
@@ -207,7 +229,7 @@ function addPlatformVariants(
 8. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
 9. **Signature expiry**: `block.timestamp <= opExpiresAt`
 10. **Owner match**: Signer fingerprint must match stored owner for updates/deactivation
-11. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration.
+11. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration. Applies to `registerBaseImage` and `addPlatformVariants` alike, because both publish policy that sessions can select.
 
 ## Initialization
 

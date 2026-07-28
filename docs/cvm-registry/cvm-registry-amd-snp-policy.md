@@ -123,6 +123,61 @@ side still resolves to that default. Matching explicit base-image and workload
 values can relax it. Verification without a workload applies only the resolved
 base-image policy.
 
+### The registry value is a default, not a floor
+
+This is the security property the packed reserved attributes actually provide,
+stated plainly so integrators do not over-read it.
+
+`minimumTcb` and `platformInfoPolicy` are **defaults that fill in a missing
+side**, not floors that bound either side. `WorkloadRegistry` validates the
+*shape* of a `tcb.minimum` requirement, never its magnitude, and `bytes32(0)`
+is a well-formed TCB. A base image and a workload that both explicitly declare
+a weaker value than the registry record will be admitted at that weaker value.
+
+What the registry does guarantee is that relaxing takes **two independent
+parties**: the base-image owner and the workload owner must each opt in, since
+whichever side stays silent re-imposes the registry value. Treat the record as
+a coordination point and a safe default for silent operators, not as a
+platform-wide minimum that cannot be undercut.
+
+The mitigation-vector masks are different, and are the exception: base-image
+and workload policy cannot replace them, so they are true mandatory
+requirements for the CPUID.
+
+Two consequences worth carrying into integration:
+
+- A relying party that needs a specific TCB floor must assert it itself, from
+  the session's `baseImageId`, `measurementVariantId`, and `workloadId` — the
+  registry default alone does not establish it.
+- Raising a registry record does not retroactively tighten a base image or
+  workload that already declares its own explicit value.
+
+### Reserved attribute matching rules
+
+- Boolean keys (`debug.enabled`, `migrate-ma.enabled`) are matched **by value**.
+  The base image must declare exactly the verified state, and a workload
+  requirement must list that state among its allowed values.
+  `WorkloadRegistry` writes the canonical `[false]` or `[false, true]`
+  encoding, but `verifyTeePolicy` inspects the values themselves rather than
+  inferring intent from the array's length, so a caller that assembles
+  requirements another way gets the same answer.
+- Packed keys (`tcb.minimum`, `platform-info.policy`,
+  `tcb.status.allowed`) read `allowedValues[0]`.
+- A requirement stated on **any** reserved key must name the value it requires.
+  An empty allowed set reverts `EmptyTeeAttributeRequirement(key)`. The
+  "empty array = any value accepted" convention on `AttributeRequirement`
+  applies to ordinary metadata keys only, where an empty set still asserts that
+  the attribute is present. Omitting the requirement entirely is how a workload
+  defers to the registry default — the two are deliberately not the same thing,
+  so a caller cannot end up believing it pinned a value it never supplied.
+  `WorkloadRegistry` already rejects this shape at registration; the check
+  protects direct callers of `verifyTeePolicy`.
+- A reserved key belonging to the other TEE type is neither evaluated nor
+  rejected. A workload that targets both technologies may carry requirements
+  for both; each platform enforces only its own. A reserved-key requirement
+  therefore does not pin the TEE type — assert `teeType` separately if that
+  matters.
+
 The complete packed formats are defined in the canonical
 AMD SEV-SNP security policy specification in the atakit suite.
 
@@ -132,6 +187,13 @@ AMD SEV-SNP security policy specification in the atakit suite.
 platformInfoPolicy, requiredLaunchMitigationVector,
 requiredCurrentMitigationVector, sourceDigest)` records each applied change.
 `cpuid` is indexed. Same-revision no-op updates do not emit it.
+
+The policy fields report **what the update applied**, not what storage holds
+afterwards. The two differ only on a deactivation, which must supply zeros
+while the record keeps its previous values for audit history: the event carries
+the zeros. An indexer can therefore rebuild applied policy from the log alone,
+and should read `active` to decide whether a CPUID can authorize a session.
+Read `getPolicy` for the retained historical values.
 
 Each update supplies `expectedRevision`. A new policy uses zero. An existing
 policy update succeeds only when `expectedRevision` equals the stored revision.
@@ -160,5 +222,6 @@ an identical update at the already-stored revision remains a no-op.
 | `TeeAttributeBaseImageMismatch(key, declaredValue, verifiedValue)` | An effective base-image declaration does not accept the verified TEE state. |
 | `TeeAttributeValueNotAllowed(key, actualValue)` | A workload requirement does not accept the verified TEE state. |
 | `TeeAttributePolicyConflict(key, baseValue, workloadValue)` | Combined `PLATFORM_INFO` masks require a bit to be both set and clear. |
+| `EmptyTeeAttributeRequirement(key)` | A workload requirement on a reserved key carries no allowed values. Omit the requirement to defer to the registry default. |
 | `AttributeNotFound(key)` | An ordinary workload attribute has no effective profile or variant value. |
 | `AttributeValueNotAllowed(key, actualValue)` | An ordinary effective attribute value is not allowed. |
