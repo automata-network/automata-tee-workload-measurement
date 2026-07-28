@@ -44,26 +44,6 @@ library AmdSnpPolicy {
             && (requiredClear & ~SNP_PLATFORM_INFO_SUPPORTED_MASK) == 0 && (requiredSet & requiredClear) == 0;
     }
 
-    /// @notice Returns the component-wise maximum of two packed four-lane TCB values.
-    function maxTcb(bytes32 left, bytes32 right) internal pure returns (bytes32 result) {
-        uint256 leftValue = uint256(left);
-        uint256 rightValue = uint256(right);
-        uint256 packed;
-        for (uint256 laneShift = 0; laneShift < 256; laneShift += 64) {
-            uint64 leftLane = uint64(leftValue >> laneShift);
-            uint64 rightLane = uint64(rightValue >> laneShift);
-            uint64 maximum;
-            for (uint256 componentShift = 0; componentShift < 32; componentShift += 8) {
-                uint8 leftComponent = uint8(leftLane >> componentShift);
-                uint8 rightComponent = uint8(rightLane >> componentShift);
-                maximum |= uint64(leftComponent > rightComponent ? leftComponent : rightComponent)
-                << uint64(componentShift);
-            }
-            packed |= uint256(maximum) << laneShift;
-        }
-        return bytes32(packed);
-    }
-
     /// @notice Returns true when every actual TCB component meets its minimum.
     function tcbMeetsMinimum(bytes32 actual, bytes32 minimum) internal pure returns (bool) {
         uint256 actualValue = uint256(actual);
@@ -80,15 +60,29 @@ library AmdSnpPolicy {
         return true;
     }
 
-    /// @notice Combines two PLATFORM_INFO requirements.
-    /// @dev The caller must validate each input first. A cross-policy conflict reverts.
-    function mergePlatformInfoPolicies(bytes32 left, bytes32 right) internal pure returns (bytes32 result) {
+    /// @notice Combines two PLATFORM_INFO requirements into a single packed policy.
+    /// @dev The caller must validate each input first. This helper does not revert so the
+    ///      caller can report the conflict with its own domain-specific error; `merged` is
+    ///      only meaningful when `ok` is true.
+    /// @return ok False when one side requires a bit set that the other requires cleared.
+    /// @return merged The union of both required-set masks and of both required-clear masks.
+    function tryMergePlatformInfoPolicies(bytes32 left, bytes32 right) internal pure returns (bool ok, bytes32 merged) {
         uint64 requiredSet = uint64(uint256(left)) | uint64(uint256(right));
         uint64 requiredClear = uint64(uint256(left) >> 64) | uint64(uint256(right) >> 64);
-        if ((requiredSet & requiredClear) != 0) {
-            revert InvalidAmdSnpPlatformInfoPolicy(bytes32(uint256(requiredSet) | (uint256(requiredClear) << 64)));
-        }
-        return bytes32(uint256(requiredSet) | (uint256(requiredClear) << 64));
+        merged = bytes32(uint256(requiredSet) | (uint256(requiredClear) << 64));
+        ok = (requiredSet & requiredClear) == 0;
+    }
+
+    /// @notice Returns true when a CPUID identifies a processor this version supports.
+    /// @dev Shared by TeeVerifier (report extraction) and AmdSnpSecurityPolicyRegistry
+    ///      (policy admission) so the supported-silicon window is defined in one place.
+    ///      Family 0x19 models 0x00-0x0f are Milan and 0x10-0x1f are Genoa. Turin
+    ///      (family 0x1a) is not supported. The stepping byte is not constrained here;
+    ///      policy is keyed on the exact CPUID including stepping.
+    function isSupportedCpuid(uint24 cpuid) internal pure returns (bool) {
+        uint8 family = uint8(cpuid >> 16);
+        uint8 model = uint8(cpuid >> 8);
+        return family == 0x19 && model <= 0x1f;
     }
 
     /// @notice Returns true when PLATFORM_INFO satisfies the packed policy.

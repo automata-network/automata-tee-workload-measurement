@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.27;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
 import {
@@ -210,7 +210,28 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         bytes32 lower = bytes32(uint256(MINIMUM_TCB) - 1);
         assertTrue(AmdSnpPolicy.tcbMeetsMinimum(MINIMUM_TCB, lower));
         assertFalse(AmdSnpPolicy.tcbMeetsMinimum(lower, MINIMUM_TCB));
-        assertEq(AmdSnpPolicy.maxTcb(lower, MINIMUM_TCB), MINIMUM_TCB);
+
+        // A single lagging component is enough to fail, even when every other lane is ahead.
+        bytes32 mixed = bytes32(uint256(MINIMUM_TCB) | (uint256(0xff) << 200));
+        assertFalse(AmdSnpPolicy.tcbMeetsMinimum(lower, mixed));
+    }
+
+    function testPlatformInfoMergeUnionsBothSidesAndFlagsConflicts() public pure {
+        // Left requires bit 0 set; right requires bit 1 set. The union requires both.
+        (bool ok, bytes32 merged) = AmdSnpPolicy.tryMergePlatformInfoPolicies(bytes32(uint256(1)), bytes32(uint256(2)));
+        assertTrue(ok);
+        assertEq(merged, bytes32(uint256(3)));
+
+        // Left requires bit 0 set; right requires bit 0 cleared.
+        (bool conflicting,) = AmdSnpPolicy.tryMergePlatformInfoPolicies(bytes32(uint256(1)), bytes32(uint256(1) << 64));
+        assertFalse(conflicting);
+    }
+
+    function testSupportedCpuidWindow() public pure {
+        assertTrue(AmdSnpPolicy.isSupportedCpuid(0x190000)); // Milan
+        assertTrue(AmdSnpPolicy.isSupportedCpuid(0x191002)); // Genoa, nonzero stepping
+        assertFalse(AmdSnpPolicy.isSupportedCpuid(0x192000)); // model above 0x1f
+        assertFalse(AmdSnpPolicy.isSupportedCpuid(0x1a0000)); // Turin
     }
 
     function testOnlyOwnerMayUpdateOrUpgradeAndStorageSurvivesUpgrade() public {
@@ -652,6 +673,126 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
                 }
             }
         }
+    }
+
+    /// @dev A deactivation must supply zeros and keeps the previous values in storage for audit
+    ///      history, so the event has to report what the update applied, not what storage holds.
+    function testDeactivationEventReportsTheAppliedZeros() public {
+        _register(GENOA_CPUID);
+
+        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
+        updates[0] = AmdSnpSecurityPolicyUpdate(GENOA_CPUID, 1, 2, false, bytes32(0), bytes32(0), 0, 0);
+
+        vm.recordLogs();
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, SOURCE_DIGEST);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 1);
+        (
+            uint64 revision,
+            bool active,
+            bytes32 minimumTcb,
+            bytes32 platformInfoPolicy,
+            uint64 requiredLaunch,
+            uint64 requiredCurrent
+        ) = abi.decode(logs[0].data, (uint64, bool, bytes32, bytes32, uint64, uint64));
+
+        assertEq(revision, 2);
+        assertFalse(active);
+        assertEq(minimumTcb, bytes32(0));
+        assertEq(platformInfoPolicy, bytes32(0));
+        assertEq(requiredLaunch, 0);
+        assertEq(requiredCurrent, 0);
+
+        // Storage still carries the pre-deactivation values for audit history.
+        assertEq(registry.getPolicy(GENOA_CPUID).minimumTcb, MINIMUM_TCB);
+    }
+
+    /// @dev A boolean requirement is matched by value, not by the length of its allowed set.
+    function testBooleanRequirementMustListTheVerifiedValue() public {
+        _register(GENOA_CPUID);
+
+        Attribute[] memory profile = new Attribute[](1);
+        profile[0] = Attribute({key: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, value: TEE_ATTRIBUTE_TRUE});
+        Attribute[] memory none = new Attribute[](0);
+
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.enabledTeeAttributes = TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT;
+
+        // Two allowed values that do not include `true` must not be read as an opt-in.
+        bytes32[] memory wrongPair = new bytes32[](2);
+        wrongPair[0] = bytes32(uint256(0xdead));
+        wrongPair[1] = bytes32(uint256(0xbeef));
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](1);
+        requirements[0] = AttributeRequirement({key: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, allowedValues: wrongPair});
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+                TEE_ATTRIBUTE_TRUE
+            )
+        );
+        registry.verifyTeePolicy(inputs, profile, none, requirements);
+
+        // A single-element set holding `true` is a valid opt-in regardless of its length.
+        bytes32[] memory onlyTrue = new bytes32[](1);
+        onlyTrue[0] = TEE_ATTRIBUTE_TRUE;
+        requirements[0] = AttributeRequirement({key: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, allowedValues: onlyTrue});
+        registry.verifyTeePolicy(inputs, profile, none, requirements);
+
+        // The canonical WorkloadRegistry encoding still works.
+        bytes32[] memory bothValues = new bytes32[](2);
+        bothValues[0] = bytes32(0);
+        bothValues[1] = TEE_ATTRIBUTE_TRUE;
+        requirements[0] = AttributeRequirement({key: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, allowedValues: bothValues});
+        registry.verifyTeePolicy(inputs, profile, none, requirements);
+    }
+
+    /// @dev A workload that states a requirement on a reserved key must name the value it
+    ///      requires. An empty allowed set is malformed input, not a silent "no opinion" —
+    ///      deferring to the registry default is what omitting the requirement means.
+    function testEmptyAllowedValuesOnReservedKeyIsRejected() public {
+        _register(GENOA_CPUID);
+
+        Attribute[] memory none = new Attribute[](0);
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](1);
+
+        // Packed key.
+        requirements[0] =
+            AttributeRequirement({key: TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, allowedValues: new bytes32[](0)});
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.EmptyTeeAttributeRequirement.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM
+            )
+        );
+        registry.verifyTeePolicy(_validInputs(), none, none, requirements);
+
+        // Boolean key, in the disabled state that would otherwise have been trivially accepted.
+        requirements[0] = AttributeRequirement({key: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, allowedValues: new bytes32[](0)});
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.EmptyTeeAttributeRequirement.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+            )
+        );
+        registry.verifyTeePolicy(_validInputs(), none, none, requirements);
+
+        // Omitting the requirement altogether is the supported way to defer to the default.
+        AttributeRequirement[] memory noRequirements = new AttributeRequirement[](0);
+        registry.verifyTeePolicy(_validInputs(), none, none, noRequirements);
+
+        VerifiedTeePolicyInputs memory stale = _validInputs();
+        stale.amdSevSnpTcbValues = bytes32(uint256(MINIMUM_TCB) - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+                MINIMUM_TCB,
+                stale.amdSevSnpTcbValues
+            )
+        );
+        registry.verifyTeePolicy(stale, none, none, noRequirements);
     }
 
     function _register(uint24 cpuid) private {

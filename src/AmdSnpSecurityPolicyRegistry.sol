@@ -19,7 +19,8 @@ import {
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TDX_TCB_STATUS_OK,
-    TEE_ATTRIBUTE_TRUE
+    TEE_ATTRIBUTE_TRUE,
+    TEE_ATTRIBUTE_FALSE
 } from "./types/Constants.sol";
 import {TEEType} from "./types/Evidence.sol";
 import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
@@ -57,6 +58,7 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
     error TeeAttributePolicyConflict(bytes32 key, bytes32 baseValue, bytes32 workloadValue);
     error AttributeNotFound(bytes32 key);
     error AttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
+    error EmptyTeeAttributeRequirement(bytes32 key);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -208,7 +210,13 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
                 bytes32(uint256(inputs.amdSevSnpPlatformInfo))
             );
         }
-        bytes32 effectiveWorkloadPlatformInfo = _mergePlatformInfoPolicies(basePlatformInfo, workloadPlatformInfo);
+        (bool merged, bytes32 effectiveWorkloadPlatformInfo) =
+            AmdSnpPolicy.tryMergePlatformInfoPolicies(basePlatformInfo, workloadPlatformInfo);
+        if (!merged) {
+            revert TeeAttributePolicyConflict(
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, basePlatformInfo, workloadPlatformInfo
+            );
+        }
         if (!AmdSnpPolicy.platformInfoMatches(inputs.amdSevSnpPlatformInfo, effectiveWorkloadPlatformInfo)) {
             revert TeeAttributeValueNotAllowed(
                 TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(uint256(inputs.amdSevSnpPlatformInfo))
@@ -269,26 +277,31 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
         stored.revision = update.revision;
         stored.active = update.active;
 
+        // Report what this update applied, not what storage still holds. A deactivation must
+        // supply zeros and keeps the previous values in the record for audit history, so
+        // reading them back here would misreport the change to log consumers.
         emit AmdSnpSecurityPolicyUpdated(
             update.cpuid,
             update.revision,
             update.active,
-            stored.minimumTcb,
-            stored.platformInfoPolicy,
-            stored.requiredLaunchMitigationVector,
-            stored.requiredCurrentMitigationVector,
+            update.minimumTcb,
+            update.platformInfoPolicy,
+            update.requiredLaunchMitigationVector,
+            update.requiredCurrentMitigationVector,
             sourceDigest
         );
     }
 
     function _validateCpuid(uint24 cpuid) private pure {
-        uint8 family = uint8(cpuid >> 16);
-        uint8 model = uint8(cpuid >> 8);
-        if (family != 0x19 || model > 0x1f) {
+        if (!AmdSnpPolicy.isSupportedCpuid(cpuid)) {
             revert UnsupportedCpuid(cpuid);
         }
     }
 
+    /// @dev Both legs must accept the verified state. The base image declares it exactly; the
+    ///      workload must list it among the requirement's allowed values. The allowed values are
+    ///      compared by value rather than inferred from the array's length, so the result does
+    ///      not depend on WorkloadRegistry's canonical `[false]` / `[false, true]` encoding.
     function _verifyBooleanAttribute(
         bytes32 key,
         bool enabled,
@@ -296,20 +309,23 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
         Attribute[] calldata variantAttributes,
         AttributeRequirement[] calldata requirements
     ) private pure {
-        bytes32 verifiedValue = enabled ? TEE_ATTRIBUTE_TRUE : bytes32(0);
-        bytes32 declaredValue = _effectiveAttribute(profileAttributes, variantAttributes, key, bytes32(0));
+        bytes32 verifiedValue = enabled ? TEE_ATTRIBUTE_TRUE : TEE_ATTRIBUTE_FALSE;
+        bytes32 declaredValue = _effectiveAttribute(profileAttributes, variantAttributes, key, TEE_ATTRIBUTE_FALSE);
         if (declaredValue != verifiedValue) {
             revert TeeAttributeBaseImageMismatch(key, declaredValue, verifiedValue);
         }
-        if (enabled) {
-            for (uint256 i = 0; i < requirements.length; i++) {
-                if (requirements[i].key == key) {
-                    if (requirements[i].allowedValues.length == 2) return;
-                    break;
-                }
+        for (uint256 i = 0; i < requirements.length; i++) {
+            if (requirements[i].key != key) continue;
+            bytes32[] calldata allowedValues = requirements[i].allowedValues;
+            if (allowedValues.length == 0) revert EmptyTeeAttributeRequirement(key);
+            for (uint256 j = 0; j < allowedValues.length; j++) {
+                if (allowedValues[j] == verifiedValue) return;
             }
             revert TeeAttributeValueNotAllowed(key, verifiedValue);
         }
+        // No explicit requirement. The workload opted into nothing, so only the disabled
+        // state is acceptable.
+        if (enabled) revert TeeAttributeValueNotAllowed(key, verifiedValue);
     }
 
     function _effectiveAttribute(
@@ -327,13 +343,24 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
         return defaultValue;
     }
 
+    /// @dev Resolves the workload's explicit value for a packed reserved attribute. A workload
+    ///      that states a requirement on one of these keys must name the value it requires, so an
+    ///      empty allowed set is malformed rather than a silent "no opinion" — the
+    ///      "empty array = any value accepted" convention on `AttributeRequirement` applies to
+    ///      ordinary metadata keys only. Omitting the requirement entirely is how a workload
+    ///      defers to the registry default. `WorkloadRegistry._validateRequirements` already
+    ///      rejects this shape at registration; the check keeps a direct caller of
+    ///      `verifyTeePolicy` from being handed a default it never asked for.
     function _requirementOrDefault(AttributeRequirement[] calldata requirements, bytes32 key, bytes32 defaultValue)
         private
         pure
         returns (bytes32)
     {
         for (uint256 i = 0; i < requirements.length; i++) {
-            if (requirements[i].key == key) return requirements[i].allowedValues[0];
+            if (requirements[i].key != key) continue;
+            bytes32[] calldata allowedValues = requirements[i].allowedValues;
+            if (allowedValues.length == 0) revert EmptyTeeAttributeRequirement(key);
+            return allowedValues[0];
         }
         return defaultValue;
     }
@@ -377,15 +404,6 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
         for (uint256 i = 0; i < profileAttributes.length; i++) {
             if (profileAttributes[i].key == key) return (true, profileAttributes[i].value);
         }
-    }
-
-    function _mergePlatformInfoPolicies(bytes32 left, bytes32 right) private pure returns (bytes32) {
-        uint64 requiredSet = uint64(uint256(left)) | uint64(uint256(right));
-        uint64 requiredClear = uint64(uint256(left) >> 64) | uint64(uint256(right) >> 64);
-        if ((requiredSet & requiredClear) != 0) {
-            revert TeeAttributePolicyConflict(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, left, right);
-        }
-        return bytes32(uint256(requiredSet) | (uint256(requiredClear) << 64));
     }
 
     function _isTeeAttributeKey(bytes32 key) private pure returns (bool) {

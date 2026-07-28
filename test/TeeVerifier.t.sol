@@ -278,7 +278,8 @@ contract TeeVerifierSnpTest is Test {
         _verifySnp(report);
     }
 
-    function test_snp_rejects_invalid_tcb_order_but_does_not_order_launch_tcb() public {
+    function test_snp_rejects_invalid_tcb_order() public {
+        // REPORTED_TCB (0x180) must not exceed COMMITTED_TCB (0x1e0).
         bytes memory report = _report();
         _setRawTcb(report, 0x180, 5, 0, 0, 0);
         _setRawTcb(report, 0x1e0, 4, 0, 0, 0);
@@ -287,8 +288,23 @@ contract TeeVerifierSnpTest is Test {
         );
         _verifySnp(report);
 
+        // LAUNCH_TCB (0x1f0) is the COMMITTED_TCB captured at launch, so it must not exceed
+        // the current COMMITTED_TCB either.
         report = _report();
         _setRawTcb(report, 0x1f0, type(uint8).max, type(uint8).max, type(uint8).max, type(uint8).max);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TeeVerifier.InvalidSnpTcbOrder.selector, bytes32(uint256(type(uint32).max)), bytes32(uint256(0))
+            )
+        );
+        _verifySnp(report);
+
+        // A LAUNCH_TCB at or below COMMITTED_TCB is accepted.
+        report = _report();
+        _setRawTcb(report, 0x38, 6, 0, 0, 0);
+        _setRawTcb(report, 0x180, 4, 0, 0, 0);
+        _setRawTcb(report, 0x1e0, 6, 0, 0, 0);
+        _setRawTcb(report, 0x1f0, 5, 0, 0, 0);
         _verifySnp(report);
     }
 

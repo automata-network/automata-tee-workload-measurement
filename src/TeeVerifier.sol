@@ -417,7 +417,7 @@ contract TeeVerifier is ITeeVerifier {
         uint8 model = uint8(report[SNP_CPUID_OFFSET + 1]);
         uint8 stepping = uint8(report[SNP_CPUID_OFFSET + 2]);
         cpuid = (uint24(family) << 16) | (uint24(model) << 8) | uint24(stepping);
-        if (family != 0x19 || model > 0x1f) {
+        if (!AmdSnpPolicy.isSupportedCpuid(cpuid)) {
             revert UnsupportedSnpCpuid(cpuid);
         }
         if (_hasNonzeroBytes(report, SNP_CPUID_RESERVED_OFFSET, SNP_CPUID_RESERVED_SIZE)) {
@@ -436,11 +436,16 @@ contract TeeVerifier is ITeeVerifier {
         uint64 reportedTcb = _normalizeSnpTcb(report, SNP_REPORTED_TCB_OFFSET);
         uint64 committedTcb = _normalizeSnpTcb(report, SNP_COMMITTED_TCB_OFFSET);
         uint64 launchTcb = _normalizeSnpTcb(report, SNP_LAUNCH_TCB_OFFSET);
+        // AMD guarantees REPORTED_TCB <= COMMITTED_TCB <= CURRENT_TCB, and LAUNCH_TCB is the
+        // COMMITTED_TCB captured at launch, so it can never exceed the current COMMITTED_TCB.
         if (!AmdSnpPolicy.tcbMeetsMinimum(bytes32(uint256(committedTcb)), bytes32(uint256(reportedTcb)))) {
             revert InvalidSnpTcbOrder(bytes32(uint256(reportedTcb)), bytes32(uint256(committedTcb)));
         }
         if (!AmdSnpPolicy.tcbMeetsMinimum(bytes32(uint256(currentTcb)), bytes32(uint256(committedTcb)))) {
             revert InvalidSnpTcbOrder(bytes32(uint256(committedTcb)), bytes32(uint256(currentTcb)));
+        }
+        if (!AmdSnpPolicy.tcbMeetsMinimum(bytes32(uint256(committedTcb)), bytes32(uint256(launchTcb)))) {
+            revert InvalidSnpTcbOrder(bytes32(uint256(launchTcb)), bytes32(uint256(committedTcb)));
         }
         tcbValues = bytes32(
             (uint256(currentTcb) << 192) | (uint256(reportedTcb) << 128) | (uint256(committedTcb) << 64)
