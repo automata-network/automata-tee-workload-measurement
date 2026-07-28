@@ -56,6 +56,10 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
     error InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue);
     error NotWhitelisted(bytes32 ownerFingerprint);
+    /// @notice `AccessMode.WHITELIST` was registered with an empty `baseImageIds` set, which would
+    ///         deny every base image and leave the workload permanently unusable. Workloads are
+    ///         immutable and the name/version pair stays claimed, so this is rejected up front.
+    error EmptyBaseImageWhitelist();
 
     // ============================================================================
     // Events
@@ -112,6 +116,14 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
 
         _validatePcrSpecsSorted(spec.pcrs);
         _validateRequirements(spec.requirements);
+
+        // An empty whitelist denies every base image, so isBaseImageAllowed always returns false
+        // and no session can ever reference this workload. Registration is one-shot: the spec is
+        // immutable and the name/version pair remains claimed after deactivation, so the mistake
+        // is unrecoverable under that identifier. Reject it rather than record it.
+        if (spec.baseImageMode == AccessMode.WHITELIST && spec.baseImageIds.length == 0) {
+            revert EmptyBaseImageWhitelist();
+        }
 
         // Compute workload ID
         workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version));
