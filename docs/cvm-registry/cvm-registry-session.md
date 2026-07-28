@@ -457,11 +457,23 @@ function recoverSession(
 ) external returns (bytes32 newSessionId)
 ```
 
-Recover requires an existing owner-controlled predecessor, which may already
-be revoked or expired. It needs no predecessor TPM key, performs complete
-successor verification, and grants a fresh lifetime. It emits
-`SessionRevoked` only when newly revoking the predecessor, followed by
-`SessionRegistered`, `AttestationKeysRevealed`, and `SessionRecovered`.
+Recover requires an existing owner-controlled predecessor that has **not** been
+revoked; the predecessor may be active or expired. It needs no predecessor TPM
+key, performs complete successor verification, and grants a fresh lifetime. It
+emits `SessionRevoked`, `SessionRegistered`, `AttestationKeysRevealed`, and
+`SessionRecovered`.
+
+Recovery consumes its predecessor by revoking it, so exactly one recovery can
+succeed per predecessor; a second call naming the same `oldSessionId` reverts
+`SessionAlreadyRevoked`. This makes recovery single-use without a dedicated
+storage flag. It costs the caller nothing, because recovery is
+`registerSession` plus `revokeSession`: an owner whose predecessor is already
+revoked has nothing left to revoke and calls `registerSession` directly, which
+requires the same complete attestation and no predecessor at all.
+
+The predecessor's revocation state is screened before the ownership check,
+matching `revokeSession`'s ordering. Revocation state is already public through
+`getSession` and `isSessionActive`, so the ordering discloses nothing.
 
 ## Cloud Instance and Session Lifetime
 
@@ -485,10 +497,11 @@ A replacement that needs a trusted session must submit fresh attestation:
 - `renewSession` requires an active predecessor and authorization from its TPM
   signing key. It verifies complete new attestation and assigns a fresh
   policy-derived expiry.
-- `recoverSession` requires the predecessor record and owner authorization but
-  not the predecessor TPM signing key. It verifies complete new attestation,
-  may replace an inactive predecessor, and assigns a fresh policy-derived
-  expiry.
+- `recoverSession` requires an unrevoked predecessor record and owner
+  authorization but not the predecessor TPM signing key. It verifies complete
+  new attestation, may replace an active or expired predecessor, and assigns a
+  fresh policy-derived expiry. It revokes the predecessor, so it succeeds at
+  most once per predecessor.
 
 These functions change on-chain session state. They do not change cloud
 provider resources.

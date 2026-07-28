@@ -487,9 +487,11 @@ contract SessionLifecycleTest is Test {
 
         bytes32 oldSessionId = keccak256("wrong-owner-session");
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        // Seeded unrevoked so the ownership check is what rejects the call. recoverSession
+        // screens the predecessor's revocation state first, matching revokeSession's ordering.
         _seedSession(
             oldSessionId,
-            true,
+            false,
             uint64(block.timestamp - 1),
             ownerFingerprint,
             oldAk,
@@ -575,7 +577,10 @@ contract SessionLifecycleTest is Test {
         );
     }
 
-    function testRecoverSessionDoesNotEmitDuplicateRevocationForRevokedPredecessor() public {
+    /// @dev A recovery consumes its predecessor by revoking it, so exactly one recovery can
+    ///      succeed per predecessor. An owner holding an already-revoked session has nothing
+    ///      left to revoke and calls registerSession instead.
+    function testRecoverSessionRejectsAlreadyRevokedPredecessor() public {
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         bytes32 oldSessionId = keccak256("revoked-recovery-session");
         _seedSession(
@@ -595,8 +600,8 @@ contract SessionLifecycleTest is Test {
         bytes32 teeReportHash = keccak256(evidence.teeReport.data);
         _mockFullEvidence(evidence, ownerFingerprint, 0, newAk, newTpmSigningKey, teeReportHash);
 
-        vm.recordLogs();
-        bytes32 newSessionId = sessionRegistry.recoverSession(
+        vm.expectRevert(SessionRegistry.SessionAlreadyRevoked.selector);
+        sessionRegistry.recoverSession(
             oldSessionId,
             evidence,
             newPolicy.workloadId,
@@ -607,17 +612,65 @@ contract SessionLifecycleTest is Test {
             ownerIdentity,
             hex"01"
         );
-        Vm.Log[] memory logs = vm.getRecordedLogs();
+    }
 
-        bytes32 revokedTopic = keccak256("SessionRevoked(bytes32,bytes32)");
-        uint256 revocationCount;
-        for (uint256 i = 0; i < logs.length; i++) {
-            if (logs[i].emitter == address(sessionRegistry) && logs[i].topics[0] == revokedTopic) {
-                revocationCount++;
-            }
-        }
-        assertEq(revocationCount, 0);
+    /// @dev The first recovery succeeds and revokes the predecessor; a second recovery naming the
+    ///      same predecessor is rejected, so recovery is single-use without a dedicated flag.
+    function testRecoverSessionIsSingleUsePerPredecessor() public {
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        bytes32 oldSessionId = keccak256("single-use-recovery-session");
+        _seedSession(
+            oldSessionId,
+            false,
+            uint64(block.timestamp - 1),
+            ownerFingerprint,
+            oldAk,
+            oldTpmSigningKey,
+            oldSessionKey,
+            oldPolicy
+        );
+
+        PublicIdentity memory firstAk = _identity(ALGO_ID_ES256, 0x91);
+        PublicIdentity memory firstTpmSigningKey = _identity(ALGO_ID_ES256, 0x92);
+        AttestationEvidence memory firstEvidence = _fullEvidence(0x94, _identity(ALGO_ID_ES256K, 0x93));
+        _mockFullEvidence(
+            firstEvidence, ownerFingerprint, 0, firstAk, firstTpmSigningKey, keccak256(firstEvidence.teeReport.data)
+        );
+
+        bytes32 newSessionId = sessionRegistry.recoverSession(
+            oldSessionId,
+            firstEvidence,
+            newPolicy.workloadId,
+            newPolicy.baseImageId,
+            newPolicy.platformProfileId,
+            newPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
         assertTrue(sessionRegistry.isSessionActive(newSessionId));
+        assertFalse(sessionRegistry.isSessionActive(oldSessionId));
+
+        // Fresh, independently valid evidence against the now-consumed predecessor.
+        PublicIdentity memory secondAk = _identity(ALGO_ID_ES256, 0x95);
+        PublicIdentity memory secondTpmSigningKey = _identity(ALGO_ID_ES256, 0x96);
+        AttestationEvidence memory secondEvidence = _fullEvidence(0x98, _identity(ALGO_ID_ES256K, 0x97));
+        _mockFullEvidence(
+            secondEvidence, ownerFingerprint, 1, secondAk, secondTpmSigningKey, keccak256(secondEvidence.teeReport.data)
+        );
+
+        vm.expectRevert(SessionRegistry.SessionAlreadyRevoked.selector);
+        sessionRegistry.recoverSession(
+            oldSessionId,
+            secondEvidence,
+            newPolicy.workloadId,
+            newPolicy.baseImageId,
+            newPolicy.platformProfileId,
+            newPolicy.measurementVariantId,
+            uint64(block.timestamp + 5 minutes),
+            ownerIdentity,
+            hex"01"
+        );
     }
 
     function testOwnerNonceRollsBackWhenRecoveryAuthorizationFails() public {

@@ -438,6 +438,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         _requireNotExpired(opExpiresAt);
         CVMSessionStorage storage predecessor = _sessions[oldSessionId];
         if (!predecessor.exists) revert SessionNotFound();
+        // A recovery consumes its predecessor by revoking it, so an already-revoked predecessor
+        // cannot authorize a second one. This makes recovery single-use per predecessor without
+        // a dedicated flag. It costs the caller nothing: recovery is registerSession plus
+        // revokeSession, so an owner whose predecessor is already revoked has nothing left to
+        // revoke and simply calls registerSession. Checked before _prepareFullSession so a
+        // repeat attempt fails cheaply.
+        if (predecessor.isRevoked) revert SessionAlreadyRevoked();
         bytes32 ownerFingerprint = _requireFingerprint(ownerIdentity, predecessor.owner);
 
         FullSessionResult memory result = _prepareFullSession(
@@ -458,11 +465,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             ownerSignature
         );
 
-        if (!predecessor.isRevoked) {
-            predecessor.isRevoked = true;
-            _clearSessionFingerprint(oldSessionId, predecessor.session.sessionKeyFingerprint);
-            emit SessionRevoked(oldSessionId, ownerFingerprint);
-        }
+        predecessor.isRevoked = true;
+        _clearSessionFingerprint(oldSessionId, predecessor.session.sessionKeyFingerprint);
+        emit SessionRevoked(oldSessionId, ownerFingerprint);
         _finalizeFullSession(
             result, workloadId, baseImageId, platformProfileId, measurementVariantId, newEvidence.sessionKey
         );
