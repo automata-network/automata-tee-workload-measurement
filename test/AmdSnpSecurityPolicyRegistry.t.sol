@@ -216,6 +216,13 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         assertFalse(AmdSnpPolicy.tcbMeetsMinimum(lower, mixed));
     }
 
+    function testPackedTcbComparisonRejectsReservedComponents() public pure {
+        bytes32 invalidActual = bytes32(uint256(1) << 32);
+        bytes32 invalidMinimum = bytes32(uint256(1) << 32);
+        assertFalse(AmdSnpPolicy.tcbMeetsMinimum(invalidActual, bytes32(0)));
+        assertFalse(AmdSnpPolicy.tcbMeetsMinimum(bytes32(0), invalidMinimum));
+    }
+
     function testPlatformInfoMergeUnionsBothSidesAndFlagsConflicts() public pure {
         // Left requires bit 0 set; right requires bit 1 set. The union requires both.
         (bool ok, bytes32 merged) = AmdSnpPolicy.tryMergePlatformInfoPolicies(bytes32(uint256(1)), bytes32(uint256(2)));
@@ -225,6 +232,17 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         // Left requires bit 0 set; right requires bit 0 cleared.
         (bool conflicting,) = AmdSnpPolicy.tryMergePlatformInfoPolicies(bytes32(uint256(1)), bytes32(uint256(1) << 64));
         assertFalse(conflicting);
+    }
+
+    function testPlatformInfoHelpersRejectMalformedPolicies() public pure {
+        bytes32 highReservedBit = bytes32(uint256(1) << 128);
+        bytes32 overlapping = bytes32(uint256(1) | (uint256(1) << 64));
+        (bool highBitOk,) = AmdSnpPolicy.tryMergePlatformInfoPolicies(highReservedBit, bytes32(0));
+        (bool overlappingOk,) = AmdSnpPolicy.tryMergePlatformInfoPolicies(overlapping, bytes32(0));
+        assertFalse(highBitOk);
+        assertFalse(overlappingOk);
+        assertFalse(AmdSnpPolicy.platformInfoMatches(0, highReservedBit));
+        assertFalse(AmdSnpPolicy.platformInfoMatches(1, overlapping));
     }
 
     function testSupportedCpuidWindow() public pure {
@@ -793,6 +811,26 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
             )
         );
         registry.verifyTeePolicy(stale, none, none, noRequirements);
+    }
+
+    function testPackedRequirementMustContainExactlyOneValue() public {
+        _register(GENOA_CPUID);
+
+        Attribute[] memory none = new Attribute[](0);
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](1);
+        bytes32[] memory twoValues = new bytes32[](2);
+        twoValues[0] = MINIMUM_TCB;
+        twoValues[1] = MINIMUM_TCB;
+        requirements[0] = AttributeRequirement({key: TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, allowedValues: twoValues});
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.InvalidPackedTeeAttributeRequirementLength.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+                2
+            )
+        );
+        registry.verifyTeePolicy(_validInputs(), none, none, requirements);
     }
 
     function _register(uint24 cpuid) private {
