@@ -2,7 +2,7 @@
 
 ## TeeVerifier
 
-**File**: `src/TeeVerifier.sol` (298 lines)
+**File**: `src/TeeVerifier.sol`
 **Interface**: `src/interfaces/ITeeVerifier.sol`
 **Role**: Stateless dispatcher for TEE attestation verification (Intel TDX via DCAP, AMD SEV-SNP)
 
@@ -30,13 +30,13 @@ uint256 constant DCAP_REPORT_DATA_START = 520;  // offset within quote body
 
 // SNP
 uint256 constant SNP_REPORT_DATA_OFFSET = 0x50;
-uint256 constant SNP_MIN_REPORT_LEN = 144;
+uint256 constant SNP_REPORT_SIZE = 1184;
 ```
 
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "1.0.0";
+string public constant TEE_VERIFIER_VERSION = "1.4.0";
 ```
 
 ### Functions
@@ -57,13 +57,76 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 1. Dispatch based on `VerificationBackendType`:
    - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
    - ZK RiscZero/Succinct: `dcapAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
-2. Extract quote body from DCAP output (`extractDcapQuoteBody`)
-3. Extract 64-byte reportData from quote body (`extractDcapReportData`)
+2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
+3. Return the accepted status as `intelTdxTcbStatusBit = 1 << rawStatus`.
+4. Extract the quote body from DCAP output.
+5. Require valid reserved attribute bits and `SEPT_VE_DISABLE`.
+6. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`.
+7. Extract `DEBUG` into `enabledTeeAttributes`.
+8. Return the quote body with `valid=true`.
 
 **SNP (AMD) flow**:
 1. ZK only: `snpAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
-2. Extract attestation report (`extractSnpAttestationReport`)
-3. Extract 64-byte reportData (`extractSnpReportData`)
+2. Check the proof-bound report hash before reading report fields
+3. Require an exact 1,184-byte report and version 3 through 5
+4. Validate signature selection, key settings, policy, `VMPL`, raw TCB,
+   CPUID, `PLATFORM_INFO`, and every version-specific reserved field
+5. Accept only an all-zero or all-`0xff` `REPORT_ID_MA` as no active
+   migration-agent association. Reject every other value.
+6. Require `reported_tcb <= committed_tcb <= current_tcb` and
+   `launch_tcb <= committed_tcb`, component by component. `LAUNCH_TCB` is the
+   `COMMITTED_TCB` captured at launch and `COMMITTED_TCB` only ever advances,
+   so it can never exceed the current value.
+7. Extract `POLICY.DEBUG`, `POLICY.MIGRATE_MA`, four normalized TCB fields,
+   `PLATFORM_INFO`, exact CPUID, and report version
+8. For version 5, extract `LAUNCH_MIT_VECTOR` and `CURRENT_MIT_VECTOR`.
+   Earlier versions return zero for both vectors.
+9. Return the raw report with `valid=true`.
+
+`AmdSnpSecurityPolicyRegistry` checks the extracted AMD state against the
+resolved base-image and workload policies. Its active exact-CPUID record
+supplies any missing packed value. See
+[AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
+
+#### Runbook: vendor firmware introduces a new bit or version
+
+`TeeVerifier` rejects every field value it does not recognize. That is
+deliberate — an unknown bit is unreviewed silicon or firmware behaviour, and
+admitting it would attest to a configuration nobody has evaluated. The cost is
+that a vendor change can halt attestation for a platform until the verifier is
+redeployed. Know this before it happens in production rather than during an
+incident.
+
+The gates that a vendor change can trip:
+
+| Gate | Location | Rejects |
+|---|---|---|
+| `SNP_PLATFORM_INFO_SUPPORTED_MASK` (`0x3f`) | `TeeVerifier`, `AmdSnpPolicy` | `PLATFORM_INFO` bit 6 or above |
+| SNP report version `3..5` | `TeeVerifier` | A version-6 report |
+| SNP `POLICY` bit 26 and above | `TeeVerifier` | A newly defined policy bit |
+| `AmdSnpPolicy.isSupportedCpuid` | `TeeVerifier`, `AmdSnpSecurityPolicyRegistry` | Family other than `0x19`, or model above `0x1f` (Turin) |
+| TD_ATTRIBUTES reserved masks | `TeeVerifier` | A newly defined Intel TDX attribute bit |
+| DCAP TCB statuses `6`, `7`, and above `9` | `TeeVerifier` | An unrecognized DCAP status |
+
+**`TeeVerifier` is not upgradeable.** It holds its vendor verifier addresses as
+immutables and sits behind no proxy, and `SessionRegistry.teeVerifier` is
+likewise immutable. Widening any gate above is therefore a two-contract
+operation, not a policy edit:
+
+1. Deploy a new `TeeVerifier` with the widened constants.
+2. Deploy a new `SessionRegistry` implementation constructed against that
+   address and `upgradeToAndCall` the `SessionRegistry` proxy.
+3. Only then relax the corresponding policy, if any.
+
+`script/UpgradeTeeVerifier.s.sol` performs both steps and asserts the rewiring
+afterwards. Note the ordering constraint already encoded there: upgrade
+`AmdSnpSecurityPolicyRegistry` **first**, because `SessionRegistry` calls
+`verifyTeePolicy` with the current `VerifiedTeePolicyInputs` layout.
+
+`AmdSnpSecurityPolicyRegistry` is a UUPS proxy and *is* upgradeable, so
+`isSupportedCpuid` is shared between the two contracts to keep the supported
+window defined once. Widening it in the registry alone still has no effect —
+`TeeVerifier` rejects the report before the registry is ever consulted.
 
 #### Helper Functions
 
@@ -71,7 +134,7 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 |---|---|---|
 | `extractDcapQuoteBody(output)` | private | Parse DCAP output -> TD10/TD15 quote body bytes |
 | `extractDcapReportData(quoteBody)` | external | Extract 64 bytes at offset 520 from quote body |
-| `extractSnpAttestationReport(rawReport)` | private | Validate length >= 144, return raw report |
+| `extractSnpAttestationReport(rawReport)` | private | Require the exact 1,184-byte report and validate policy fields |
 | `extractSnpReportData(rawReport)` | external | Extract 64 bytes at offset 0x50 from SNP report |
 
 Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before quote body in DCAP output).
@@ -80,15 +143,36 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 
 | Error | Condition |
 |---|---|
-| `UnsupportedTeeType()` | Not TDX or SNP |
-| `UnsupportedBackendType()` | Invalid verification backend |
-| `InvalidTeeReport()` | Verification returned invalid |
+| `UnsupportedTeeType(TEEType actual)` | Not TDX or SNP |
+| `UnsupportedBackendType(TEEType teeType, VerificationBackendType backend)` | Invalid verification backend |
+| `TeeReportTooShort(uint256 length, uint256 minRequired)` | Generic report is too short |
+| `UnsupportedDcapBodyType(uint16 bodyType)` | DCAP output is neither TD10 nor TD15 |
+| `DcapReportDataOob(uint256 length, uint256 minRequired)` | DCAP report-data slice is out of bounds |
+| `DcapVerificationFailed(bytes output)` | Upstream DCAP verification failed |
+| `DcapTcbStatusNotAccepted(uint8 actual)` | DCAP trusted computing base status is 6, 7, or an unknown non-configurable value |
+| `InvalidTdxAttributes(bytes8 actual)` | Intel TDX reserved attribute bits are invalid |
+| `TdxSeptVeDisableRequired()` | Intel TDX `SEPT_VE_DISABLE` is absent |
+| `TdxMigrationServiceTdNotSupported()` | Intel TDX 1.5 `MR_SERVICETD` is nonzero |
+| `SnpVerificationFailed(VerificationResult result)` | SNP proof journal reports failure |
+| `SnpReportHashMismatch(bytes32 expected, bytes32 actual)` | Raw report is not the proof-bound report |
+| `InvalidSnpReportLength(uint256 actual, uint256 expected)` | Raw report is not exactly 1,184 bytes |
+| `UnsupportedSnpReportVersion(uint32 actual)` | Report version is unsupported |
+| `InvalidSnpPolicy(uint64 actual)` | Required or reserved policy bits are invalid |
+| `UnsupportedSnpVmpl(uint32 actual)` | `VMPL` is nonzero |
+| `SnpMigrationAgentNotSupported()` | `REPORT_ID_MA` is neither the all-zero nor the all-`0xff` no-association sentinel |
+| `InvalidSnpSignatureAlgorithm(uint32 actual)` | Report signature algorithm is not ECDSA P-384 with SHA-384 |
+| `InvalidSnpKeySettings(uint32 actual)` | Signing-key selection or masking-chip settings are unsupported |
+| `InvalidSnpReservedField(uint256 offset)` | A reserved report field is nonzero |
+| `InvalidSnpTcb(uint256 offset, uint64 actual)` | A TCB field has nonzero reserved bytes |
+| `InvalidSnpPlatformInfo(uint64 actual)` | `PLATFORM_INFO` contains an unsupported bit |
+| `UnsupportedSnpCpuid(uint24 actual)` | CPUID is outside AMD family `0x19`, model `0x00` through `0x1f` |
+| `InvalidSnpTcbOrder(bytes32 lower, bytes32 upper)` | TCB fields do not satisfy reported ≤ committed ≤ current, or launch ≤ committed |
 
 ---
 
 ## SignatureVerifier
 
-**File**: `src/SignatureVerifier.sol` (172 lines)
+**File**: `src/SignatureVerifier.sol`
 **Interface**: `src/interfaces/ISignatureVerifier.sol`
 **Role**: Stateless multi-algorithm signature verification
 
@@ -152,7 +236,7 @@ function verify(
 
 ## TpmVerifier
 
-**File**: `src/bases/TpmVerifier.sol` (197 lines)
+**File**: `src/bases/TpmVerifier.sol`
 **Inheritance**: `TpmBase` (abstract)
 **Role**: TPM quote and certify verification
 
@@ -223,7 +307,7 @@ function verifyTpmCertify(
 
 ## AkCollateralVerifier
 
-**File**: `src/bases/AkCollateralVerifier.sol` (191 lines)
+**File**: `src/bases/AkCollateralVerifier.sol`
 **Inheritance**: `TpmBase` (abstract)
 **Role**: AK (Attestation Key) certificate chain / collateral validation
 
@@ -256,13 +340,24 @@ Verification steps:
 5. Verify the RS256 signature on `header || "." || claims` against the registered PKCS#1 RSA-2048 pubkey using `SignatureVerifier.verify`.
 6. Base64url-decode the claims; parse JSON; assert:
    - `iss` matches `key.issuerHash`
+   - top-level `iat`, `nbf`, and `exp` are canonical unsigned 64-bit JSON integers;
+     nested fields cannot substitute for them
+   - `nbf < exp`, `iat < exp`, `iat <= block.timestamp`, and
+     `nbf <= block.timestamp < exp`
    - `x-ms-attestation-type` in `{"tdxvm", "sevsnpvm"}`
    - `x-ms-compliance-status == "azure-compliant-cvm"`
 7. Extract the report-data claim (`tdx_report_data` for TDX, `x-ms-sevsnpvm-reportdata` for SNP); hex-decode first 32 bytes as `bindingHash`; assert next 32 bytes decode to zero.
 8. Assert `sha256(hclVarData) == bindingHash`.
 9. Parse `HCLAkPub` from `hclVarData` using the §14.3-scoped JWK parser, construct `PublicIdentity` with `typeId = ALGO_ID_RS256`.
 
-Binding: `sha256(hclVarData)` returned as `bindingHash` field. The on-chain `teeReport`'s `REPORT_DATA` is NOT separately verified against this hash — MAA's `tdx_report_data` / `x-ms-sevsnpvm-reportdata` claim is the on-chain binding to the TEE attestation.
+The verifier maps `x-ms-attestation-type` to the returned `teeType`
+(`tdxvm` → `IntelTDX`, `sevsnpvm` → `AmdSevSnp`). `SessionRegistry` requires
+this value to equal `TeeVerificationResult.teeType`.
+
+Binding: `sha256(hclVarData)` is returned as `bindingHash`. `SessionRegistry`
+requires the verified Intel TDX or AMD SEV-SNP report's 64-byte `REPORT_DATA`
+to equal `bindingHash || bytes32(0)`. This joins the independently verified raw
+TEE report to the MAA-signed HCL data and prevents report splicing.
 
 #### GcpCertChain
 GCP provides X.509 certificate chain:
@@ -276,24 +371,29 @@ Binding: `bindingHash = bytes32(0)`. AK is bound to TEE via PCR15 computation (v
 
 | Error | Condition |
 |---|---|
-| `UnsupportedAkCollateralType()` | Unknown collateral type |
+| `UnsupportedAkCollateralType(AkPubCollateralType actual)` | Unknown collateral type |
 | `AzureJwkParsingFailed()` | `HCLAkPub` JWK field extraction from `hclVarData` failed |
 | `MaaJwtMalformed()` | JWT does not split into three base64url parts, or header/claims fail base64url/JSON decode |
 | `MaaJwtAlgUnsupported()` | JWT header `alg` is not `"RS256"` |
 | `MaaJwtHeaderClaimMissing()` | JWT header is missing `kid` or `alg` |
 | `MaaJwtClaimMissing()` | JWT claims is missing a required field |
-| `MaaKidNotRegistered()` | `kidHash` lookup in MAA Signing Key Registry returned an empty / revoked / expired key |
-| `MaaJwtIssuerMismatch()` | `iss` claim hash does not equal `key.issuerHash` |
+| `MaaJwtNumericClaimMalformed(bytes32 fieldNameHash)` | `iat`, `nbf`, or `exp` is not a canonical unsigned 64-bit JSON integer |
+| `MaaJwtValidityWindowInvalid(uint64 issuedAt, uint64 notBefore, uint64 expiresAt)` | `nbf >= exp` or `iat >= exp` |
+| `MaaJwtNotYetValid(uint64 notBefore, uint256 verificationTime)` | `block.timestamp < nbf` |
+| `MaaJwtExpired(uint64 expiresAt, uint256 verificationTime)` | `block.timestamp >= exp` |
+| `MaaJwtIssuedInFuture(uint64 issuedAt, uint256 verificationTime)` | `block.timestamp < iat` |
+| `MaaKidNotRegistered(bytes32 kidHash)` | `kidHash` lookup in MAA Signing Key Registry returned an empty / revoked / expired key |
+| `MaaJwtIssuerMismatch(bytes32 actual, bytes32 expected)` | `iss` claim hash does not equal `key.issuerHash` |
 | `MaaJwtComplianceFailed()` | `x-ms-compliance-status` ≠ `"azure-compliant-cvm"`, or `x-ms-attestation-type` ∉ `{"tdxvm","sevsnpvm"}` |
 | `MaaJwtReportDataMalformed()` | report_data claim has wrong length, non-hex chars, or non-zero padding |
-| `MaaJwtSignatureInvalid()` | `signatureVerifier.verify` rejected the RS256 signature over `header || "." || claims` |
+| `MaaJwtSignatureInvalid(bytes32 kidHash)` | `signatureVerifier.verify` rejected the RS256 signature over `header || "." || claims` |
 | `MaaJwtBindingMismatch()` | `sha256(hclVarData)` did not equal the report-data claim prefix |
 
 ---
 
 ## TpmBase
 
-**File**: `src/bases/TpmBase.sol` (30 lines)
+**File**: `src/bases/TpmBase.sol`
 **Role**: Shared abstract base holding `ITpmAttestation` immutable
 
 ```solidity
@@ -305,4 +405,8 @@ abstract contract TpmBase {
 }
 ```
 
-Resolves diamond inheritance: both `TpmVerifier` and `AkCollateralVerifier` inherit `TpmBase`, and `SessionRegistry` inherits both. C3 linearization ensures single `tpmAttestation` instance.
+`TpmVerifier` and `AkCollateralVerifier` each inherit `TpmBase`.
+`SessionRegistry` inherits `TpmVerifier` and calls a separately deployed
+`IAkCollateralVerifier`; it does not inherit `AkCollateralVerifier`. Each
+constructor receives its own immutable `ITpmAttestation` reference. A
+deployment may point both references at the same `ITpmAttestation` contract.

@@ -80,10 +80,7 @@ pub fn derive_all(jwks: &JwkSet, iss: &str, include: Include) -> Result<Vec<Upse
         .map(|jwk| UpsertParams::from_jwk(jwk, iss))
         .collect::<Result<_>>()?;
 
-    Ok(all
-        .into_iter()
-        .filter(|p| include.accepts(p))
-        .collect())
+    Ok(all.into_iter().filter(|p| include.accepts(p)).collect())
 }
 
 impl Include {

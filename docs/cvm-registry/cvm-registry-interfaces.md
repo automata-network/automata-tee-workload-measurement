@@ -6,9 +6,11 @@
 
 ```
 src/interfaces/
+├── IAkCollateralVerifier.sol
 ├── ISignatureVerifier.sol
 ├── ITeeVerifier.sol
 ├── registries/
+│   ├── IAmdSnpSecurityPolicyRegistry.sol
 │   ├── IBaseImageRegistry.sol
 │   ├── IWorkloadRegistry.sol
 │   ├── ISessionRegistry.sol
@@ -68,14 +70,14 @@ function registerBaseImage(
     BaseImageSpec calldata spec,
     PlatformProfile[] calldata platformProfiles,
     MeasurementVariant[][] calldata measurementVariants,
-    uint64 expireAt,                                      // NOTE: uint64, not uint256
+    uint64 opExpiresAt,                                   // NOTE: uint64, not uint256
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 baseImageId);
 
 function deactivateBaseImage(
     bytes32 baseImageId,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external;
@@ -84,7 +86,7 @@ function addPlatformVariants(
     bytes32 baseImageId,
     PlatformProfile[] calldata platformProfiles,
     MeasurementVariant[][] calldata measurementVariants,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external;
@@ -133,14 +135,14 @@ event WorkloadDeactivated(bytes32 indexed workloadId, bytes32 indexed owner);
 ```solidity
 function registerWorkload(
     WorkloadSpec calldata spec,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 workloadId);
 
 function deactivateWorkload(
     bytes32 workloadId,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external;
@@ -190,12 +192,24 @@ event AttestationKeysRevealed(
 
 event SessionRevoked(bytes32 indexed sessionId, bytes32 indexed revoker);
 
-event SessionRotated(
+event SessionKeyRotated(
     bytes32 indexed oldSessionId,
     bytes32 indexed newSessionId,
     bytes32 indexed owner,
     bytes32 newTpmSigningKeyFingerprint,
     bytes32 newSessionKeyFingerprint
+);
+
+event SessionRenewed(
+    bytes32 indexed oldSessionId,
+    bytes32 indexed newSessionId,
+    bytes32 indexed owner
+);
+
+event SessionRecovered(
+    bytes32 indexed oldSessionId,
+    bytes32 indexed newSessionId,
+    bytes32 indexed owner
 );
 ```
 
@@ -208,7 +222,7 @@ function registerSession(
     bytes32 baseImageId,
     bytes32 platformProfileId,
     bytes32 variantId,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 sessionId);
@@ -219,7 +233,7 @@ function getSessionOwner(bytes32 sessionId) external view returns (bytes32 owner
 
 function revokeSession(
     bytes32 sessionId,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external;
@@ -228,11 +242,36 @@ function isSessionActive(bytes32 sessionId) external view returns (bool);
 function isSessionExpired(bytes32 sessionId) external view returns (bool);
 function getNonce(bytes32 ownerFingerprint) external view returns (uint256 nonce);
 
-function rotateSession(
+function rotateKey(
     bytes32 oldSessionId,
     bytes32 teeReportBytesHash,
-    SessionRotationEvidence calldata rotationEvidence,
-    uint64 expireAt,
+    SessionKeyRotationEvidence calldata rotationEvidence,
+    uint64 opExpiresAt,
+    PublicIdentity calldata ownerIdentity,
+    bytes calldata ownerSignature
+) external returns (bytes32 newSessionId);
+
+function renewSession(
+    bytes32 oldSessionId,
+    AttestationEvidence calldata newEvidence,
+    bytes32 workloadId,
+    bytes32 baseImageId,
+    bytes32 platformProfileId,
+    bytes32 measurementVariantId,
+    SessionRenewalAuthorization calldata renewalAuthorization,
+    uint64 opExpiresAt,
+    PublicIdentity calldata ownerIdentity,
+    bytes calldata ownerSignature
+) external returns (bytes32 newSessionId);
+
+function recoverSession(
+    bytes32 oldSessionId,
+    AttestationEvidence calldata newEvidence,
+    bytes32 workloadId,
+    bytes32 baseImageId,
+    bytes32 platformProfileId,
+    bytes32 measurementVariantId,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 newSessionId);
@@ -244,6 +283,90 @@ function verifySessionSignature(
     bytes calldata signature
 ) external view returns (bool valid);
 ```
+
+---
+
+## IAmdSnpSecurityPolicyRegistry
+
+**File**:
+`src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol`
+
+```solidity
+struct VerifiedTeePolicyInputs {
+    TEEType teeType;
+    uint256 enabledTeeAttributes;
+    uint256 intelTdxTcbStatusBit;
+    bytes32 amdSevSnpTcbValues;
+    uint64 amdSevSnpPlatformInfo;
+    uint24 amdSevSnpCpuid;
+    uint32 amdSevSnpReportVersion;
+    uint64 amdSevSnpLaunchMitigationVector;
+    uint64 amdSevSnpCurrentMitigationVector;
+}
+
+struct AmdSnpSecurityPolicy {
+    bytes32 minimumTcb;
+    bytes32 platformInfoPolicy;
+    bytes32 sourceDigest;
+    uint64 revision;
+    bool active;
+    uint64 requiredLaunchMitigationVector;
+    uint64 requiredCurrentMitigationVector;
+}
+
+struct AmdSnpSecurityPolicyUpdate {
+    uint24 cpuid;
+    uint64 expectedRevision;
+    uint64 revision;
+    bool active;
+    bytes32 minimumTcb;
+    bytes32 platformInfoPolicy;
+    uint64 requiredLaunchMitigationVector;
+    uint64 requiredCurrentMitigationVector;
+}
+
+function updatePolicies(
+    AmdSnpSecurityPolicyUpdate[] calldata updates,
+    bytes32 sourceDigest
+) external;
+
+function getPolicy(uint24 cpuid)
+    external view returns (AmdSnpSecurityPolicy memory policy);
+
+function getActivePolicy(uint24 cpuid)
+    external view returns (AmdSnpSecurityPolicy memory policy);
+
+function verifyTeePolicy(
+    VerifiedTeePolicyInputs calldata inputs,
+    Attribute[] calldata profileAttributes,
+    Attribute[] calldata variantAttributes,
+    AttributeRequirement[] calldata requirements
+) external view;
+```
+
+---
+
+## IAkCollateralVerifier
+
+**File**: `src/interfaces/IAkCollateralVerifier.sol`
+
+```solidity
+struct AkCollateralVerificationResult {
+    bool valid;
+    PublicIdentity akPub;
+    bytes32 akPubFingerprint;
+    TEEType teeType;
+    bytes32 bindingHash;
+}
+
+function verifyAkCollateral(AkPubCollateral calldata collateral)
+    external returns (AkCollateralVerificationResult memory result);
+```
+
+For Azure, `teeType` is authenticated by the MAA JWT's
+`x-ms-attestation-type` claim and `bindingHash` is the MAA-verified
+`sha256(hclVarData)`. For GCP, `teeType` is ignored and `bindingHash` is zero
+because `SessionRegistry` applies the TEE-to-vTPM PCR15 binding.
 
 ---
 
@@ -308,7 +431,7 @@ function getMaaSigningKey(bytes32 kidHash) external view returns (MaaSigningKey 
 function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
 ```
 
-Admin authentication: `OwnableUpgradeable.onlyOwner` (EVM tx). No off-chain-signed envelope; the EVM tx nonce supplies replay protection. Validation: pubkey non-empty, issuerHash non-zero, `notAfter >= block.timestamp` (boundary inclusive); revoke reverts `KidNotRegistered` for never-registered kids. Upsert overwrites any existing record (resets `revoked = false`).
+Admin authentication: `OwnableUpgradeable.onlyOwner` (EVM tx). No off-chain-signed envelope; the EVM tx nonce supplies replay protection. Validation: pubkey non-empty, issuerHash non-zero, `notAfter >= block.timestamp` (boundary inclusive); revoke reverts `KidNotRegistered` for never-registered kids. Upsert inserts a new record or replaces an active record. Upsert reverts `KidRevoked(kidHash)` for a previously revoked `kidHash`; revocation is permanent for that `kidHash`.
 
 ---
 
@@ -476,7 +599,7 @@ Note: Nitro Enclave verifier is **not yet integrated** into `TeeVerifier` -- the
 
 ## Key Observations Across Interfaces
 
-1. **All `expireAt` parameters are `uint64`** -- not `uint256`. Consistent across all registry interfaces.
+1. **All `opExpiresAt` parameters are `uint64`** -- not `uint256`. Consistent across all registry interfaces.
 
 2. **Storage structs are defined at file scope** (outside the interface block) -- this is required because Solidity interfaces cannot contain struct definitions with storage semantics.
 
@@ -490,4 +613,4 @@ Note: Nitro Enclave verifier is **not yet integrated** into `TeeVerifier` -- the
 
 7. **IKeyResolver has `IdentityRegistered` event** -- emits `(fingerprint, typeId)` on new registrations.
 
-8. **Whitelist events/functions are NOT in interfaces** -- `addToWhitelist`, `removeFromWhitelist`, `isWhitelisted`, `WhitelistAdded`, `WhitelistRemoved` are implementation-only (in BaseImageRegistry and WorkloadRegistry contracts, not their interfaces). Same for `pause()`/`unpause()`.
+8. **Whitelist events/functions are NOT in interfaces** -- `addToWhitelist`, `removeFromWhitelist`, `isWhitelisted`, `WhitelistAdded`, `WhitelistRemoved`, `pause()`, and `unpause()` are implementation-only. `registrationRestricted()` is the interface-level status query.

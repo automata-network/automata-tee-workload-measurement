@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {IDcapAttestation} from "../interfaces/external/IDcapAttestation.sol";
+import {IDcapAttestation} from "../../src/interfaces/external/IDcapAttestation.sol";
 
 /// @title MockAutomataDcapAttestation
 /// @notice Mock DCAP attestation verifier for testing with real TDX quotes
@@ -19,7 +19,7 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
     // V5 body header: u16 bodyType + u32 size
     uint256 private constant V5_BODY_HEADER_SIZE = 6;
 
-    uint8 public tcbStatus = 1;
+    uint8 public tcbStatus;
 
     function setTcbStatus(uint8 _tcbStatus) external {
         tcbStatus = _tcbStatus;

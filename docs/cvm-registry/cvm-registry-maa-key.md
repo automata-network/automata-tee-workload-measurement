@@ -56,7 +56,9 @@ function upsertMaaSigningKey(
 
 - Owner-only.
 - Validates: `pkcs1Pubkey` non-empty, `issuerHash != bytes32(0)`, `notAfter >= block.timestamp` (boundary inclusive).
-- Overwrites any existing record at `kidHash` and resets `revoked = false`.
+- Inserts a new record or replaces an existing active record.
+- Reverts `KidRevoked(kidHash)` if the `kidHash` was previously revoked.
+  Revocation is permanent for that `kidHash`.
 - Emits `MaaSigningKeyUpserted(kidHash, issuerHash, notAfter)`.
 
 ### `revokeMaaSigningKey`
@@ -67,7 +69,10 @@ function revokeMaaSigningKey(bytes32 kidHash) external onlyOwner;
 
 - Owner-only.
 - Reverts `KidNotRegistered` if the kid was never registered (empty `pkcs1Pubkey`).
-- Sets `revoked = true`. Subsequent JWT verifications under this kid revert `MaaKidNotRegistered` regardless of `notAfter`.
+- Sets `revoked = true`. Subsequent JWT verifications under this kid revert
+  `MaaKidNotRegistered` regardless of `notAfter`.
+- Subsequent `upsertMaaSigningKey` calls for the same `kidHash` revert
+  `KidRevoked`. There is no restore or un-revoke operation.
 - Emits `MaaSigningKeyRevoked(kidHash)`.
 
 ### `getMaaSigningKey` / `hasMaaSigningKey`
@@ -85,8 +90,9 @@ function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
 |---|---|
 | `EmptyPubkey()` | `pkcs1Pubkey.length == 0` on upsert |
 | `EmptyIssuerHash()` | `issuerHash == bytes32(0)` on upsert |
-| `NotAfterInPast()` | `notAfter < block.timestamp` on upsert |
-| `KidNotRegistered()` | `revokeMaaSigningKey` on a kid that was never upserted |
+| `NotAfterInPast(uint64 notAfter, uint64 nowTs)` | `notAfter < block.timestamp` on upsert |
+| `KidNotRegistered(bytes32 kidHash)` | `revokeMaaSigningKey` on a kid that was never upserted |
+| `KidRevoked(bytes32 kidHash)` | `upsertMaaSigningKey` on a kid that was previously revoked |
 
 ## Verifier Integration
 
@@ -96,19 +102,26 @@ function hasMaaSigningKey(bytes32 kidHash) external view returns (bool);
 bytes32 kidHash = keccak256(bytes(kid));
 MaaSigningKey memory key = maaKeyRegistry.getMaaSigningKey(kidHash);
 if (key.pkcs1Pubkey.length == 0 || key.revoked || block.timestamp > key.notAfter) {
-    revert MaaKidNotRegistered();
+    revert MaaKidNotRegistered(kidHash);
 }
 // ... RS256 verify(headerB64 || "." || claimsB64) under key.pkcs1Pubkey ...
-if (keccak256(bytes(iss)) != key.issuerHash) revert MaaJwtIssuerMismatch();
+bytes32 actualIssuerHash = keccak256(bytes(iss));
+if (actualIssuerHash != key.issuerHash) {
+    revert MaaJwtIssuerMismatch(actualIssuerHash, key.issuerHash);
+}
+// Top-level iat, nbf, and exp are required; nested fields cannot substitute.
+// The same block.timestamp also enforces:
+// nbf < exp, iat < exp, iat <= block.timestamp, and
+// nbf <= block.timestamp < exp.
 ```
 
 Failure mapping:
 
 | Verifier revert | Registry state |
 |---|---|
-| `MaaKidNotRegistered()` | kid never upserted, revoked, or past `notAfter` |
-| `MaaJwtIssuerMismatch()` | kid registered but `issuerHash` was computed over the wrong string |
-| `MaaJwtSignatureInvalid()` | `pkcs1Pubkey` does not match the cert MAA actually signed with |
+| `MaaKidNotRegistered(bytes32 kidHash)` | kid never upserted, revoked, or past `notAfter` |
+| `MaaJwtIssuerMismatch(bytes32 actual, bytes32 expected)` | kid registered but `issuerHash` was computed over the wrong string |
+| `MaaJwtSignatureInvalid(bytes32 kidHash)` | `pkcs1Pubkey` does not match the cert MAA actually signed with |
 
 `MaaKidNotRegistered` is the canonical "we missed a rotation" signal; an off-chain watcher should treat it as a pageable condition.
 
@@ -163,9 +176,20 @@ Microsoft policy: a fresh MAA RSA-2048 signing cert appears in `/certs` ~2 month
 Recommended off-chain watcher behaviour:
 
 1. Every N minutes (suggested 30-60), `GET <endpoint>/certs` for every region you support.
-2. Compute `kidHash` for each key in the response. Compare against the on-chain registry via `hasMaaSigningKey`.
-3. Any new kid → submit `upsertMaaSigningKey`. Any on-chain kid no longer in JWKS and past `notAfter` → no action needed (verifier will reject naturally). Suspected compromise → `revokeMaaSigningKey` immediately.
+2. Compute `kidHash` for each key in the response. Read the complete on-chain
+   record via `getMaaSigningKey` so active, missing, and revoked records remain
+   distinct.
+3. Any new kid → submit `upsertMaaSigningKey`. Any revoked kid → report and
+   skip it permanently. Any on-chain kid no longer in JWKS and past `notAfter`
+   → no action needed (the verifier will reject it naturally). Suspected
+   compromise → `revokeMaaSigningKey` immediately.
 4. Page on: JWKS fetch failure for > 24h, any registered kid that is < 7 days from `notAfter` and no successor has appeared.
+
+Revocation is permanent for each `kidHash`. `upsertMaaSigningKey` rejects a
+revoked `kidHash` with `KidRevoked`. The `maa-key-registrar status` command
+reports the `revoked` state separately. The `maa-key-registrar sync` command
+skips revoked keys, including when `--force` is used. If Microsoft replaces a
+revoked certificate, the replacement must use a new `kid`.
 
 The watcher is intentionally out of scope for the contract repo and the portal repo. It is operator infrastructure; treat it the same way you would treat a CA-cert renewal cron job.
 
@@ -174,7 +198,8 @@ The watcher is intentionally out of scope for the contract repo and the portal r
 Before any Azure CVM can register against a new `SessionRegistry` deployment:
 
 - [ ] `MaaKeyRegistry` proxy deployed (`script/DeployMaaKeyRegistry.s.sol`).
-- [ ] `SessionRegistry` immutable reference to `MaaKeyRegistry` set at init.
+- [ ] `AkCollateralVerifier` immutable `IMaaKeyRegistry` reference points to that proxy.
+- [ ] `SessionRegistry` immutable `IAkCollateralVerifier` reference points to that verifier.
 - [ ] Owner of `MaaKeyRegistry` is the production multisig (not a hot key, not the EOA that ran `forge script`).
 - [ ] At least the eastus shared-pool kid(s) currently advertised at `https://sharedeus.eus.attest.azure.net/certs` are upserted. Verify with `hasMaaSigningKey` and by attesting a real Azure CVM once and confirming `chain submit` succeeds end-to-end.
 - [ ] Watcher (or equivalent calendar reminder) is in place to catch rotation.
@@ -183,14 +208,18 @@ Failure mode without these: every Azure CVM `chain submit` aborts at `MaaKidNotR
 
 ## Design Notes
 
-- **Per-region knob is intentionally absent.** `SessionRegistry` holds a single `IMaaKeyRegistry` immutable reference; there is no per-region routing on chain. Different regions' kids coexist in the same mapping. The portal-side region selector (`AZURE_MAA_REGION_DEFAULT`) only decides *which* MAA endpoint signs the JWT; the on-chain side simply looks up whichever kid is in the JWT header.
+- **Per-region knob is intentionally absent.** `AkCollateralVerifier` holds a single `IMaaKeyRegistry` immutable reference; there is no per-region routing on chain. Different regions' kids coexist in the same mapping. The portal-side region selector (`AZURE_MAA_REGION_DEFAULT`) only decides *which* MAA endpoint signs the JWT; the on-chain side simply looks up whichever kid is in the JWT header.
 - **No event-replay for state reconstruction.** Unlike `KeyResolver` (which is idempotent and re-emission-free), `MaaSigningKeyUpserted` is emitted on every upsert including overwrites. Indexers tracking the current set must take the last event per `kidHash`, not the first.
 - **No issuer-to-region map.** The contract does not enforce that a given kid only verifies JWTs from a specific MAA endpoint URL beyond the `issuerHash` field; if an admin upserts the same kid with two different issuer strings (sequentially, since the mapping is keyed only by `kidHash`), only the latest survives. This is intentional — MAA reuses `kid` strings only within a single endpoint, so collisions are not expected.
-- **`notAfter` boundary is inclusive on upsert, exclusive on verify.** `upsertMaaSigningKey` accepts `notAfter == block.timestamp` (`require !(notAfter < block.timestamp)`), but the verifier rejects when `block.timestamp > key.notAfter`. There is a single-second window where a key can be upserted and then immediately rejected; in practice irrelevant given Microsoft's months-long validity periods.
+- **`notAfter` is inclusive on both upsert and verify.** `upsertMaaSigningKey`
+  accepts `notAfter == block.timestamp`, and the verifier also accepts that
+  exact timestamp because it rejects only when
+  `block.timestamp > key.notAfter`. The key becomes invalid when the block
+  timestamp advances past `notAfter`; there is no boundary mismatch.
 
 ## Relationship to Other Contracts
 
 - **`AkCollateralVerifier`** holds an `IMaaKeyRegistry` immutable reference and is the only on-chain consumer.
-- **`SessionRegistry`** inherits `AkCollateralVerifier` and propagates the immutable reference at construction.
+- **`SessionRegistry`** holds an immutable `IAkCollateralVerifier` reference and calls the separately deployed verifier.
 - **No relationship to `KeyResolver`.** The MAA RSA pubkey is consumed inline by the RS256 verifier; it is not registered as a `PublicIdentity` and does not appear in `KeyResolver`. The two registries serve disjoint domains.
 - **No relationship to `BaseImageRegistry` / `WorkloadRegistry`.** Their owner-signed operations use the deployment's `SignatureVerifier` against `KeyResolver`-derived fingerprints; the MAA path is orthogonal.

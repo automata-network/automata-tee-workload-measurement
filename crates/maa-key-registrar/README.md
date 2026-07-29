@@ -51,7 +51,8 @@ Why the default isn't `any`: the JWKS at a shared-pool endpoint typically contai
 
 ### `status` — diff JWKS vs on-chain registry
 
-Fetch JWKS, read every kid's state from `MaaKeyRegistry`, classify each as `current` / `missing` / `drifted` / `expiring <30d`.
+Fetch JWKS, read every kid's complete state from `MaaKeyRegistry`, and classify
+each as `current` / `missing` / `drifted` / `expiring <30d` / `revoked`.
 
 ```sh
 maa-key-registrar status \
@@ -59,11 +60,19 @@ maa-key-registrar status \
   --registry 0x43AE47776f1405A844a73074eFC0f77d7b47599E
 ```
 
-`drifted` means the kid is registered but at least one of `pkcs1Pubkey` / `issuerHash` / `notAfter` disagrees with current JWKS — typically a sign that Microsoft rotated the cert and your watcher missed it. Run `sync` to fix.
+`drifted` means the kid is registered but at least one of `pkcs1Pubkey` /
+`issuerHash` / `notAfter` disagrees with current JWKS — typically a sign that
+Microsoft rotated the cert and your watcher missed it. Run `sync` to fix.
+`revoked` means the `kidHash` was permanently revoked and cannot be upserted
+again.
 
 ### `sync` — upsert anything missing / drifted / expiring
 
-Owner-only. Reads JWKS + on-chain state, plans the necessary upserts, and broadcasts them after a y/N prompt. Refuses to upsert kids with `notAfter < now + 24h` (signal of stale JWKS / clock drift). Pass `--force` to re-upsert kids that are already current.
+Owner-only. Reads JWKS + on-chain state, plans the necessary upserts, and
+broadcasts them after a y/N prompt. Refuses to upsert eligible kids with
+`notAfter < now + 24h` (signal of stale JWKS / clock drift). Revoked kids are
+reported and skipped. Pass `--force` to re-upsert kids that are already
+current and not revoked. `--force` never bypasses revocation.
 
 ```sh
 maa-key-registrar sync \
@@ -81,6 +90,11 @@ maa-key-registrar sync ... -y
 ```
 
 `--dry-run` is the safe path on a production multisig: print the commands, hand them to whoever drives the safe, no hot key required.
+
+Revocation is permanent for each `kidHash`. The `sync` command reads
+`getMaaSigningKey`, reports revoked kids separately, and skips them even when
+`--force` is used. The contract also rejects every later
+`upsertMaaSigningKey` call for a revoked `kidHash`.
 
 ### `revoke` — revoke one kid
 

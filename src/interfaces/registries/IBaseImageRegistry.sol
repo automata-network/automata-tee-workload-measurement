@@ -77,7 +77,7 @@ interface IBaseImageRegistry {
     // Functions
     // ============================================================================
 
-    /// @notice Register a new base image with platform profiles and measurement variants (immutable after registration)
+    /// @notice Register a new base image with its initial platform profiles and measurement variants
     /// @dev Parallel array invariant: spec.profileIds[i] → platformProfiles[i] → measurementVariants[i][]
     /// @dev Inner parallel array: platformProfiles[i].variantIds[j] → measurementVariants[i][j]
     /// @param spec Base image specification (name, version, uri, profileIds)
@@ -108,9 +108,11 @@ interface IBaseImageRegistry {
         bytes calldata ownerSignature
     ) external;
 
-    /// @notice Add or update platform profiles and measurement variants on an existing base image
-    /// @dev Additive/upsert semantics: new profiles/variants are added, existing ones (same name → same ID) are overwritten.
-    ///      Unmentioned profiles/variants remain untouched. Updates are blocked on revoked base images.
+    /// @notice Append platform profiles and measurement variants to an existing base image
+    /// @dev New profiles and variants are added. An existing profile keeps its stored
+    ///      metadata and may receive new variants. An existing variant ID reverts.
+    ///      Unmentioned profiles and variants remain untouched. Updates are blocked
+    ///      on revoked base images.
     /// @param baseImageId The base image identifier to update
     /// @param platformProfiles Platform-specific profiles to add/update
     /// @param measurementVariants Machine-type-specific PCR overrides - measurementVariants[i].length corresponds to platformProfiles[i]
@@ -172,6 +174,9 @@ interface IBaseImageRegistry {
     /// @param baseImageId The base image identifier
     /// @return True if the base image is revoked
     function isBaseImageRevoked(bytes32 baseImageId) external view returns (bool);
+
+    /// @notice Returns true when only whitelisted owners may register or update base images.
+    function registrationRestricted() external view returns (bool);
 
     /// @notice Check if a measurement variant exists
     /// @param variantId The variant identifier

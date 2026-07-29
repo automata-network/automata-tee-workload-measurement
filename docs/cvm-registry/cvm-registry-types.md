@@ -56,13 +56,13 @@ struct BaseImageSpec {
 
 struct PlatformProfile {
     string name;               // e.g. "gcp-tdx", "azure-snp"
-    PcrSpec[] invariants;      // PCR 0-19 baseline measurements
+    PcrSpec[] invariants;      // Typically platform baseline measurements
     Attribute[] attributes;    // Platform metadata (cloud, TEE type, etc.)
 }
 
 struct MeasurementVariant {
     string name;                // e.g. "n2d-standard-2", "c3-standard-4"
-    PcrSpec[] overridePcrs;     // Replaces platform invariants at matching pcrIndex
+    PcrSpec[] overridePcrs;     // Indices the profile leaves unpinned; MUST be disjoint from invariants
     Attribute[] attributes;     // Replaces platform attributes at matching key
 }
 ```
@@ -73,11 +73,11 @@ struct MeasurementVariant {
 struct WorkloadSpec {
     string name;
     string version;
-    uint64 ttl;                              // Session TTL in seconds (0 = DEFAULT_CVM_TTL = 30 days)
+    uint64 sessionTtl;                       // Session TTL in seconds (0 = DEFAULT_CVM_TTL = 30 days)
     AccessMode baseImageMode;                // ANY / WHITELIST / BLACKLIST
     bytes32[] baseImageIds;                  // For whitelist/blacklist filtering
     AttributeRequirement[] requirements;     // Demanded platform attributes
-    PcrSpec[] pcrs;                          // PCR 20-23 specs
+    PcrSpec[] pcrs;                          // Typically workload PCR specs
 }
 ```
 
@@ -93,9 +93,13 @@ struct CVMSession {
     bytes32 platformProfileId;
     bytes32 measurementVariantId;
     uint64 registeredAt;
-    uint64 expiresAt;
+    uint64 sessionExpiresAt;
 }
 ```
+
+`registeredAt` is the creation timestamp of that session row. It is
+informational. `rotateKey` creates a row with a new `registeredAt` but
+preserves the predecessor's absolute `sessionExpiresAt`.
 
 ---
 
@@ -138,6 +142,12 @@ struct ZkProof {
     bytes proofBytes;   // ZK proof
 }
 
+struct SnpZkProof {
+    bytes output;       // VerifierJournal public output
+    bytes proofBytes;   // ZK proof
+    bytes rawReport;    // Exact 1,184-byte report bound by reportHash
+}
+
 struct TeeReport {
     VerificationBackendType verificationBackendType;
     TEEType teeType;
@@ -148,8 +158,45 @@ struct TeeVerificationResult {
     bool valid;
     bytes reportData;    // Full report body (TDX: 584/648-byte quote body; SNP: full attestation report)
     TEEType teeType;     // Use extractDcapReportData/extractSnpReportData for 64-byte user data
+    uint256 enabledTeeAttributes; // Stable internal bitset derived from the signed report
+    uint256 intelTdxTcbStatusBit; // One-hot Intel DCAP TCB status; zero for AMD SEV-SNP
+    bytes32 amdSevSnpTcbValues;
+    uint64 amdSevSnpPlatformInfo;
+    uint24 amdSevSnpCpuid;
+    uint32 amdSevSnpReportVersion;
+    uint64 amdSevSnpLaunchMitigationVector;
+    uint64 amdSevSnpCurrentMitigationVector;
 }
 ```
+
+Intel TDX ZK evidence uses `ZkProof`. AMD SEV-SNP uses `SnpZkProof` because
+the verifier needs the full report body after checking
+`keccak256(rawReport) == VerifierJournal.reportHash`. The first two fields
+remain ABI-compatible with `ZkProof`.
+
+The stable bits represent Intel TDX debug (`1 << 0`), AMD SEV-SNP debug
+(`1 << 1`), and AMD SEV-SNP `MIGRATE_MA` (`1 << 2`). Their canonical keys are
+`keccak256` of these exact names:
+
+- `atakit.attestation.v1.tee.intel-tdx.debug.enabled`
+- `atakit.attestation.v1.tee.amd-sev-snp.debug.enabled`
+- `atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled`
+
+Boolean values use only `bytes32(0)` and `bytes32(uint256(1))`.
+
+The Intel TDX TCB policy key is
+`keccak256("atakit.attestation.v1.tee.intel-tdx.tcb.status.allowed")`.
+`intelTdxTcbStatusBit` uses `1 << rawDcapStatus`. Configurable raw statuses are
+0 through 5, 8, and 9. The complete configurable mask is `0x33f`, and every
+stored policy mask must include bit 0 (`ok`).
+
+The AMD SEV-SNP packed policy keys are:
+
+- `atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum`
+- `atakit.attestation.v1.tee.amd-sev-snp.platform-info.policy`
+
+Their layouts are documented in
+[AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
 
 ### TPM Structs
 
@@ -206,11 +253,11 @@ struct AttestationEvidence {
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
     AkPubCollateral akPubCollateral;
-    bytes sessionKeySignature;     // TPM signing key's signature delegating session key
+    bytes sessionKeySignature;     // abi.encode(TPM delegation signature, session-key possession signature)
     PublicIdentity sessionKey;     // The session key being delegated to
 }
 
-struct SessionRotationEvidence {
+struct SessionKeyRotationEvidence {
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
     bytes sessionKeySignature;
@@ -218,6 +265,11 @@ struct SessionRotationEvidence {
     bytes rotationSignature;        // Old TPM signing key signs rotation message
     PublicIdentity oldTpmSigningKey;
     PublicIdentity akPub;
+}
+
+struct SessionRenewalAuthorization {
+    bytes signature;                     // Predecessor TPM key renewal commitment
+    PublicIdentity oldTpmSigningKey;
 }
 ```
 
@@ -236,16 +288,18 @@ struct TpmCertifyVerificationResult {
 }
 ```
 
-### AK Collateral Verification Result (defined at file scope in AkCollateralVerifier.sol)
+### AK Collateral Verification Result (defined in `interfaces/IAkCollateralVerifier.sol`)
 
 ```solidity
 struct AkCollateralVerificationResult {
     bool valid;
     PublicIdentity akPub;
     bytes32 akPubFingerprint;
+    TEEType teeType;       // Azure: authenticated x-ms-attestation-type; ignored for GCP
     bytes32 bindingHash;   // Azure: sha256(hclVarData) (asserted equal to MAA JWT's
                            //   tdx_report_data / x-ms-sevsnpvm-reportdata claim prefix
-                           //   inside verifyAkCollateral; not re-checked downstream)
+                           //   inside verifyAkCollateral, then matched against the
+                           //   verified raw TEE report by SessionRegistry)
                            // GCP: bytes32(0) (binding via PCR15 in SessionRegistry step 7)
 }
 ```
@@ -261,9 +315,10 @@ All are `bytes32 constant = keccak256("...")`:
 | Name | String | Purpose |
 |---|---|---|
 | `KEY_DOMAIN` | `"KEY_RESOLVER_V1"` | Key fingerprint computation |
-| `SESSION_DOMAIN` | `"CVM_SESSION_V1"` | Session ID computation (`_computeSessionId` in `src/SessionRegistry.sol:687`) |
+| `SESSION_DOMAIN` | `"CVM_SESSION_V1"` | Session ID computation |
 | `DELEGATION_DOMAIN` | `"CVM_SESSION_KEY_DELEGATION"` | TPM→session key delegation |
-| `ROTATION_DOMAIN` | `"CVM_SESSION_KEY_ROTATION"` | Session key rotation |
+| `SESSION_ROTATE_KEY_DOMAIN` | `"CVM_SESSION_ROTATE_KEY_V1"` | Old TPM key rotation commitment |
+| `SESSION_RENEW_DOMAIN` | `"CVM_SESSION_RENEW_V1"` | Old TPM key renewal commitment |
 | `BASEIMAGE_DOMAIN` | `"CVM_BASEIMAGE_V1"` | Base image ID computation |
 | `PLATFORM_PROFILE_DOMAIN` | `"CVM_PLATFORM_PROFILE_V1"` | Platform profile ID |
 | `PLATFORM_VARIANT_DOMAIN` | `"CVM_PLATFORM_VARIANT_V1"` | Variant ID |
@@ -283,7 +338,9 @@ All are `bytes32 constant = keccak256("...")`. Note the `CVM_MSG_` prefix and `_
 | `WORKLOAD_DEACTIVATE_MSG` | `"CVM_MSG_WORKLOAD_DEACTIVATE_V1"` | deactivateWorkload |
 | `SESSION_REGISTER_MSG` | `"CVM_MSG_SESSION_REGISTER_V1"` | registerSession |
 | `SESSION_REVOKE_MSG` | `"CVM_MSG_SESSION_REVOKE_V1"` | revokeSession |
-| `SESSION_ROTATE_MSG` | `"CVM_MSG_SESSION_ROTATE_V1"` | rotateSession |
+| `SESSION_ROTATE_KEY_MSG` | `"CVM_MSG_SESSION_ROTATE_KEY_V1"` | rotateKey |
+| `SESSION_RENEW_MSG` | `"CVM_MSG_SESSION_RENEW_V1"` | renewSession |
+| `SESSION_RECOVER_MSG` | `"CVM_MSG_SESSION_RECOVER_V1"` | recoverSession |
 
 ### Algorithm Identifiers
 
@@ -316,6 +373,43 @@ function publicIdentityToCertPubkey(PublicIdentity memory identity) → CertPubk
 // Reverse mapping: ALGO_ID_RS256 → TPM_ALG_RSA, etc.
 ```
 
+### AmdSnpPolicy.sol (`src/lib/AmdSnpPolicy.sol`)
+
+The single definition of the packed AMD SEV-SNP policy formats and of the
+supported-silicon window. `TeeVerifier` and `AmdSnpSecurityPolicyRegistry` both
+depend on it so the two never drift.
+
+```solidity
+function validateTcb(bytes32 packedTcb)
+function isValidTcb(bytes32 packedTcb) → bool
+function tcbMeetsMinimum(bytes32 actual, bytes32 minimum) → bool
+
+function validatePlatformInfoPolicy(bytes32 packedPolicy)
+function isValidPlatformInfoPolicy(bytes32 packedPolicy) → bool
+function tryMergePlatformInfoPolicies(bytes32 left, bytes32 right) → (bool ok, bytes32 merged)
+function platformInfoMatches(uint64 actual, bytes32 packedPolicy) → bool
+
+function isSupportedCpuid(uint24 cpuid) → bool
+```
+
+`validateTcb` reverts `InvalidAmdSnpTcbValue(bytes32 actual)` and
+`validatePlatformInfoPolicy` reverts
+`InvalidAmdSnpPlatformInfoPolicy(bytes32 actual)`.
+
+`tryMergePlatformInfoPolicies` does not revert. It returns `ok = false` when
+one side requires a bit set that the other requires cleared, leaving the caller
+to report the conflict in its own terms — `AmdSnpSecurityPolicyRegistry` raises
+`TeeAttributePolicyConflict(key, baseValue, workloadValue)`, which names the
+attribute and both contributing values. `merged` is only meaningful when `ok`
+is true.
+
+`isSupportedCpuid` accepts AMD family `0x19`, models `0x00` through `0x1f`
+(Milan and Genoa), and does not constrain the stepping byte; policy is keyed on
+the exact CPUID including stepping. `TeeVerifier` applies it when extracting a
+report and the registry applies it when admitting a policy, so widening the
+window means redeploying `TeeVerifier` as well — see the runbook in
+[Verifiers](cvm-registry-verifiers.md).
+
 ### LibBytes.sol (`src/lib/LibBytes.sol`)
 
 Structured byte types and utilities.
@@ -335,6 +429,9 @@ function slice(bytes memory subject, uint256 start, uint256 len) → bytes
 function toString(Bytes48) → string   // hex representation
 ```
 
+`toBytes48` and `toBytes64` require exactly 48 and 64 input bytes and revert
+`InvalidLength()` otherwise.
+
 ### Sha2Ext.sol (`src/lib/Sha2Ext.sol`)
 
 Pure Solidity SHA-384/512 implementation (EVM only has SHA-256 natively).
@@ -351,6 +448,7 @@ function rotateRight(x, n) → uint64
 ```
 
 Used for GCP TDX RTMR3 binding verification (SHA-384).
+An invalid internal padding length reverts `Sha2PaddingError()`.
 
 ### Asn1Decode.sol (`src/lib/Asn1Decode.sol`)
 

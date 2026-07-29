@@ -11,7 +11,8 @@ interface ITeeVerifier {
 
     /// @notice Verifies a TEE attestation report
     /// @param teeReport The TEE attestation report to verify (contains backend type, TEE type, and data)
-    /// @return result Verification result containing validity status, report data, and TEE type
+    /// @return result Verification result containing validity, report data,
+    ///         verified TEE type, and report-bound security-policy fields
     function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerificationResult memory result);
 
     /// @notice Extracts the 64-byte reportData from a DCAP quote body

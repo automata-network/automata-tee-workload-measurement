@@ -21,6 +21,7 @@ alloy::contract! {
     TpmVerifier => "./contract_artifacts/TpmVerifier.sol/TpmVerifier.json",
     TeeVerifier => "./contract_artifacts/TeeVerifier.sol/TeeVerifier.json",
     AkCollateralVerifier => "./contract_artifacts/AkCollateralVerifier.sol/AkCollateralVerifier.json",
+    AmdSnpSecurityPolicyRegistry => "./contract_artifacts/AmdSnpSecurityPolicyRegistry.sol/AmdSnpSecurityPolicyRegistry.json",
 }
 
 // Define TpmQuoteReport for ABI decoding (not exported in SessionRegistry ABI)

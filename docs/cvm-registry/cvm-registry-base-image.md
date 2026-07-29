@@ -1,8 +1,9 @@
 # BaseImageRegistry -- Detailed Analysis
 
-**File**: `src/BaseImageRegistry.sol` (544 lines)
+**File**: `src/BaseImageRegistry.sol`
 **Interface**: `src/interfaces/registries/IBaseImageRegistry.sol`
-**Role**: Manages OS/platform measurement policies (PCR 0-19)
+**Role**: Manages OS/platform measurement policies. PCR 0 through 19 is the
+usual convention, not a contract-enforced range.
 
 ## Inheritance
 
@@ -60,11 +61,11 @@ BaseImage (e.g. "automata-linux v0.1.6")
   ├── owner: bytes32 fingerprint
   └── PlatformProfile[] (e.g. "gcp-tdx", "azure-snp")
         ├── name: string
-        ├── invariants: PcrSpec[]     (PCR 0-19 baseline)
+        ├── invariants: PcrSpec[]     (platform baseline by convention)
         ├── attributes: Attribute[]   (key-value metadata)
         └── MeasurementVariant[] (e.g. "n2d-standard-2", "c3-standard-4")
               ├── name: string
-              ├── overridePcrs: PcrSpec[]  (replaces invariants at matching pcrIndex)
+              ├── overridePcrs: PcrSpec[]  (indices the profile leaves unpinned; disjoint from invariants)
               └── attributes: Attribute[] (replaces profile attrs at matching key)
 ```
 
@@ -86,7 +87,7 @@ function registerBaseImage(
     BaseImageSpec calldata spec,
     PlatformProfile[] calldata platformProfiles,
     MeasurementVariant[][] calldata measurementVariants,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 baseImageId)
@@ -94,8 +95,8 @@ function registerBaseImage(
 
 - Registers new base image with hierarchical profiles and variants
 - `measurementVariants` is a 2D array: `measurementVariants[i]` maps to `platformProfiles[i]`
-- Computes owner fingerprint, verifies signature over `sha256(abi.encode(BASEIMAGE_REGISTER_MSG, chainid, address(this), expireAt, spec, platformProfiles, measurementVariants))`
-- Registration allowed when: unpaused OR owner is whitelisted (uses `_checkRegistrationAllowed`, NOT `whenNotPaused` modifier)
+- Computes owner fingerprint, verifies signature over `sha256(abi.encode(BASEIMAGE_REGISTER_MSG, chainid, address(this), opExpiresAt, spec, platformProfiles, measurementVariants))`
+- Registration allowed when: `registrationRestricted()` is false, or the owner is whitelisted
 - Validates: signature expiry, array length match, PCR order, attribute uniqueness
 - Emits: `BaseImageRegistered`, `PlatformProfileRegistered`, `MeasurementVariantRegistered`
 
@@ -103,14 +104,14 @@ function registerBaseImage(
 ```solidity
 function deactivateBaseImage(
     bytes32 baseImageId,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external
 ```
 
 - Sets `isRevoked = true` (soft delete)
-- Requires owner signature over `sha256(abi.encode(BASEIMAGE_DEACTIVATE_MSG, chainid, address(this), expireAt, baseImageId))`
+- Requires owner signature over `sha256(abi.encode(BASEIMAGE_DEACTIVATE_MSG, chainid, address(this), opExpiresAt, baseImageId))`
 - Emits: `BaseImageDeactivated`
 
 ### `addPlatformVariants`
@@ -119,7 +120,7 @@ function addPlatformVariants(
     bytes32 baseImageId,
     PlatformProfile[] calldata platformProfiles,
     MeasurementVariant[][] calldata measurementVariants,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external
@@ -130,7 +131,31 @@ function addPlatformVariants(
   - Existing profile ids → submitted `invariants` and `attributes` are silently dropped (§14.2). The stored profile metadata is immutable post-registration; only the variant set under that profile can grow. Callers can pass the full PlatformProfile struct from their config without having to clear the metadata fields first.
   - New variant ids → stored with their `overridePcrs` + `attributes`; emits `MeasurementVariantRegistered`.
   - Existing variant ids → reverts `MeasurementVariantAlreadyExists(variantId)`.
-- Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), expireAt, baseImageId, platformProfiles, measurementVariants))`.
+  - Every new profile and variant may contain fully validated custom and reserved attributes. A variant attribute replaces the matching stored profile attribute for sessions that select that variant.
+  - Adding a variant does not change an existing policy branch. The new variant id is immutable after it is stored. The verified TEE report and workload policy still gate every new session that selects it.
+- Gated by the same whitelist check as `registerBaseImage`: allowed when `registrationRestricted()` is false, or the owner is whitelisted. An appended variant is a new selectable policy branch that may declare its own reserved TEE attributes, so an owner removed from the whitelist cannot widen a base image they registered while whitelisted.
+
+#### Scope of the append-only guarantee
+
+Append-only immutability is **per variant id**, not per base image. A session
+records its `measurementVariantId`, and that branch's stored `overridePcrs` and
+attributes never change. It does not follow that the set of policies reachable
+under a given `baseImageId` is fixed: the owner may append a further variant
+that declares different reserved TEE attributes, and a registrant is free to
+select it. A variant with an empty `overridePcrs` adds no measurement
+constraint of its own.
+
+Two limits bound what an appended branch can do. The workload leg is evaluated
+independently and resolves to the `AmdSnpSecurityPolicyRegistry` default
+whenever the workload states nothing, so a base-image-side relaxation alone
+cannot go below that default. And the whitelist gate above applies to the
+append itself.
+
+A relying party that needs a fixed policy must therefore pin the
+`measurementVariantId` (or the `platformProfileId` plus its variant set), not
+the `baseImageId` alone. See `cvm-registry-amd-snp-policy.md` for how the two
+legs combine.
+- Requires owner signature over `sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainid, address(this), opExpiresAt, baseImageId, platformProfiles, measurementVariants))`.
 - Emits: `BaseImageUpdated`, `PlatformProfileRegistered` (only for newly-created profiles), `MeasurementVariantRegistered` (per new variant).
 
 ### View Functions
@@ -154,6 +179,7 @@ function addPlatformVariants(
 | `isWhitelisted(bytes32)` | Check whitelist status |
 | `pause()` | Pause registration |
 | `unpause()` | Unpause registration |
+| `registrationRestricted()` | True when only whitelisted owners may register or update |
 
 ## Errors
 
@@ -166,14 +192,17 @@ function addPlatformVariants(
 | `MeasurementVariantNotFound(bytes32 variantId)` | Variant ID doesn't exist |
 | `MeasurementVariantAlreadyExists(bytes32 variantId)` | `addPlatformVariants` / `registerBaseImage` is append-only; can't re-register a variantId |
 | `PlatformProfileAlreadyExists(bytes32 profileId)` | `registerBaseImage` got two input profiles with the same `name` (would silently overwrite + duplicate the id in `platformProfileIds`). `addPlatformVariants` does NOT raise this — it tolerates resubmitted profile metadata silently. |
-| `ArrayLengthMismatch()` | `platformProfiles.length != measurementVariants.length` |
-| `InvalidSignature()` | Signature verification failed |
-| `Unauthorized()` | Signer != owner |
-| `SignatureExpired()` | `block.timestamp > expireAt` |
-| `InvalidPcrOrder()` | PCR specs not sorted ascending by index |
+| `HierarchyMismatch(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)` | A profile or variant does not belong to the supplied parent. |
+| `ArrayLengthMismatch(uint256 platformProfilesLen, uint256 measurementVariantsLen)` | `platformProfiles.length != measurementVariants.length` |
+| `InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint)` | Signature verification failed |
+| `Unauthorized(bytes32 actualOwner, bytes32 expectedOwner)` | Signer does not own the base image |
+| `SignatureExpired(uint64 opExpiresAt, uint64 nowTs)` | `block.timestamp > opExpiresAt` |
+| `InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex)` | PCR specs are not strictly ascending by index |
 | `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
 | `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
+| `InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength)` | `STATIC` spec does not contain exactly one `matchData` entry |
 | `DuplicateAttributeKey(bytes32 key)` | Repeated key in attributes array |
+| `InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue)` | A reserved Boolean is invalid, the Intel TDX TCB mask omits `ok` or contains a non-configurable bit, or an AMD SEV-SNP packed value has an invalid layout |
 | `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not in whitelist |
 
 ## Events
@@ -190,12 +219,17 @@ function addPlatformVariants(
 
 ## Validation Rules
 
-1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24` (enforced by `_validatePcrSpecsSorted`)
-2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateUniqueAttributeKeys`, uses in-memory hash table)
-3. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
-4. **Signature expiry**: `block.timestamp <= expireAt`
-5. **Owner match**: Signer fingerprint must match stored owner for updates/deactivation
-6. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
+1. **PCR shape and ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, every `pcrIndex` must be `< 24`, `STATIC` must contain exactly one `matchData` entry, and both dynamic types must contain at least one (enforced by `_validatePcrSpecsSorted`)
+2. **Attribute uniqueness**: No duplicate keys within an attributes array (enforced by `_validateAttributes`, uses an in-memory hash table)
+3. **Reserved Boolean TEE attribute values**: Intel TDX debug, AMD SEV-SNP debug, and AMD SEV-SNP `MIGRATE_MA` accept only the canonical Boolean encodings. Missing means `false`.
+4. **Intel TDX TCB mask**: The mask must include `ok` and may contain only bits in `0x33f`. Missing means `ok` only.
+5. **AMD SEV-SNP packed policy**: `tcb.minimum` requires four valid 64-bit lanes. `platform-info.policy` requires valid, non-overlapping set and clear masks. A missing measurement-variant value falls back to the platform-profile value. If both are missing, verification uses the active exact-CPUID `AmdSnpSecurityPolicyRegistry` default.
+6. **Measurement-variant attributes**: Custom and reserved attributes use the same value and duplicate-key validation in profiles and variants. A variant may declare any valid value for the selected hardware branch.
+7. **Append-only policy**: `addPlatformVariants` ignores submitted metadata for an existing profile, accepts fully validated attributes for a new profile or variant, and rejects an existing variant id.
+8. **Parallel array invariant**: `platformProfiles.length == measurementVariants.length`
+9. **Signature expiry**: `block.timestamp <= opExpiresAt`
+10. **Owner match**: Signer fingerprint must match stored owner for updates/deactivation
+11. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration. Applies to `registerBaseImage` and `addPlatformVariants` alike, because both publish policy that sessions can select.
 
 ## Initialization
 
@@ -204,8 +238,8 @@ Contract starts **paused** (`_pause()` called in `initialize`). Owner must eithe
 ## Internal Helpers
 
 - `_checkRegistrationAllowed(ownerFingerprint)` -- Reverts NotWhitelisted if paused AND not whitelisted
-- `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order and index range (< 24); also reverts `EmptyMatchData` for `DYNAMIC_*` specs with zero-length `matchData`
-- `_validateUniqueAttributeKeys(Attribute[])` -- Hash-table-based uniqueness check for attribute keys
+- `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order, index range (< 24), exact-one `STATIC` cardinality, and non-empty `DYNAMIC_*` cardinality
+- `_validateAttributes(Attribute[])` -- Validates reserved verified TEE attribute values and checks attribute-key uniqueness
 
 ## Implementation Nuance
 

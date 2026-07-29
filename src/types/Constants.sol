@@ -26,6 +26,50 @@ bytes32 constant WORKLOAD_DOMAIN = keccak256("CVM_WORKLOAD_V1");
 /// @dev Domain separator for TPM quote extraData nonce binding (used by SessionRegistry)
 bytes32 constant SESSION_NONCE_DOMAIN = keccak256("CVM_SESSION_REG_NONCE_V1");
 
+// ============================================================================
+// Verified TEE Attribute Constants
+// ============================================================================
+
+/// @dev Reserved base-image and workload attribute keys.
+bytes32 constant TEE_ATTRIBUTE_INTEL_TDX_DEBUG = keccak256("atakit.attestation.v1.tee.intel-tdx.debug.enabled");
+bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG = keccak256("atakit.attestation.v1.tee.amd-sev-snp.debug.enabled");
+bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA =
+    keccak256("atakit.attestation.v1.tee.amd-sev-snp.migrate-ma.enabled");
+bytes32 constant TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED =
+    keccak256("atakit.attestation.v1.tee.intel-tdx.tcb.status.allowed");
+bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM = keccak256("atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum");
+bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY =
+    keccak256("atakit.attestation.v1.tee.amd-sev-snp.platform-info.policy");
+
+/// @dev Canonical Boolean attribute values.
+bytes32 constant TEE_ATTRIBUTE_FALSE = bytes32(0);
+bytes32 constant TEE_ATTRIBUTE_TRUE = bytes32(uint256(1));
+
+/// @dev Stable internal bits returned in TeeVerificationResult.enabledTeeAttributes.
+uint256 constant TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT = uint256(1) << 0;
+uint256 constant TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT = uint256(1) << 1;
+uint256 constant TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT = uint256(1) << 2;
+
+/// @dev Intel DCAP TCB status values are represented as one-hot bits.
+uint256 constant TDX_TCB_STATUS_OK = uint256(1) << 0;
+uint256 constant TDX_TCB_STATUS_SW_HARDENING_NEEDED = uint256(1) << 1;
+uint256 constant TDX_TCB_STATUS_CONFIGURATION_AND_SW_HARDENING_NEEDED = uint256(1) << 2;
+uint256 constant TDX_TCB_STATUS_CONFIGURATION_NEEDED = uint256(1) << 3;
+uint256 constant TDX_TCB_STATUS_OUT_OF_DATE = uint256(1) << 4;
+uint256 constant TDX_TCB_STATUS_OUT_OF_DATE_CONFIGURATION_NEEDED = uint256(1) << 5;
+uint256 constant TDX_TCB_STATUS_RELAUNCH_ADVISED = uint256(1) << 8;
+uint256 constant TDX_TCB_STATUS_RELAUNCH_ADVISED_CONFIGURATION_NEEDED = uint256(1) << 9;
+uint256 constant TDX_TCB_STATUS_CONFIGURABLE_MASK = uint256(0x33f);
+
+/// @dev AMD SEV-SNP PLATFORM_INFO bits supported by the current policy.
+uint64 constant SNP_PLATFORM_INFO_SMT_EN = uint64(1) << 0;
+uint64 constant SNP_PLATFORM_INFO_TSME_EN = uint64(1) << 1;
+uint64 constant SNP_PLATFORM_INFO_ECC_EN = uint64(1) << 2;
+uint64 constant SNP_PLATFORM_INFO_RAPL_DIS = uint64(1) << 3;
+uint64 constant SNP_PLATFORM_INFO_CIPHERTEXT_HIDING_DRAM_EN = uint64(1) << 4;
+uint64 constant SNP_PLATFORM_INFO_ALIAS_CHECK_COMPLETE = uint64(1) << 5;
+uint64 constant SNP_PLATFORM_INFO_SUPPORTED_MASK = uint64(0x3f);
+
 // ─── Operation Message Separators ──────────────────────────────────────
 /// @dev Message separator for base image registration message signatures
 bytes32 constant BASEIMAGE_REGISTER_MSG = keccak256("CVM_MSG_BASEIMAGE_REGISTER_V1");

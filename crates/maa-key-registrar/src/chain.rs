@@ -44,14 +44,15 @@ alloy::sol! {
         error EmptyIssuerHash();
         error NotAfterInPast(uint64 notAfter, uint64 nowTs);
         error KidNotRegistered(bytes32 kidHash);
+        error KidRevoked(bytes32 kidHash);
         error OwnableUnauthorizedAccount(address account);
     }
 }
 
 alloy::register_contract_errors!(IMaaKeyRegistry);
 
-pub use IMaaKeyRegistry::MaaSigningKey;
 use IMaaKeyRegistry::IMaaKeyRegistryInstance;
+pub use IMaaKeyRegistry::MaaSigningKey;
 
 /// Thin client wrapping the four `MaaKeyRegistry` calls.
 pub struct MaaKeyRegistryClient {
@@ -80,10 +81,6 @@ impl MaaKeyRegistryClient {
         Ok(Self {
             stub: IMaaKeyRegistryInstance::new(registry, provider),
         })
-    }
-
-    pub async fn has_kid(&self, kid_hash: B256) -> Result<bool> {
-        Ok(self.stub.hasMaaSigningKey(kid_hash).call_ex().await?)
     }
 
     pub async fn get_key(&self, kid_hash: B256) -> Result<MaaSigningKey> {

@@ -64,15 +64,11 @@ contract MaaKeyRegistryTest is Test {
         assertFalse(registry.hasMaaSigningKey(TEST_KID_HASH));
     }
 
-    function test_upsert_replaces_existing_key_and_resets_revoked() public {
+    function test_upsert_replaces_existing_active_key() public {
         uint64 notAfter = uint64(block.timestamp + 365 days);
 
         vm.prank(owner);
         registry.upsertMaaSigningKey(TEST_KID_HASH, TEST_PKCS1_PUBKEY, TEST_ISSUER_HASH, notAfter);
-
-        vm.prank(owner);
-        registry.revokeMaaSigningKey(TEST_KID_HASH);
-        assertTrue(registry.getMaaSigningKey(TEST_KID_HASH).revoked);
 
         bytes memory replacementPubkey = hex"30820122300d06092a864886f70d01010105000382010f00aabb";
         bytes32 newIssuer = keccak256(bytes("https://sharedcus.cus.attest.azure.net"));
@@ -85,7 +81,31 @@ contract MaaKeyRegistryTest is Test {
         assertEq(stored.pkcs1Pubkey, replacementPubkey, "pubkey not replaced");
         assertEq(stored.issuerHash, newIssuer, "issuer not replaced");
         assertEq(stored.notAfter, newNotAfter, "notAfter not replaced");
-        assertEq(stored.revoked, false, "revoked must reset on upsert");
+        assertFalse(stored.revoked, "active replacement must remain active");
+    }
+
+    function test_revert_when_upserting_revoked_kid_and_preserve_record() public {
+        uint64 notAfter = uint64(block.timestamp + 365 days);
+
+        vm.prank(owner);
+        registry.upsertMaaSigningKey(TEST_KID_HASH, TEST_PKCS1_PUBKEY, TEST_ISSUER_HASH, notAfter);
+
+        vm.prank(owner);
+        registry.revokeMaaSigningKey(TEST_KID_HASH);
+
+        bytes memory replacementPubkey = hex"30820122300d06092a864886f70d01010105000382010f00aabb";
+        bytes32 newIssuer = keccak256(bytes("https://sharedcus.cus.attest.azure.net"));
+        uint64 newNotAfter = uint64(block.timestamp + 730 days);
+
+        vm.expectRevert(abi.encodeWithSelector(MaaKeyRegistry.KidRevoked.selector, TEST_KID_HASH));
+        vm.prank(owner);
+        registry.upsertMaaSigningKey(TEST_KID_HASH, replacementPubkey, newIssuer, newNotAfter);
+
+        MaaSigningKey memory stored = registry.getMaaSigningKey(TEST_KID_HASH);
+        assertEq(stored.pkcs1Pubkey, TEST_PKCS1_PUBKEY, "revoked pubkey changed");
+        assertEq(stored.issuerHash, TEST_ISSUER_HASH, "revoked issuer changed");
+        assertEq(stored.notAfter, notAfter, "revoked notAfter changed");
+        assertTrue(stored.revoked, "revocation must remain permanent");
     }
 
     function test_upsert_at_notAfter_boundary_accepted() public {

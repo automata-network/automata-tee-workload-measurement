@@ -2,6 +2,12 @@
 
 Technical documentation for the CVM Registry System — a three-tier registry architecture for on-chain verification and management of Confidential VM workloads.
 
+This guide gives the high-level flow. The exact current ABI, errors, and policy
+rules are in the
+[contract architecture and per-contract documents](cvm-registry/cvm-registry-overview.md).
+Use those
+per-contract documents when this overview omits detail.
+
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)
@@ -9,7 +15,7 @@ Technical documentation for the CVM Registry System — a three-tier registry ar
 - [BaseImageRegistry](#baseimageregistry)
 - [WorkloadRegistry](#workloadregistry)
 - [SessionRegistry](#sessionregistry)
-- [9-Step Session Verification](#9-step-session-verification)
+- [Session Registration Verification](#session-registration-verification)
 - [PCR Verification Types](#pcr-verification-types)
 - [Session Lifecycle](#session-lifecycle)
 - [Data Structures Reference](#data-structures-reference)
@@ -37,6 +43,9 @@ The system is composed of six contract groups with strict separation of concerns
 - **BaseImageRegistry** — Defines platform images and their expected PCR measurement specifications. Managed by base image publishers.
 - **WorkloadRegistry** — Defines application-level policies including base image access control, attribute requirements, and PCR constraints. Managed by workload developers.
 - **SessionRegistry** — Orchestrates the full attestation verification workflow, creates on-chain session identities, and manages session lifecycle.
+- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults plus mandatory mitigation-vector masks for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
+- **AkCollateralVerifier** — Separately deployed Azure MAA JWT and GCP AK certificate-chain verifier.
+- **MaaKeyRegistry** — Stores the owner-managed Microsoft Azure Attestation signing keys used by `AkCollateralVerifier`.
 - **TeeVerifier** — Stateless dispatcher for TEE attestation reports. Routes to DCAP (Intel TDX) or SNP (AMD SEV-SNP) verifiers. Supports ZK proof backends (RiscZero, SP1).
 - **SignatureVerifier** — Validates cryptographic signatures from any `PublicIdentity` key. Supports RS256, ES256 (P-256), and ES256K (secp256k1).
 - **KeyResolver** — Maps public key fingerprints to full `PublicIdentity` representations. Serves as an on-chain identity directory.
@@ -46,11 +55,15 @@ The system is composed of six contract groups with strict separation of concerns
 **SessionRegistry:**
 ```
 SessionRegistry
+├── ISessionRegistry
 ├── TpmVerifier (TPM Quote + TPM Certify verification)
-├── AkCollateralVerifier (AK certificate chain validation)
 ├── OwnableUpgradeable
 └── UUPSUpgradeable
 ```
+
+`SessionRegistry` calls the separately deployed `IAkCollateralVerifier`.
+Its immutable registry references are `IBaseImageRegistry`,
+`IWorkloadRegistry`, and `IAmdSnpSecurityPolicyRegistry`.
 
 **BaseImageRegistry / WorkloadRegistry:**
 ```
@@ -95,7 +108,8 @@ All identifiers and signatures use domain-separated hashing to prevent cross-con
 | `KEY_DOMAIN` | `keccak256("KEY_RESOLVER_V1")` | Key fingerprint computation |
 | `SESSION_DOMAIN` | `keccak256("CVM_SESSION_V1")` | Session ID computation |
 | `DELEGATION_DOMAIN` | `keccak256("CVM_SESSION_KEY_DELEGATION")` | Session key delegation |
-| `ROTATION_DOMAIN` | `keccak256("CVM_SESSION_KEY_ROTATION")` | Session rotation authorization |
+| `SESSION_ROTATE_KEY_DOMAIN` | `keccak256("CVM_SESSION_ROTATE_KEY_V1")` | Session rotation authorization |
+| `SESSION_RENEW_DOMAIN` | `keccak256("CVM_SESSION_RENEW_V1")` | Full renewal lineage authorization |
 | `BASEIMAGE_DOMAIN` | `keccak256("CVM_BASEIMAGE_V1")` | Base image ID computation |
 | `WORKLOAD_DOMAIN` | `keccak256("CVM_WORKLOAD_V1")` | Workload ID computation |
 | `PLATFORM_PROFILE_DOMAIN` | `keccak256("CVM_PLATFORM_PROFILE_V1")` | Platform profile ID computation |
@@ -108,7 +122,9 @@ Operation message separators (for signed requests):
 | --- | --- |
 | `SESSION_REGISTER_MSG` | `keccak256("CVM_MSG_SESSION_REGISTER_V1")` |
 | `SESSION_REVOKE_MSG` | `keccak256("CVM_MSG_SESSION_REVOKE_V1")` |
-| `SESSION_ROTATE_MSG` | `keccak256("CVM_MSG_SESSION_ROTATE_V1")` |
+| `SESSION_ROTATE_KEY_MSG` | `keccak256("CVM_MSG_SESSION_ROTATE_KEY_V1")` |
+| `SESSION_RENEW_MSG` | `keccak256("CVM_MSG_SESSION_RENEW_V1")` |
+| `SESSION_RECOVER_MSG` | `keccak256("CVM_MSG_SESSION_RECOVER_V1")` |
 | `BASEIMAGE_REGISTER_MSG` | `keccak256("CVM_MSG_BASEIMAGE_REGISTER_V1")` |
 | `BASEIMAGE_DEACTIVATE_MSG` | `keccak256("CVM_MSG_BASEIMAGE_DEACTIVATE_V1")` |
 | `BASEIMAGE_UPDATE_MSG` | `keccak256("CVM_MSG_BASEIMAGE_UPDATE_V1")` |
@@ -123,7 +139,10 @@ Both `BaseImageRegistry` and `WorkloadRegistry` support a whitelist mode for per
 
 ## BaseImageRegistry
 
-Manages **operating system and platform measurement policies** (PCR 0-19). Operated by privileged base image publishers (e.g., OS vendors, platform operators).
+Manages operating system and platform measurement policies. The usual
+platform PCR range is 0 through 19, but the contract only requires sorted PCR
+indexes below 24. It does not enforce that conventional split. Base image
+publishers operate this registry.
 
 ### Three-Level Hierarchy
 
@@ -157,7 +176,7 @@ function registerBaseImage(
     BaseImageSpec calldata spec,
     PlatformProfile[] calldata platformProfiles,
     MeasurementVariant[][] calldata measurementVariants,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 baseImageId);
@@ -171,13 +190,17 @@ function addPlatformVariants(
     bytes32 baseImageId,
     PlatformProfile[] calldata platformProfiles,
     MeasurementVariant[][] calldata measurementVariants,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external;
 ```
 
-Additive/upsert semantics — new profiles and variants are added, existing ones (matching name → matching ID) are overwritten. Unmentioned entries remain untouched.
+Append-only semantics: new profiles and variants are added. Re-submitting an
+existing profile leaves its registered metadata unchanged. Re-submitting an
+existing variant reverts. Unmentioned entries remain unchanged. Reserved TEE
+opt-ins that would weaken the policy under an existing base-image ID require a
+new base-image version.
 
 **View Functions:**
 - `getBaseImage(baseImageId)` → `BaseImageSpec`
@@ -191,14 +214,17 @@ Additive/upsert semantics — new profiles and variants are added, existing ones
 
 ## WorkloadRegistry
 
-Manages **application-level measurement policies** (PCR 20-23). Operated by workload developers who publish containerized applications.
+Manages application-level measurement policies. Workloads normally use PCR 20
+through 23, but the contract only requires sorted PCR indexes below 24. It does
+not enforce that conventional split. Workload developers operate this
+registry.
 
 ### WorkloadSpec
 
 A workload specification defines:
 
 - **name / version** — Human-readable identifier (e.g., "ml-training-service", "2.1.0")
-- **ttl** — Session time-to-live in seconds (0 = default 30 days)
+- **sessionTtl** — Session time-to-live in seconds (0 = default 30 days)
 - **baseImageMode** — Access control for which base images can run this workload:
   - `ANY` — No restrictions
   - `WHITELIST` — Only base images in `baseImageIds` are allowed
@@ -218,7 +244,7 @@ workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, name, version))
 ```solidity
 function registerWorkload(
     WorkloadSpec calldata spec,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 workloadId);
@@ -241,35 +267,37 @@ The **central orchestrator** that ties everything together. It verifies attestat
 The SessionRegistry holds immutable references to:
 - `ITeeVerifier` — TEE attestation verification
 - `ISignatureVerifier` — Cryptographic signature verification
+- `IAkCollateralVerifier` — Azure MAA JWT and GCP AK collateral verification
 - `IBaseImageRegistry` — Platform policy lookup
 - `IWorkloadRegistry` — Application policy lookup
-- `ITpmAttestation` — TPM quote and certificate verification
+- `IAmdSnpSecurityPolicyRegistry` — AMD SEV-SNP policy defaults plus ordinary and reserved TEE attribute evaluation
+- `ITpmAttestation` — TPM Quote and Certify verification through the inherited `TpmBase`
 
 ### Key Operations
 
 ```solidity
-// Register a session after 9-step attestation verification
+// Register a session after complete attestation verification
 function registerSession(
     AttestationEvidence calldata evidence,
     bytes32 workloadId, bytes32 baseImageId,
     bytes32 platformProfileId, bytes32 variantId,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 sessionId);
 
 // Revoke a session (owner only)
 function revokeSession(
-    bytes32 sessionId, uint64 expireAt,
+    bytes32 sessionId, uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external;
 
-// Rotate session keys without full TEE re-attestation
-function rotateSession(
+// Rotate session keys without full TEE re-attestation or extending expiry
+function rotateKey(
     bytes32 oldSessionId, bytes32 teeReportBytesHash,
-    SessionRotationEvidence calldata rotationEvidence,
-    uint64 expireAt,
+    SessionKeyRotationEvidence calldata rotationEvidence,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 newSessionId);
@@ -281,19 +309,25 @@ function verifySessionSignature(
 ) external view returns (bool valid);
 ```
 
+`renewSession` and `recoverSession` perform full verification of new
+`AttestationEvidence`. `renewSession` also requires predecessor TPM
+authorization and an active predecessor. `recoverSession` requires the same
+owner but can replace an inactive predecessor. Both apply the current verified
+TEE attribute policy and the active AMD SEV-SNP registry defaults.
+
 ### View Functions
 
 - `getSession(sessionId)` → `CVMSession`
 - `getSessionOwner(sessionId)` → owner fingerprint
 - `isSessionActive(sessionId)` → true if not revoked and not expired
-- `isSessionExpired(sessionId)` → true if past TTL
+- `isSessionExpired(sessionId)` → true if past TTL; reverts `SessionNotFound` for an unknown id
 - `getNonce(ownerFingerprint)` → current nonce for replay protection
 
 ---
 
-## 9-Step Session Verification
+## Session Registration Verification
 
-When `registerSession()` is called, the system performs a comprehensive 9-step verification:
+When `registerSession()` is called, the system performs this verification sequence:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -302,6 +336,9 @@ When `registerSession()` is called, the system performs a comprehensive 9-step v
 ├─────────────────────────────────────────────────────────────────────┤
 │  STEP 2: TEE Attestation Verification                               │
 │  Verify Intel TDX quote or AMD SEV-SNP report                      │
+├─────────────────────────────────────────────────────────────────────┤
+│  STEP 2a: Verified TEE and Attribute Policy                         │
+│  Resolve AMD defaults; check TEE state and attribute requirements  │
 ├─────────────────────────────────────────────────────────────────────┤
 │  STEP 3: AK Collateral Verification + TEE-AK Binding               │
 │  Validate Attestation Key and bind TEE to vTPM                      │
@@ -316,13 +353,13 @@ When `registerSession()` is called, the system performs a comprehensive 9-step v
 │  Compute session ID, verify TPM key delegates to session key        │
 ├─────────────────────────────────────────────────────────────────────┤
 │  STEP 7: Base Image PCR Policy Evaluation                           │
-│  Match PCRs 0-14 against platform invariants + variant overrides    │
+│  Match declared platform invariants + variant overrides             │
 ├─────────────────────────────────────────────────────────────────────┤
-│  STEP 8: Workload PCR + Attribute Policy Evaluation                 │
-│  Match PCRs 20-23 against workload specs, validate attributes       │
+│  STEP 8: Workload PCR Policy Evaluation                             │
+│  Match declared workload PCR specs                                  │
 ├─────────────────────────────────────────────────────────────────────┤
 │  STEP 9: Owner Signature Verification                               │
-│  Verify owner signature, increment nonce, store session             │
+│  Verify owner signature and store session                           │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -345,13 +382,38 @@ Dispatches to `TeeVerifier`, which routes to the appropriate backend:
 
 Supports three verification backends: `Solidity` (on-chain), `ZkRiscZero`, `ZkSuccinct`.
 
-Returns a `TeeVerificationResult` containing the validated report body and extracted report data.
+Returns a `TeeVerificationResult` containing `valid`, the validated report
+body, the verified TEE type, three Boolean-state bits, the one-hot Intel DCAP
+TCB status, and the AMD SEV-SNP TCB, `PLATFORM_INFO`, CPUID, report-version,
+`LAUNCH_MIT_VECTOR`, and `CURRENT_MIT_VECTOR` state.
+`SessionRegistry` explicitly rejects `valid == false`.
+
+### Step 2a: Verified TEE and Attribute Policy
+
+`SessionRegistry` calls
+`AmdSnpSecurityPolicyRegistry.verifyTeePolicy` before AK and TPM
+verification. Despite the component name, this call handles all ordinary
+attribute requirements plus the reserved attributes for the verified
+`TeeVerificationResult.teeType`.
+
+The call evaluates ordinary metadata first. It then applies the profile and
+measurement-variant lookup to custom attributes and every reserved TEE
+attribute. The measurement-variant value replaces the matching profile value.
+Missing Boolean values mean `false`. A missing Intel TDX TCB status mask means
+`ok` only. Missing AMD SEV-SNP packed policies resolve to the active exact-CPUID
+registry default. The registry value is not an independent mandatory floor. A
+matching explicit base-image value and workload value may replace it. The call
+ignores reserved attributes assigned to the other TEE platform.
 
 ### Step 3: AK Collateral Verification + TEE-AK Binding
 
 Verifies the Attestation Key (AK) and its binding to the TEE instance:
 
-- **Azure**: AK public key extracted from JSON collateral. Binding verified by checking that `reportData[0:32] == sha256(akCollateral)`.
+- **Azure**: AK public key extracted from HCL `var_data`. `AkCollateralVerifier`
+  verifies that the MAA JWT report-data claim equals
+  `sha256(hclVarData) || bytes32(0)`. `SessionRegistry` then requires the
+  independently verified TDX or SNP report's `REPORT_DATA` to contain the same
+  value.
 - **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. Also computes `expectedPcr15 = sha256(bytes32(0) || bytes16(0) || UUID)`. The 16-byte UUID is left-padded with zeros to fill each bank's register width (no intermediate hash).
 - **GCP (SNP)**: AK from X.509 chain. Binding via `report_id` at SNP report offset `0x140`. Computes `expectedPcr15 = sha256(0x00 || report_id)`.
 
@@ -359,8 +421,11 @@ Verifies the Attestation Key (AK) and its binding to the TEE instance:
 
 Verifies the TPM Quote report:
 - Validates the AK signature over the marshalled `TPMS_ATTEST` (carried in the `tpm2bAttest` field; the historical name is preserved but the bytes have **no** `TPM2B` 2-byte size prefix — see `Evidence.sol`)
-- Checks nonce binding: `extraData == keccak256(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, currentNonce)`
+- Checks nonce binding: `extraData == keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, currentNonce))`
 - Extracts measured PCR values from the quote
+- Writes the owner nonce increment immediately after successful Quote
+  verification. The write persists only if the complete transaction succeeds;
+  any later revert rolls it back.
 
 This step ensures the PCR measurements are fresh and tied to this specific registration request.
 
@@ -375,7 +440,9 @@ Verifies the TPM2_Certify report:
 
 Computes the session ID:
 ```
-sessionId = keccak256(abi.encode(SESSION_DOMAIN, keccak256(tpmSignature), keccak256(teeReport.data)))
+tpmSignatureHash = keccak256(tpmQuoteReport.tpmSignature)
+teeReportBytesHash = teeVerifier.getTeeReportHash(evidence.teeReport)
+sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
 ```
 
 Verifies session key delegation — the TPM signing key authorizes the session key:
@@ -387,38 +454,33 @@ delegationMessage = keccak256(abi.encode(
 
 The TPM signing key's signature over this message proves the session key is authorized with full context binding.
 
-### Step 7: Base Image PCR Policy Evaluation
+### Step 7: PCR Policy Evaluation
 
-Evaluates platform measurement policies:
-1. Merges PlatformProfile invariant PCRs with MeasurementVariant override PCRs (variant overrides platform at matching indices)
+Evaluates all measurement policies:
+1. Unions PlatformProfile invariant PCRs with MeasurementVariant PCRs. Profile invariants always hold: a variant entry at an index the profile pins reverts `PcrVariantOverridesInvariant` rather than replacing it
 2. Evaluates effective PCR specs against measured values from the TPM quote
-3. For GCP: additionally validates that measured PCR 15 matches the expected binding value computed in Step 3
+3. Evaluates WorkloadSpec PCR specs against measured values
+4. For GCP: additionally validates that measured PCR 15 matches the expected binding value computed in Step 3
 
-### Step 8: Workload PCR + Attribute Policy Evaluation
+All ordinary and reserved attribute requirements already ran in Step 2a.
 
-Evaluates application measurement policies:
-1. Evaluates WorkloadSpec PCR specs (typically PCR 20-23) against measured values
-2. Merges platform attributes with variant attributes (variant overrides platform at matching keys)
-3. Validates all WorkloadSpec attribute requirements against the merged attributes
-
-### Step 9: Owner Signature Verification
+### Step 8: Owner Signature Verification
 
 Verifies the owner's authorization:
 ```
 message = sha256(abi.encode(
-    SESSION_REGISTER_MSG, chainId, address(this), expireAt, sessionId,
+    SESSION_REGISTER_MSG, chainId, address(this), opExpiresAt, sessionId,
     workloadId, baseImageId, platformProfileId, variantId, sessionKeyFingerprint
 ))
 ```
 
 - Signature verified via `SignatureVerifier` against `ownerIdentity`
-- Owner nonce incremented for replay protection
 - Session created with TTL from WorkloadSpec (default 30 days if 0)
 - Events emitted: `SessionRegistered`, `AttestationKeysRevealed`
 
 ### Chain of Trust
 
-The 9-step process establishes this chain of trust:
+The registration verification sequence establishes this chain of trust:
 
 ```
 TEE Hardware (Intel TDX / AMD SEV-SNP)
@@ -432,8 +494,8 @@ TPM Signing Key
 Session Key
     ↓  TPM signing key delegates to session key (Step 6)
 On-Chain Session Identity
-    ↓  PCR policies validated (Steps 7-8)
-    ↓  Owner authorizes (Step 9)
+    ↓  PCR policies validated (Step 7)
+    ↓  Owner authorizes (Step 8)
 Active CVMSession
 ```
 
@@ -446,7 +508,7 @@ Three strategies for matching measured PCR values against policy specifications:
 ### STATIC — Exact Value Match
 
 ```
-matchData[0] must exactly equal the PCR final value
+`matchData` must contain exactly one entry, and `matchData[0]` must exactly equal the PCR final value
 ```
 
 Use for deterministic measurements that never change (e.g., firmware hash, bootloader hash). The PCR value is computed as a sequential hash chain of events, producing a single final value that must match exactly.
@@ -473,27 +535,50 @@ Use for boot sequences where event order matters but additional events may be in
 
 ### Registration
 
-Full 9-step attestation verification as described above. On success, a `CVMSession` is created on-chain with:
+The complete attestation verification sequence described above runs. On
+success, a `CVMSession` is created on-chain with:
 - Key fingerprints for the entire chain of trust (AK, TPM signing key, session key)
 - Context identifiers (base image, workload, platform profile, variant)
-- Lifecycle timestamps (registeredAt, expiresAt)
+- Lifecycle timestamps (`registeredAt`, `sessionExpiresAt`)
 
 ### Rotation
 
-Replace TPM signing key and session key **without** full TEE re-attestation:
+Replace the TPM signing key and session key **without** full TEE
+re-attestation and **without** extending the session expiry:
 
 1. Validate old session exists, is not revoked, and is not expired
 2. Verify new TPM quote with AK (re-validates PCRs with fresh nonce)
 3. Verify new TPM signing key certified by same AK
 4. Old TPM signing key signs rotation authorization:
    ```
-   keccak256(abi.encode(ROTATION_DOMAIN, block.chainid, address(this), oldSessionId, newTpmKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))
+   keccak256(abi.encode(SESSION_ROTATE_KEY_DOMAIN, block.chainid, address(this), oldSessionId, newTpmKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))
    ```
 5. Compute new session ID from new TPM signature
 6. Verify new session key delegation
-7. Re-evaluate PCR and attribute policies
-8. Verify owner signature under `SESSION_ROTATE_MSG`
-9. Revoke old session, create new session
+7. Require the inherited workload and base image to remain active, require
+   the base image to remain allowed by the workload, and re-evaluate the
+   current platform and workload PCR policies. There is no new TEE report, so
+   rotation does not re-evaluate verified TEE attributes or the current AMD
+   SEV-SNP registry defaults; it inherits the state accepted by the predecessor's full
+   attestation.
+8. Verify owner signature under `SESSION_ROTATE_KEY_MSG`
+9. Revoke the old session and create the successor. The successor gets a new
+   `registeredAt` and preserves the predecessor's absolute
+   `sessionExpiresAt`.
+
+`registeredAt` records when that session row was created. It is informational
+and does not control session activity.
+
+### Renewal and recovery
+
+`renewSession` is the lifecycle extension path. It verifies a fresh TEE report,
+fresh TPM evidence, current base-image and workload policy, and predecessor
+TPM authorization. It revokes the predecessor and creates a new session with a
+new lifetime.
+
+`recoverSession` also verifies fresh TEE and TPM evidence and current policy.
+It uses owner authorization rather than predecessor TPM authorization, so the
+owner can replace a predecessor whose TPM key is no longer usable.
 
 ### Revocation
 
@@ -553,7 +638,7 @@ struct CVMSession {
     bytes32 platformProfileId;          // Platform profile
     bytes32 measurementVariantId;       // Measurement variant
     uint64 registeredAt;                // Registration timestamp
-    uint64 expiresAt;                   // Expiration timestamp
+    uint64 sessionExpiresAt;            // Expiration timestamp
 }
 ```
 
@@ -575,7 +660,7 @@ struct PlatformProfile {
 struct MeasurementVariant {
     string name;                // e.g., "n2d-standard-16"
     PcrSpec[] overridePcrs;     // Machine-specific PCR overrides
-    Attribute[] attributes;     // Machine-specific metadata
+    Attribute[] attributes;     // Machine-specific custom and reserved policy overrides
 }
 ```
 
@@ -585,11 +670,11 @@ struct MeasurementVariant {
 struct WorkloadSpec {
     string name;                              // e.g., "ml-training-service"
     string version;                           // e.g., "2.1.0"
-    uint64 ttl;                               // Session TTL in seconds (0 = default 30 days)
+    uint64 sessionTtl;                        // Session TTL in seconds (0 = default 30 days)
     AccessMode baseImageMode;                 // ANY, BLACKLIST, or WHITELIST
     bytes32[] baseImageIds;                   // Base images for access control
     AttributeRequirement[] requirements;      // Attribute requirements (all must pass)
-    PcrSpec[] pcrs;                           // Workload PCR specs (PCR 20-23)
+    PcrSpec[] pcrs;                           // Workload PCR specs (typically PCR 20-23)
 }
 ```
 
@@ -606,10 +691,10 @@ struct AttestationEvidence {
 }
 ```
 
-### SessionRotationEvidence
+### SessionKeyRotationEvidence
 
 ```solidity
-struct SessionRotationEvidence {
+struct SessionKeyRotationEvidence {
     TpmReport tpmQuoteReport;               // New TPM Quote
     TpmReport tpmCertifyReport;             // New TPM Certify
     bytes sessionKeySignature;              // New delegation signature

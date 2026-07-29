@@ -7,8 +7,8 @@ import {Base64} from "solady/utils/Base64.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
-import {MockAutomataDcapAttestation} from "../../src/mock/MockAutomataDcapAttestation.sol";
-import {MockAutomataSnpAttestation} from "../../src/mock/MockAutomataSnpAttestation.sol";
+import {MockAutomataDcapAttestation} from "../mocks/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "../mocks/MockAutomataSnpAttestation.sol";
 
 abstract contract TestSetup is Test {
     using stdJson for string;

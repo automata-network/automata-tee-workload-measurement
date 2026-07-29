@@ -7,10 +7,11 @@ import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
 import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
-import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
-import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
+import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
 import {TpmAttestation} from "@automata-network/automata-tpm-attestation/TpmAttestation.sol";
 import {TeeVerifier} from "../src/TeeVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -63,6 +64,7 @@ contract SessionRegistryTest is Test {
     TeeVerifier public teeVerifier;
     MaaKeyRegistry public maaKeyRegistry;
     AkCollateralVerifier public akCollateralVerifier;
+    AmdSnpSecurityPolicyRegistry public amdSnpSecurityPolicyRegistry;
 
     address constant P256_VERIFIER = 0xc2b78104907F722DABAc4C69f826a522B2754De4;
     address constant owner = address(0x1234);
@@ -122,9 +124,21 @@ contract SessionRegistryTest is Test {
         // Deploy AK collateral verifier separately so SessionRegistry remains under EIP-170.
         akCollateralVerifier = new AkCollateralVerifier(maaKeyRegistry, signatureVerifier, tpmAttestation);
 
+        AmdSnpSecurityPolicyRegistry amdSnpPolicyImpl = new AmdSnpSecurityPolicyRegistry();
+        ERC1967Proxy amdSnpPolicyProxy = new ERC1967Proxy(
+            address(amdSnpPolicyImpl), abi.encodeCall(AmdSnpSecurityPolicyRegistry.initialize, (owner))
+        );
+        amdSnpSecurityPolicyRegistry = AmdSnpSecurityPolicyRegistry(address(amdSnpPolicyProxy));
+
         // Deploy SessionRegistry implementation
         SessionRegistry impl = new SessionRegistry(
-            teeVerifier, tpmAttestation, signatureVerifier, akCollateralVerifier, baseImageRegistry, workloadRegistry
+            teeVerifier,
+            tpmAttestation,
+            signatureVerifier,
+            akCollateralVerifier,
+            baseImageRegistry,
+            workloadRegistry,
+            amdSnpSecurityPolicyRegistry
         );
 
         // Deploy behind ERC1967 proxy. The proxy address MUST be 0xc2cfa7345c4ec6daee4d82136ebd3483c65ef650
@@ -401,9 +415,9 @@ contract SessionRegistryTest is Test {
             PublicIdentity memory decodedOwnerIdentity,
             bytes memory ownerSignature
         ) = abi.decode(params, (AttestationEvidence, bytes32, bytes32, bytes32, bytes32, uint64, PublicIdentity, bytes));
-
-        // Warp to before expiration if needed
-        vm.warp(1770567955);
+        // The historical fixture predates session-key proof of possession. Preserve its
+        // TPM delegation signature and add a test-only possession signature.
+        evidence.sessionKeySignature = abi.encode(evidence.sessionKeySignature, bytes("possession"));
 
         // Call registerSession
         sessionId = sessionRegistry.registerSession(
@@ -459,7 +473,7 @@ contract SessionRegistryTest is Test {
         // console.logBytes32(variantId);
 
         // TODO: Replace with actual session registration calldata
-        bytes32 sessionId = _registerSessionDirect(sessionCalldata());
+        bytes32 sessionId = _registerSessionWithCalldata(sessionCalldata());
 
         // Option 2: Decode and call (allows inspection of params)
         // bytes memory sessionCalldata = hex"...";

@@ -9,10 +9,24 @@ import {
     PcrVerifyType,
     AttributeRequirement
 } from "./types/Common.sol";
-import {WORKLOAD_DOMAIN, WORKLOAD_REGISTER_MSG, WORKLOAD_DEACTIVATE_MSG} from "./types/Constants.sol";
+import {
+    WORKLOAD_DOMAIN,
+    WORKLOAD_REGISTER_MSG,
+    WORKLOAD_DEACTIVATE_MSG,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+    TDX_TCB_STATUS_OK,
+    TDX_TCB_STATUS_CONFIGURABLE_MASK,
+    TEE_ATTRIBUTE_TRUE
+} from "./types/Constants.sol";
 import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
+import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -37,8 +51,15 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
+    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
     error DuplicateRequirementKey(bytes32 key);
+    error InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
+    error InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue);
     error NotWhitelisted(bytes32 ownerFingerprint);
+    /// @notice `AccessMode.WHITELIST` was registered with an empty `baseImageIds` set, which would
+    ///         deny every base image and leave the workload permanently unusable. Workloads are
+    ///         immutable and the name/version pair stays claimed, so this is rejected up front.
+    error EmptyBaseImageWhitelist();
 
     // ============================================================================
     // Events
@@ -94,7 +115,15 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         }
 
         _validatePcrSpecsSorted(spec.pcrs);
-        _validateUniqueRequirementKeys(spec.requirements);
+        _validateRequirements(spec.requirements);
+
+        // An empty whitelist denies every base image, so isBaseImageAllowed always returns false
+        // and no session can ever reference this workload. Registration is one-shot: the spec is
+        // immutable and the name/version pair remains claimed after deactivation, so the mistake
+        // is unrecoverable under that identifier. Reject it rather than record it.
+        if (spec.baseImageMode == AccessMode.WHITELIST && spec.baseImageIds.length == 0) {
+            revert EmptyBaseImageWhitelist();
+        }
 
         // Compute workload ID
         workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version));
@@ -239,12 +268,17 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         return _whitelist[fingerprint];
     }
 
-    /// @notice Pauses the contract
+    /// @notice Returns true when only whitelisted owners may register workloads.
+    function registrationRestricted() public view override returns (bool) {
+        return paused();
+    }
+
+    /// @notice Restricts registration to whitelisted owners.
     function pause() external onlyOwner {
         _pause();
     }
 
-    /// @notice Unpauses the contract
+    /// @notice Restores permissionless registration.
     function unpause() external onlyOwner {
         _unpause();
     }
@@ -253,10 +287,10 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     // Internal Functions
     // ============================================================================
 
-    /// @dev Checks if registration is allowed based on pause state and whitelist
+    /// @dev Checks if registration is allowed based on restriction state and whitelist
     /// @param ownerFingerprint The owner's fingerprint
     function _checkRegistrationAllowed(bytes32 ownerFingerprint) private view {
-        if (paused() && !_whitelist[ownerFingerprint]) {
+        if (registrationRestricted() && !_whitelist[ownerFingerprint]) {
             revert NotWhitelisted(ownerFingerprint);
         }
     }
@@ -273,18 +307,62 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
                 revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
             PcrVerifyType vt = pcrs[i].verifyType;
-            if (
-                (vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE)
-                    && pcrs[i].matchData.length == 0
-            ) {
+            uint256 matchDataLength = pcrs[i].matchData.length;
+            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
+                revert InvalidStaticMatchDataLength(idx, matchDataLength);
+            }
+            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
+            {
                 revert EmptyMatchData(idx);
             }
             prevIdx = idx;
         }
     }
 
-    function _validateUniqueRequirementKeys(AttributeRequirement[] calldata requirements) private pure {
+    function _validateRequirements(AttributeRequirement[] calldata requirements) private pure {
         uint256 len = requirements.length;
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 key = requirements[i].key;
+            if (key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+                bytes32[] calldata allowedValues = requirements[i].allowedValues;
+                if (allowedValues.length != 1) {
+                    revert InvalidTeeAttributeRequirementLength(key, allowedValues.length);
+                }
+                uint256 mask = uint256(allowedValues[0]);
+                if ((mask & TDX_TCB_STATUS_OK) == 0 || (mask & ~TDX_TCB_STATUS_CONFIGURABLE_MASK) != 0) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[0]);
+                }
+            } else if (
+                key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM || key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
+            ) {
+                bytes32[] calldata allowedValues = requirements[i].allowedValues;
+                if (allowedValues.length != 1) {
+                    revert InvalidTeeAttributeRequirementLength(key, allowedValues.length);
+                }
+                if (
+                    (key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM && !AmdSnpPolicy.isValidTcb(allowedValues[0]))
+                        || (key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
+                            && !AmdSnpPolicy.isValidPlatformInfoPolicy(allowedValues[0]))
+                ) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[0]);
+                }
+            } else if (
+                key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+                    || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA
+            ) {
+                bytes32[] calldata allowedValues = requirements[i].allowedValues;
+                uint256 allowedLen = allowedValues.length;
+                if (allowedLen != 1 && allowedLen != 2) {
+                    revert InvalidTeeAttributeRequirementLength(key, allowedLen);
+                }
+                if (allowedValues[0] != bytes32(0)) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[0]);
+                }
+                if (allowedLen == 2 && allowedValues[1] != TEE_ATTRIBUTE_TRUE) {
+                    revert InvalidTeeAttributeRequirementValue(key, allowedValues[1]);
+                }
+            }
+        }
         if (len < 2) {
             return;
         }

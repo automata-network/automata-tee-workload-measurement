@@ -3,15 +3,16 @@ pragma solidity ^0.8.27;
 
 import {Script, console} from "forge-std/Script.sol";
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
-import {MockAutomataDcapAttestation} from "../src/mock/MockAutomataDcapAttestation.sol";
-import {MockAutomataSnpAttestation} from "../src/mock/MockAutomataSnpAttestation.sol";
-import {MockTpmAttestation} from "../src/mock/MockTpmAttestation.sol";
+import {MockAutomataDcapAttestation} from "../test/mocks/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "../test/mocks/MockAutomataSnpAttestation.sol";
+import {MockTpmAttestation} from "../test/mocks/MockTpmAttestation.sol";
 import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
+import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {SessionRegistry, AttestationEvidence} from "../src/SessionRegistry.sol";
@@ -72,10 +73,12 @@ contract DeployMock is Script, DeploymentConfig {
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
+        address amdSnpSecurityPolicyRegistryAddr = readContractAddress("AmdSnpSecurityPolicyRegistry");
         address maaKeyRegistryAddr = readContractAddress("MaaKeyRegistry");
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
+        console.log("Using AmdSnpSecurityPolicyRegistry at:", amdSnpSecurityPolicyRegistryAddr);
         console.log("Using MaaKeyRegistry at:", maaKeyRegistryAddr);
 
         d.akCollateralVerifier = new AkCollateralVerifier(
@@ -92,7 +95,8 @@ contract DeployMock is Script, DeploymentConfig {
             ISignatureVerifier(signatureVerifierAddr),
             IAkCollateralVerifier(address(d.akCollateralVerifier)),
             IBaseImageRegistry(baseImageRegistryAddr),
-            IWorkloadRegistry(workloadRegistryAddr)
+            IWorkloadRegistry(workloadRegistryAddr),
+            IAmdSnpSecurityPolicyRegistry(amdSnpSecurityPolicyRegistryAddr)
         );
         console.log("Mock SessionRegistry deployed at:", address(d.sessionRegistry));
     }

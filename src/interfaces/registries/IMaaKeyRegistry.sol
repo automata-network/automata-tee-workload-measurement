@@ -45,17 +45,19 @@ interface IMaaKeyRegistry {
     // Functions
     // ============================================================================
 
-    /// @notice Insert or replace a MAA signing key. Owner-only.
+    /// @notice Insert or replace a MAA signing key. Owner-only. Reverts if this
+    ///         kidHash was previously revoked; revocation is permanent per kidHash.
     /// @param kidHash keccak256(bytes(jwt.header.kid))
     /// @param pkcs1Pubkey DER PKCS#1 RSAPublicKey
     /// @param issuerHash keccak256(bytes(MAA endpoint URL))
-    /// @param notAfter Unix seconds; key validity window end. Must be strictly greater than
-    ///                 block.timestamp at the upsert moment.
+    /// @param notAfter Unix seconds; key validity window end. Must be greater than
+    ///                 or equal to block.timestamp at the upsert moment.
     function upsertMaaSigningKey(bytes32 kidHash, bytes calldata pkcs1Pubkey, bytes32 issuerHash, uint64 notAfter)
         external;
 
-    /// @notice Revoke a MAA signing key. Subsequent JWT verifications against this kid revert
-    ///         regardless of notAfter. Owner-only. Reverts if the kid was never registered.
+    /// @notice Permanently revoke a MAA signing key. Subsequent JWT verifications and
+    ///         upserts against this kid revert regardless of notAfter. Owner-only.
+    ///         Reverts if the kid was never registered.
     function revokeMaaSigningKey(bytes32 kidHash) external;
 
     /// @notice Returns the stored MaaSigningKey for `kidHash`. An empty result

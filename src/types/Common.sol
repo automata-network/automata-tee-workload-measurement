@@ -44,7 +44,7 @@ struct PcrSpec {
     /// @dev Verification strategy: STATIC (exact match), DYNAMIC_SUBSET (required unordered landmarks), DYNAMIC_SUBSEQUENCE (ordered landmarks)
     PcrVerifyType verifyType;
     /// @dev Match data interpretation depends on verifyType:
-    ///      - STATIC: matchData[0] = expected PCR final value
+    ///      - STATIC: exactly one entry, matchData[0] = expected PCR final value
     ///      - DYNAMIC_SUBSET: matchData = set of required event hashes. Every matchData entry must
     ///        occur in the non-empty reported event log in any order; additional events are
     ///        permitted. Empty logs are rejected because no cumulative-hash verification occurs.
@@ -70,7 +70,11 @@ struct Attribute {
 struct MeasurementVariant {
     /// @dev Human-readable machine type name (e.g., "n2d-standard-16", "Standard_D4s_v4")
     string name;
-    /// @dev PCR specifications that override platform invariants for this machine type
+    /// @dev PCR specifications for indices the parent PlatformProfile leaves unpinned.
+    ///      `overridePcrs` is a historical name kept for ABI/SDK compatibility: entries MUST be
+    ///      disjoint from `PlatformProfile.invariants`. A profile invariant always holds — an
+    ///      overlapping entry is rejected at registration (VariantOverridesInvariantPcr) and
+    ///      again at session evaluation (PcrVariantOverridesInvariant), never applied.
     PcrSpec[] overridePcrs;
     /// @dev Machine-type-specific attributes (e.g., "machine_series": "n2d", "gpu": "nvidia-t4")
     Attribute[] attributes;

@@ -16,7 +16,16 @@ import {
     PLATFORM_VARIANT_DOMAIN,
     BASEIMAGE_REGISTER_MSG,
     BASEIMAGE_DEACTIVATE_MSG,
-    BASEIMAGE_UPDATE_MSG
+    BASEIMAGE_UPDATE_MSG,
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+    TDX_TCB_STATUS_OK,
+    TDX_TCB_STATUS_CONFIGURABLE_MASK,
+    TEE_ATTRIBUTE_TRUE
 } from "./types/Constants.sol";
 import {
     IBaseImageRegistry,
@@ -26,6 +35,7 @@ import {
 } from "./interfaces/registries/IBaseImageRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
+import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -67,7 +77,14 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
     error EmptyMatchData(uint8 pcrIndex);
+    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
     error DuplicateAttributeKey(bytes32 key);
+    error InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue);
+    /// @notice A measurement variant pins a PCR index that its platform profile already declares
+    ///         invariant. Profile invariants always hold; a variant may only pin indices the
+    ///         profile leaves unpinned. To make a PCR machine-type dependent, publish a base image
+    ///         whose profile does not list it as an invariant.
+    error VariantOverridesInvariantPcr(bytes32 platformProfileId, uint8 pcrIndex);
     error NotWhitelisted(bytes32 ownerFingerprint);
 
     // ============================================================================
@@ -137,12 +154,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
             _validatePcrSpecsSorted(profile.invariants);
-            _validateUniqueAttributeKeys(profile.attributes);
+            _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
-                _validateUniqueAttributeKeys(variants[j].attributes);
+                _validateAttributes(variants[j].attributes);
             }
         }
 
@@ -208,9 +225,12 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
 
             // Validate and store measurement variants
+            uint256 invariantMask = _pcrIndexMask(profile.invariants);
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
+
+                _requireNoInvariantOverlap(platformProfileId, invariantMask, variant.overridePcrs);
 
                 // Compute variant ID
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
@@ -306,16 +326,22 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             revert Unauthorized(ownerFingerprint, _baseImages[baseImageId].owner);
         }
 
+        // Appending a variant publishes a new selectable policy branch that may declare its own
+        // reserved TEE attributes, so it is gated exactly like a fresh registration. Without this
+        // an owner removed from the whitelist could still widen the policy of a base image they
+        // registered while whitelisted.
+        _checkRegistrationAllowed(ownerFingerprint);
+
         // Validate PCR ordering and attribute uniqueness for all profiles and variants
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
             _validatePcrSpecsSorted(profile.invariants);
-            _validateUniqueAttributeKeys(profile.attributes);
+            _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 _validatePcrSpecsSorted(variants[j].overridePcrs);
-                _validateUniqueAttributeKeys(variants[j].attributes);
+                _validateAttributes(variants[j].attributes);
             }
         }
 
@@ -341,10 +367,9 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // invariants and attributes are kept as-is and any re-submitted profile
         // metadata is ignored. New (variantId) values are stored fresh. Any
         // attempt to re-register a variantId that already exists reverts.
-        // This prevents post-hoc relaxation of PCR specs / attributes on
-        // policies that downstream sessions already reference. To publish a
-        // stricter or looser policy, owners must mint a fresh base image with
-        // a bumped name or version. See on-chain-registry-design.md §14.2.
+        // This prevents post-hoc changes to policies that downstream sessions
+        // already reference. A newly appended variant is a new immutable
+        // policy branch and may declare its own validated attributes.
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
 
@@ -361,10 +386,15 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
                 emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
             }
 
-            // Append measurement variants for this profile
+            // Append measurement variants for this profile. Overlap is checked against the
+            // STORED invariants, not the submitted ones: for an already-registered profile the
+            // submitted metadata is dropped, so the stored specs are the only authority.
+            uint256 invariantMask = _storedPcrIndexMask(_platformProfiles[platformProfileId].platformProfile.invariants);
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
+
+                _requireNoInvariantOverlap(platformProfileId, invariantMask, variant.overridePcrs);
 
                 // Compute variant ID (deterministic from profile + variant name)
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
@@ -504,12 +534,17 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         return _whitelist[fingerprint];
     }
 
-    /// @notice Pauses the contract
+    /// @notice Returns true when only whitelisted owners may register or update base images.
+    function registrationRestricted() public view override returns (bool) {
+        return paused();
+    }
+
+    /// @notice Restricts registration and updates to whitelisted owners.
     function pause() external onlyOwner {
         _pause();
     }
 
-    /// @notice Unpauses the contract
+    /// @notice Restores permissionless registration and updates.
     function unpause() external onlyOwner {
         _unpause();
     }
@@ -518,10 +553,10 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     // Internal Functions
     // ============================================================================
 
-    /// @dev Checks if registration is allowed based on pause state and whitelist
+    /// @dev Checks if registration is allowed based on restriction state and whitelist
     /// @param ownerFingerprint The owner's fingerprint
     function _checkRegistrationAllowed(bytes32 ownerFingerprint) private view {
-        if (paused() && !_whitelist[ownerFingerprint]) {
+        if (registrationRestricted() && !_whitelist[ownerFingerprint]) {
             revert NotWhitelisted(ownerFingerprint);
         }
     }
@@ -537,25 +572,42 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             if (i > 0 && idx <= prevIdx) {
                 revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
-            // DYNAMIC variants with empty matchData would accept any reported
-            // event log (subset of nothing is always nothing) or trivially
-            // satisfy the subsequence condition — neither is a meaningful
-            // policy. STATIC is allowed to have any matchData length here
-            // (the session-evaluator reads matchData[0]), since a zero-length
-            // STATIC array reverts at session time with an array-bounds panic.
             PcrVerifyType vt = pcrs[i].verifyType;
-            if (
-                (vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE)
-                    && pcrs[i].matchData.length == 0
-            ) {
+            uint256 matchDataLength = pcrs[i].matchData.length;
+            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
+                revert InvalidStaticMatchDataLength(idx, matchDataLength);
+            }
+            // A dynamic policy with no required landmark would accept trivially.
+            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
+            {
                 revert EmptyMatchData(idx);
             }
             prevIdx = idx;
         }
     }
 
-    function _validateUniqueAttributeKeys(Attribute[] calldata attrs) private pure {
+    function _validateAttributes(Attribute[] calldata attrs) private pure {
         uint256 len = attrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 key = attrs[i].key;
+            if (_isBooleanTeeAttributeKey(key) && attrs[i].value != bytes32(0) && attrs[i].value != TEE_ATTRIBUTE_TRUE)
+            {
+                revert InvalidTeeAttributeValue(key, attrs[i].value);
+            }
+            if (key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+                uint256 mask = uint256(attrs[i].value);
+                if ((mask & TDX_TCB_STATUS_OK) == 0 || (mask & ~TDX_TCB_STATUS_CONFIGURABLE_MASK) != 0) {
+                    revert InvalidTeeAttributeValue(key, attrs[i].value);
+                }
+            } else if (key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM && !AmdSnpPolicy.isValidTcb(attrs[i].value)) {
+                revert InvalidTeeAttributeValue(key, attrs[i].value);
+            } else if (
+                key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY
+                    && !AmdSnpPolicy.isValidPlatformInfoPolicy(attrs[i].value)
+            ) {
+                revert InvalidTeeAttributeValue(key, attrs[i].value);
+            }
+        }
         if (len < 2) {
             return;
         }
@@ -580,6 +632,43 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             used[slot] = true;
             keys[slot] = key;
         }
+    }
+
+    /// @dev Bitmask of the PCR indices a spec list pins. `_validatePcrSpecsSorted` has already
+    ///      rejected any index >= 24, so the shift cannot overflow the mask.
+    function _pcrIndexMask(PcrSpec[] calldata pcrs) private pure returns (uint256 mask) {
+        uint256 len = pcrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            mask |= uint256(1) << pcrs[i].pcrIndex;
+        }
+    }
+
+    /// @dev Storage-reading counterpart of `_pcrIndexMask`, for an already-registered profile.
+    function _storedPcrIndexMask(PcrSpec[] storage pcrs) private view returns (uint256 mask) {
+        uint256 len = pcrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            mask |= uint256(1) << pcrs[i].pcrIndex;
+        }
+    }
+
+    /// @dev Rejects a variant that pins a PCR index its platform profile declares invariant.
+    function _requireNoInvariantOverlap(
+        bytes32 platformProfileId,
+        uint256 invariantMask,
+        PcrSpec[] calldata overridePcrs
+    ) private pure {
+        uint256 len = overridePcrs.length;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 pcrIndex = overridePcrs[i].pcrIndex;
+            if ((invariantMask & (uint256(1) << pcrIndex)) != 0) {
+                revert VariantOverridesInvariantPcr(platformProfileId, pcrIndex);
+            }
+        }
+    }
+
+    function _isBooleanTeeAttributeKey(bytes32 key) private pure returns (bool) {
+        return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA;
     }
 
     // ============================================================================

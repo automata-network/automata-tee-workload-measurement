@@ -1,0 +1,467 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.27;
+
+import {Test} from "forge-std/Test.sol";
+
+import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
+import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
+import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
+import {
+    AccessMode,
+    Attribute,
+    AttributeRequirement,
+    BaseImageSpec,
+    MeasurementVariant,
+    PcrSpec,
+    PlatformProfile,
+    PublicIdentity,
+    WorkloadSpec
+} from "../src/types/Common.sol";
+import {
+    TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+    PLATFORM_PROFILE_DOMAIN,
+    PLATFORM_VARIANT_DOMAIN,
+    TDX_TCB_STATUS_OK,
+    TDX_TCB_STATUS_CONFIGURABLE_MASK,
+    TEE_ATTRIBUTE_FALSE,
+    TEE_ATTRIBUTE_TRUE
+} from "../src/types/Constants.sol";
+
+contract TeeAttributeRegistryTest is Test {
+    BaseImageRegistry private baseImageRegistry;
+    WorkloadRegistry private workloadRegistry;
+    PublicIdentity private ownerIdentity;
+    uint256 private nextVersion;
+    uint256 private nextVariant;
+
+    function setUp() public {
+        vm.warp(1_800_000_000);
+        MockSignatureVerifier signatureVerifier = new MockSignatureVerifier();
+        baseImageRegistry = new BaseImageRegistry(signatureVerifier);
+        workloadRegistry = new WorkloadRegistry(signatureVerifier);
+        ownerIdentity = PublicIdentity({typeId: 1, key: hex"01020304"});
+    }
+
+    function test_reserved_attribute_hash_vectors_and_boolean_encoding() public pure {
+        assertEq(
+            TEE_ATTRIBUTE_INTEL_TDX_DEBUG, bytes32(0xe96023946a6ad61275cb45a796a2905e3d923139ce33b7734f3bea4eec3d72cd)
+        );
+        assertEq(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, bytes32(0xe3517680fe2d4f15751da85b0400ea909bb3d5ae76232c10a6c447031d6389b9)
+        );
+        assertEq(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
+            bytes32(0x9090b994ea4098b565ee0da01c4bcaa083a5bfb19c0a797c7ffe3de7ce0251e1)
+        );
+        assertEq(
+            TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+            bytes32(0xbc505eab3cf5643bdf24f1dee86998cd93d05a297e4c34f5e8f37bba764a8116)
+        );
+        assertEq(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+            bytes32(0x15647616165618c3cfed2ab7f083f2f7eef7f57519e43d97ab220ff7860157d2)
+        );
+        assertEq(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+            bytes32(0x279fd9a317a2dc8dfeea12391ea795ac6c21ff52977c499f910f07a27afbed7d)
+        );
+        assertEq(TEE_ATTRIBUTE_FALSE, bytes32(0));
+        assertEq(TEE_ATTRIBUTE_TRUE, bytes32(uint256(1)));
+    }
+
+    function test_base_image_accepts_missing_false_and_true_reserved_attributes() public {
+        _registerBaseImage(new Attribute[](0));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_FALSE));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE));
+    }
+
+    function test_base_image_rejects_malformed_reserved_attribute_value() public {
+        bytes32 actual = bytes32(uint256(2));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, actual
+            )
+        );
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, actual));
+    }
+
+    function test_base_image_accepts_missing_and_valid_tdx_tcb_masks() public {
+        _registerBaseImage(new Attribute[](0));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_OK)));
+        _registerBaseImage(
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_CONFIGURABLE_MASK))
+        );
+    }
+
+    function test_base_image_rejects_invalid_tdx_tcb_masks() public {
+        bytes32[4] memory invalidMasks =
+            [bytes32(0), bytes32(uint256(2)), bytes32(uint256(0x41)), bytes32(uint256(0x401))];
+        for (uint256 i = 0; i < invalidMasks.length; i++) {
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    BaseImageRegistry.InvalidTeeAttributeValue.selector,
+                    TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+                    invalidMasks[i]
+                )
+            );
+            _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, invalidMasks[i]));
+        }
+    }
+
+    function test_base_image_accepts_all_reserved_attributes_in_measurement_variant() public {
+        Attribute[] memory variantAttributes = _allReservedAttributes();
+        bytes32 baseImageId = _registerBaseImageWithVariant(new Attribute[](0), variantAttributes);
+        bytes32 profileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, "test-platform"));
+        bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, profileId, "test-variant"));
+
+        MeasurementVariant memory stored = baseImageRegistry.getMeasurementVariant(variantId);
+        assertEq(stored.attributes.length, variantAttributes.length);
+        for (uint256 i = 0; i < variantAttributes.length; i++) {
+            assertEq(stored.attributes[i].key, variantAttributes[i].key);
+            assertEq(stored.attributes[i].value, variantAttributes[i].value);
+        }
+    }
+
+    function test_measurement_variant_rejects_malformed_reserved_attributes() public {
+        bytes32 invalidTcb = bytes32(uint256(1) << 32);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, invalidTcb
+            )
+        );
+        _registerBaseImageWithVariant(
+            new Attribute[](0), _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, invalidTcb)
+        );
+
+        bytes32 invalidPlatformInfo = bytes32(uint256(1) | (uint256(1) << 64));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+                invalidPlatformInfo
+            )
+        );
+        _registerBaseImageWithVariant(
+            new Attribute[](0), _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, invalidPlatformInfo)
+        );
+
+        bytes32 invalidTdxMask = bytes32(uint256(2));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector,
+                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
+                invalidTdxMask
+            )
+        );
+        _registerBaseImageWithVariant(
+            new Attribute[](0), _attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, invalidTdxMask)
+        );
+    }
+
+    function test_base_image_accepts_and_validates_amd_snp_packed_attributes() public {
+        bytes32 validTcb = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
+        bytes32 validPlatformInfo = bytes32(uint256(0x20) | (uint256(1) << 64));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, validTcb));
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, validPlatformInfo));
+
+        bytes32 invalidTcb = bytes32(uint256(1) << 32);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, invalidTcb
+            )
+        );
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, invalidTcb));
+
+        bytes32 conflictingPlatformInfo = bytes32(uint256(1) | (uint256(1) << 64));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BaseImageRegistry.InvalidTeeAttributeValue.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+                conflictingPlatformInfo
+            )
+        );
+        _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, conflictingPlatformInfo));
+    }
+
+    function test_add_platform_variants_allows_reserved_attributes_on_new_profile_and_variant() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+        bytes32 variantId = _addPlatformVariant(
+            baseImageId,
+            "new-platform",
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(uint256(3))),
+            _allReservedAttributes()
+        );
+
+        MeasurementVariant memory stored = baseImageRegistry.getMeasurementVariant(variantId);
+        assertEq(stored.attributes.length, 6);
+    }
+
+    function test_add_platform_variants_allows_variant_override_when_stored_profile_is_missing_or_false() public {
+        bytes32 missingBaseImageId = _registerBaseImage(new Attribute[](0));
+        _addPlatformVariant(
+            missingBaseImageId,
+            "test-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE)
+        );
+
+        bytes32 falseBaseImageId =
+            _registerBaseImage(_attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_FALSE));
+        _addPlatformVariant(
+            falseBaseImageId,
+            "test-platform",
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE)
+        );
+
+        bytes32 profileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, falseBaseImageId, "test-platform"));
+        PlatformProfile memory storedProfile = baseImageRegistry.getPlatformProfile(profileId);
+        assertEq(storedProfile.attributes.length, 1);
+        assertEq(storedProfile.attributes[0].key, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA);
+        assertEq(storedProfile.attributes[0].value, TEE_ATTRIBUTE_FALSE);
+    }
+
+    function test_add_platform_variants_rejects_existing_variant_replacement() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+        bytes32 profileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, "test-platform"));
+        bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, profileId, "test-variant"));
+
+        PlatformProfile[] memory profiles = new PlatformProfile[](1);
+        profiles[0] =
+            PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
+        MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] = MeasurementVariant({
+            name: "test-variant",
+            overridePcrs: new PcrSpec[](0),
+            attributes: _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE)
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(BaseImageRegistry.MeasurementVariantAlreadyExists.selector, variantId));
+        baseImageRegistry.addPlatformVariants(
+            baseImageId, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
+        );
+    }
+
+    function test_add_platform_variants_allows_inherited_or_explicit_true_when_stored_profile_is_true() public {
+        bytes32 baseImageId = _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE));
+
+        _addPlatformVariant(baseImageId, "test-platform", new Attribute[](0), new Attribute[](0));
+        _addPlatformVariant(
+            baseImageId,
+            "test-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE)
+        );
+    }
+
+    function test_add_platform_variants_allows_false_and_ordinary_attributes() public {
+        bytes32 baseImageId = _registerBaseImage(new Attribute[](0));
+
+        _addPlatformVariant(
+            baseImageId,
+            "new-platform",
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_FALSE),
+            _attributes(keccak256("ordinary.metadata"), TEE_ATTRIBUTE_TRUE)
+        );
+        _addPlatformVariant(
+            baseImageId,
+            "test-platform",
+            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_FALSE)
+        );
+    }
+
+    function test_workload_accepts_missing_false_and_false_true_reserved_requirements() public {
+        _registerWorkload(new AttributeRequirement[](0));
+        _registerWorkload(_requirements(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, _values(false, false)));
+        _registerWorkload(_requirements(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, _values(false, true)));
+    }
+
+    function test_workload_rejects_every_malformed_reserved_requirement_shape() public {
+        bytes32 key = TEE_ATTRIBUTE_INTEL_TDX_DEBUG;
+
+        _expectRequirementLength(key, new bytes32[](0), 0);
+        _expectRequirementValue(key, _singleValue(TEE_ATTRIBUTE_TRUE), TEE_ATTRIBUTE_TRUE);
+        _expectRequirementValue(key, _pairValues(TEE_ATTRIBUTE_FALSE, TEE_ATTRIBUTE_FALSE), TEE_ATTRIBUTE_FALSE);
+        _expectRequirementValue(key, _pairValues(TEE_ATTRIBUTE_TRUE, TEE_ATTRIBUTE_FALSE), TEE_ATTRIBUTE_TRUE);
+        _expectRequirementValue(key, _pairValues(TEE_ATTRIBUTE_TRUE, TEE_ATTRIBUTE_TRUE), TEE_ATTRIBUTE_TRUE);
+        _expectRequirementValue(key, _singleValue(bytes32(uint256(2))), bytes32(uint256(2)));
+
+        bytes32[] memory threeValues = new bytes32[](3);
+        threeValues[0] = TEE_ATTRIBUTE_FALSE;
+        threeValues[1] = TEE_ATTRIBUTE_TRUE;
+        threeValues[2] = TEE_ATTRIBUTE_FALSE;
+        _expectRequirementLength(key, threeValues, 3);
+    }
+
+    function test_workload_keeps_empty_allowed_values_for_ordinary_metadata() public {
+        bytes32 ordinaryKey = keccak256("ordinary.metadata");
+        _registerWorkload(_requirements(ordinaryKey, new bytes32[](0)));
+    }
+
+    function test_workload_accepts_valid_tdx_tcb_masks() public {
+        _registerWorkload(
+            _requirements(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(TDX_TCB_STATUS_OK)))
+        );
+        _registerWorkload(
+            _requirements(
+                TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(TDX_TCB_STATUS_CONFIGURABLE_MASK))
+            )
+        );
+    }
+
+    function test_workload_rejects_invalid_tdx_tcb_requirement_shapes_and_masks() public {
+        _expectRequirementLength(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, new bytes32[](0), 0);
+        _expectRequirementLength(
+            TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _pairValues(bytes32(TDX_TCB_STATUS_OK), bytes32(uint256(3))), 2
+        );
+        _expectRequirementValue(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(0)), bytes32(0));
+        _expectRequirementValue(
+            TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, _singleValue(bytes32(uint256(0x401))), bytes32(uint256(0x401))
+        );
+    }
+
+    function test_workload_accepts_and_validates_amd_snp_packed_requirements() public {
+        bytes32 validTcb = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
+        bytes32 validPlatformInfo = bytes32(uint256(0x20) | (uint256(1) << 64));
+        _registerWorkload(_requirements(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, _singleValue(validTcb)));
+        _registerWorkload(
+            _requirements(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, _singleValue(validPlatformInfo))
+        );
+
+        _expectRequirementLength(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, new bytes32[](0), 0);
+        _expectRequirementLength(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, _pairValues(validPlatformInfo, validPlatformInfo), 2
+        );
+        _expectRequirementValue(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, _singleValue(bytes32(uint256(1) << 32)), bytes32(uint256(1) << 32)
+        );
+        _expectRequirementValue(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
+            _singleValue(bytes32(uint256(1) | (uint256(1) << 64))),
+            bytes32(uint256(1) | (uint256(1) << 64))
+        );
+    }
+
+    function _expectRequirementLength(bytes32 key, bytes32[] memory values, uint256 actualLength) private {
+        vm.expectRevert(
+            abi.encodeWithSelector(WorkloadRegistry.InvalidTeeAttributeRequirementLength.selector, key, actualLength)
+        );
+        _registerWorkload(_requirements(key, values));
+    }
+
+    function _expectRequirementValue(bytes32 key, bytes32[] memory values, bytes32 actualValue) private {
+        vm.expectRevert(
+            abi.encodeWithSelector(WorkloadRegistry.InvalidTeeAttributeRequirementValue.selector, key, actualValue)
+        );
+        _registerWorkload(_requirements(key, values));
+    }
+
+    function _registerBaseImage(Attribute[] memory attributes) private returns (bytes32) {
+        return _registerBaseImageWithVariant(attributes, new Attribute[](0));
+    }
+
+    function _registerBaseImageWithVariant(Attribute[] memory profileAttributes, Attribute[] memory variantAttributes)
+        private
+        returns (bytes32)
+    {
+        nextVersion++;
+        BaseImageSpec memory spec =
+            BaseImageSpec({name: "tee-attribute-base", version: vm.toString(nextVersion), uri: ""});
+        PlatformProfile[] memory profiles = new PlatformProfile[](1);
+        profiles[0] =
+            PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: profileAttributes});
+        MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] =
+            MeasurementVariant({name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: variantAttributes});
+        return baseImageRegistry.registerBaseImage(
+            spec, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
+        );
+    }
+
+    function _registerWorkload(AttributeRequirement[] memory requirements) private returns (bytes32) {
+        nextVersion++;
+        WorkloadSpec memory spec = WorkloadSpec({
+            name: "tee-attribute-workload",
+            version: vm.toString(nextVersion),
+            sessionTtl: 1 days,
+            baseImageMode: AccessMode.ANY,
+            baseImageIds: new bytes32[](0),
+            requirements: requirements,
+            pcrs: new PcrSpec[](0)
+        });
+        return workloadRegistry.registerWorkload(spec, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
+    }
+
+    function _addPlatformVariant(
+        bytes32 baseImageId,
+        string memory profileName,
+        Attribute[] memory profileAttributes,
+        Attribute[] memory variantAttributes
+    ) private returns (bytes32 variantId) {
+        nextVariant++;
+        string memory variantName = string.concat("appended-variant-", vm.toString(nextVariant));
+        PlatformProfile[] memory profiles = new PlatformProfile[](1);
+        profiles[0] = PlatformProfile({name: profileName, invariants: new PcrSpec[](0), attributes: profileAttributes});
+        MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] =
+            MeasurementVariant({name: variantName, overridePcrs: new PcrSpec[](0), attributes: variantAttributes});
+        baseImageRegistry.addPlatformVariants(
+            baseImageId, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
+        );
+        bytes32 profileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profileName));
+        variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, profileId, variantName));
+    }
+
+    function _attributes(bytes32 key, bytes32 value) private pure returns (Attribute[] memory attributes) {
+        attributes = new Attribute[](1);
+        attributes[0] = Attribute({key: key, value: value});
+    }
+
+    function _requirements(bytes32 key, bytes32[] memory values)
+        private
+        pure
+        returns (AttributeRequirement[] memory requirements)
+    {
+        requirements = new AttributeRequirement[](1);
+        requirements[0] = AttributeRequirement({key: key, allowedValues: values});
+    }
+
+    function _values(bool first, bool second) private pure returns (bytes32[] memory values) {
+        values = new bytes32[](second ? 2 : 1);
+        values[0] = first ? TEE_ATTRIBUTE_TRUE : TEE_ATTRIBUTE_FALSE;
+        if (second) values[1] = TEE_ATTRIBUTE_TRUE;
+    }
+
+    function _singleValue(bytes32 value) private pure returns (bytes32[] memory values) {
+        values = new bytes32[](1);
+        values[0] = value;
+    }
+
+    function _pairValues(bytes32 first, bytes32 second) private pure returns (bytes32[] memory values) {
+        values = new bytes32[](2);
+        values[0] = first;
+        values[1] = second;
+    }
+
+    function _allReservedAttributes() private pure returns (Attribute[] memory attributes) {
+        attributes = new Attribute[](6);
+        attributes[0] = Attribute(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE);
+        attributes[1] = Attribute(TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED, bytes32(TDX_TCB_STATUS_CONFIGURABLE_MASK));
+        attributes[2] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_TRUE);
+        attributes[3] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE);
+        attributes[4] = Attribute(
+            TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004
+        );
+        attributes[5] =
+            Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY, bytes32(uint256(0x20) | (uint256(1) << 64)));
+    }
+}

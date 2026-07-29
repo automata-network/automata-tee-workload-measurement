@@ -2,9 +2,11 @@
 //!
 //! Subcommands:
 //!   - `derive`  — fetch JWKS, print the four upsert args for every kid.
-//!   - `status`  — diff JWKS vs the on-chain registry; flag missing / drifted / expiring kids.
+//!   - `status`  — diff JWKS vs the on-chain registry; flag missing / drifted /
+//!     expiring / revoked kids.
 //!   - `sync`    — broadcast `upsertMaaSigningKey` for every JWKS kid not already
-//!                 current on chain. `--dry-run` prints `cast send` lines instead.
+//!     current on chain, except permanently revoked kids. `--dry-run` prints
+//!     `cast send` lines instead.
 //!   - `revoke`  — broadcast `revokeMaaSigningKey` for one kid.
 
 mod cert;
@@ -20,7 +22,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use tracing::{info, warn};
 
-use crate::chain::MaaKeyRegistryClient;
+use crate::chain::{MaaKeyRegistryClient, MaaSigningKey};
 use crate::derive::{Include, UpsertParams, derive_all};
 
 /// Default MAA endpoint — matches the portal's hard-coded `AZURE_MAA_REGION_DEFAULT = "eus"`.
@@ -143,7 +145,8 @@ struct SyncArgs {
     /// Skip the y/N prompt before broadcasting.
     #[arg(short, long)]
     yes: bool,
-    /// Re-upsert kids that are already current. Default: skip them.
+    /// Re-upsert kids that are already current and not revoked. Revoked kids
+    /// are always skipped.
     #[arg(long)]
     force: bool,
 }
@@ -226,6 +229,7 @@ async fn run_status(args: StatusArgs) -> Result<()> {
     let mut missing = 0u32;
     let mut drifted = 0u32;
     let mut expiring = 0u32;
+    let mut revoked = 0u32;
 
     for p in &params {
         match classify(&client, p, now).await? {
@@ -233,6 +237,7 @@ async fn run_status(args: StatusArgs) -> Result<()> {
             KidState::Missing => missing += 1,
             KidState::Drifted(_) => drifted += 1,
             KidState::ExpiringSoon => expiring += 1,
+            KidState::Revoked => revoked += 1,
         }
     }
 
@@ -243,6 +248,7 @@ async fn run_status(args: StatusArgs) -> Result<()> {
     println!("  missing      : {missing}");
     println!("  drifted      : {drifted}");
     println!("  expiring <30d: {expiring}");
+    println!("  revoked      : {revoked}");
     println!();
 
     for p in &params {
@@ -259,8 +265,30 @@ async fn run_sync(args: SyncArgs) -> Result<()> {
 
     let now = unix_now();
 
-    // Sanity: notAfter must be at least MIN_VALIDITY_SECS in the future.
+    // Decide which kids need work.
+    let read_client = MaaKeyRegistryClient::read_only(&args.chain.rpc, args.chain.registry).await?;
+    let mut to_upsert: Vec<&UpsertParams> = Vec::new();
+    let mut revoked: Vec<&UpsertParams> = Vec::new();
     for p in &params {
+        let state = classify(&read_client, p, now).await?;
+        if matches!(state, KidState::Revoked) {
+            revoked.push(p);
+        } else if should_upsert(&state, args.force) {
+            to_upsert.push(p);
+        }
+    }
+
+    if !revoked.is_empty() {
+        println!("Skipping {} permanently revoked kid(s):", revoked.len());
+        for p in revoked {
+            println!("  - {} ({:#x})", p.kid, p.kid_hash);
+        }
+    }
+
+    // Sanity: every eligible upsert must have at least MIN_VALIDITY_SECS
+    // remaining. Permanently revoked kids are not eligible and cannot block
+    // rotation of other keys.
+    for p in &to_upsert {
         if p.not_after < now + MIN_VALIDITY_SECS {
             warn!(
                 kid = %p.kid,
@@ -273,27 +301,16 @@ async fn run_sync(args: SyncArgs) -> Result<()> {
         }
     }
 
-    // Decide which kids need work.
-    let read_client =
-        MaaKeyRegistryClient::read_only(&args.chain.rpc, args.chain.registry).await?;
-    let mut to_upsert: Vec<&UpsertParams> = Vec::new();
-    for p in &params {
-        let state = classify(&read_client, p, now).await?;
-        let needs = matches!(
-            state,
-            KidState::Missing | KidState::Drifted(_) | KidState::ExpiringSoon
-        ) || args.force;
-        if needs {
-            to_upsert.push(p);
-        }
-    }
-
     if to_upsert.is_empty() {
-        println!("Nothing to do — every JWKS kid is current on chain.");
+        println!("Nothing to do — no JWKS kid is eligible for upsert.");
         return Ok(());
     }
 
-    println!("Plan: upsert {} kid(s) on {:#x}", to_upsert.len(), args.chain.registry);
+    println!(
+        "Plan: upsert {} kid(s) on {:#x}",
+        to_upsert.len(),
+        args.chain.registry
+    );
     for p in &to_upsert {
         println!("  - {} (notAfter {})", p.kid, p.not_after);
     }
@@ -360,9 +377,13 @@ async fn run_revoke(args: RevokeArgs) -> Result<()> {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+#[derive(Debug, PartialEq, Eq)]
 enum KidState {
     Current,
     Missing,
+    /// Registered and permanently revoked. It must never be upserted again,
+    /// even when `sync --force` is used.
+    Revoked,
     /// Registered, but at least one of (pkcs1Pubkey, issuerHash, notAfter)
     /// disagrees with what JWKS currently advertises.
     Drifted(&'static str),
@@ -373,28 +394,39 @@ enum KidState {
 
 const EXPIRING_SOON_WINDOW: u64 = 30 * 86_400;
 
-async fn classify(
-    client: &MaaKeyRegistryClient,
-    p: &UpsertParams,
-    now: u64,
-) -> Result<KidState> {
-    if !client.has_kid(p.kid_hash).await? {
-        return Ok(KidState::Missing);
-    }
+async fn classify(client: &MaaKeyRegistryClient, p: &UpsertParams, now: u64) -> Result<KidState> {
     let on_chain = client.get_key(p.kid_hash).await?;
+    Ok(classify_on_chain(&on_chain, p, now))
+}
+
+fn classify_on_chain(on_chain: &MaaSigningKey, p: &UpsertParams, now: u64) -> KidState {
+    if on_chain.pkcs1Pubkey.is_empty() {
+        return KidState::Missing;
+    }
+    if on_chain.revoked {
+        return KidState::Revoked;
+    }
     if on_chain.pkcs1Pubkey.as_ref() != p.pkcs1_pubkey.as_ref() {
-        return Ok(KidState::Drifted("pkcs1Pubkey"));
+        return KidState::Drifted("pkcs1Pubkey");
     }
     if on_chain.issuerHash != p.issuer_hash {
-        return Ok(KidState::Drifted("issuerHash"));
+        return KidState::Drifted("issuerHash");
     }
     if on_chain.notAfter != p.not_after {
-        return Ok(KidState::Drifted("notAfter"));
+        return KidState::Drifted("notAfter");
     }
     if p.not_after.saturating_sub(now) < EXPIRING_SOON_WINDOW {
-        return Ok(KidState::ExpiringSoon);
+        return KidState::ExpiringSoon;
     }
-    Ok(KidState::Current)
+    KidState::Current
+}
+
+fn should_upsert(state: &KidState, force: bool) -> bool {
+    match state {
+        KidState::Revoked => false,
+        KidState::Current => force,
+        KidState::Missing | KidState::Drifted(_) | KidState::ExpiringSoon => true,
+    }
 }
 
 fn unix_now() -> u64 {
@@ -434,7 +466,11 @@ fn param_to_json(p: &UpsertParams) -> serde_json::Value {
 }
 
 fn print_param_block(i: usize, p: &UpsertParams) {
-    let selfsign = if p.is_self_signed { "self-signed" } else { "chained" };
+    let selfsign = if p.is_self_signed {
+        "self-signed"
+    } else {
+        "chained"
+    };
     println!("[{i}] kid          : {}", p.kid);
     println!("    cert         : {selfsign}, RSA-{}", p.rsa_bits);
     println!("    kidHash      : {:#x}", p.kid_hash);
@@ -453,6 +489,7 @@ fn print_status_line(p: &UpsertParams, state: &KidState, now: u64) {
     let tag = match state {
         KidState::Current => "current".to_string(),
         KidState::Missing => "MISSING".to_string(),
+        KidState::Revoked => "REVOKED".to_string(),
         KidState::Drifted(field) => format!("DRIFTED ({field})"),
         KidState::ExpiringSoon => "expiring".to_string(),
     };
@@ -467,4 +504,56 @@ fn confirm(prompt: &str) -> Result<bool> {
     std::io::stdin().lock().read_line(&mut line)?;
     let ans = line.trim().to_ascii_lowercase();
     Ok(ans == "y" || ans == "yes")
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::{B256, Bytes};
+
+    use super::*;
+
+    fn params() -> UpsertParams {
+        UpsertParams {
+            kid: "test-kid".to_string(),
+            kid_hash: B256::repeat_byte(0x11),
+            pkcs1_pubkey: Bytes::from_static(&[0x30, 0x01]),
+            issuer_hash: B256::repeat_byte(0x22),
+            not_after: 10_000_000,
+            is_self_signed: true,
+            rsa_bits: 2048,
+        }
+    }
+
+    fn on_chain_key(params: &UpsertParams, revoked: bool) -> MaaSigningKey {
+        MaaSigningKey {
+            pkcs1Pubkey: params.pkcs1_pubkey.clone(),
+            issuerHash: params.issuer_hash,
+            notAfter: params.not_after,
+            revoked,
+        }
+    }
+
+    #[test]
+    fn revoked_record_is_classified_separately_even_when_metadata_drifted() {
+        let params = params();
+        let mut on_chain = on_chain_key(&params, true);
+        on_chain.pkcs1Pubkey = Bytes::from_static(&[0xff]);
+
+        assert_eq!(classify_on_chain(&on_chain, &params, 1), KidState::Revoked);
+    }
+
+    #[test]
+    fn revoked_record_is_never_eligible_for_upsert() {
+        assert!(!should_upsert(&KidState::Revoked, false));
+        assert!(!should_upsert(&KidState::Revoked, true));
+    }
+
+    #[test]
+    fn force_only_reupserts_current_non_revoked_record() {
+        assert!(!should_upsert(&KidState::Current, false));
+        assert!(should_upsert(&KidState::Current, true));
+        assert!(should_upsert(&KidState::Missing, false));
+        assert!(should_upsert(&KidState::Drifted("issuerHash"), false));
+        assert!(should_upsert(&KidState::ExpiringSoon, false));
+    }
 }

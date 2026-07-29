@@ -1,8 +1,9 @@
 # WorkloadRegistry -- Detailed Analysis
 
-**File**: `src/WorkloadRegistry.sol` (312 lines)
+**File**: `src/WorkloadRegistry.sol`
 **Interface**: `src/interfaces/registries/IWorkloadRegistry.sol`
-**Role**: Manages application measurement policies (PCR 20-23)
+**Role**: Manages application measurement policies. PCR 20 through 23 is the
+usual convention, not a contract-enforced range.
 
 ## Inheritance
 
@@ -45,11 +46,11 @@ struct WorkloadSpecStorage {
 struct WorkloadSpec {
     string name;
     string version;
-    uint64 ttl;                          // session TTL in seconds (0 ⇒ SessionRegistry default of 30 days)
+    uint64 sessionTtl;                   // session TTL in seconds (0 ⇒ SessionRegistry default of 30 days)
     AccessMode baseImageMode;            // ANY | WHITELIST | BLACKLIST
     bytes32[] baseImageIds;              // list for whitelist/blacklist
     AttributeRequirement[] requirements; // constraints on platform attributes
-    PcrSpec[] pcrs;                      // PCR 20-23 specs
+    PcrSpec[] pcrs;                      // workload PCR specs by convention
 }
 
 struct AttributeRequirement {
@@ -77,16 +78,16 @@ workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, name, version))
 ```solidity
 function registerWorkload(
     WorkloadSpec calldata spec,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external returns (bytes32 workloadId)
 ```
 
 - Registers workload with full policy specification
-- `spec.ttl` is consumed later by `SessionRegistry`; `ttl == 0` means "use `DEFAULT_CVM_TTL` (30 days)" (`src/SessionRegistry.sol:273-274`)
-- Computes owner fingerprint, verifies signature over `sha256(abi.encode(WORKLOAD_REGISTER_MSG, chainid, address(this), expireAt, spec))`
-- Registration allowed when: unpaused OR owner is whitelisted (uses `_checkRegistrationAllowed`, NOT `whenNotPaused`)
+- `spec.sessionTtl` is consumed later by `SessionRegistry`; `sessionTtl == 0` means "use `DEFAULT_CVM_TTL` (30 days)"
+- Computes owner fingerprint, verifies signature over `sha256(abi.encode(WORKLOAD_REGISTER_MSG, chainid, address(this), opExpiresAt, spec))`
+- Registration allowed when: `registrationRestricted()` is false, or the owner is whitelisted
 - Populates `_baseImageSet` mapping for efficient `isBaseImageAllowed` lookups
 - Validates: signature expiry, PCR order, requirement key uniqueness
 - Emits: `WorkloadRegistered`
@@ -95,14 +96,14 @@ function registerWorkload(
 ```solidity
 function deactivateWorkload(
     bytes32 workloadId,
-    uint64 expireAt,
+    uint64 opExpiresAt,
     PublicIdentity calldata ownerIdentity,
     bytes calldata ownerSignature
 ) external
 ```
 
 - Sets `isRevoked = true` (soft delete)
-- Requires owner signature over `sha256(abi.encode(WORKLOAD_DEACTIVATE_MSG, chainid, address(this), expireAt, workloadId))`
+- Requires owner signature over `sha256(abi.encode(WORKLOAD_DEACTIVATE_MSG, chainid, address(this), opExpiresAt, workloadId))`
 - Emits: `WorkloadDeactivated`
 
 ### `isBaseImageAllowed`
@@ -117,6 +118,11 @@ Logic:
 - `AccessMode.ANY` → always `true`
 - `AccessMode.WHITELIST` → `true` only if `_baseImageSet[workloadId][baseImageId] == true`
 - `AccessMode.BLACKLIST` → `true` only if `_baseImageSet[workloadId][baseImageId] == false`
+
+`registerWorkload` does not query `BaseImageRegistry`. A workload may list a
+deterministic base-image ID before that base image is registered. An empty
+`WHITELIST` is valid and denies every base image. An empty `BLACKLIST` allows
+every base image.
 
 ### View Functions
 
@@ -135,6 +141,7 @@ Logic:
 | `isWhitelisted(bytes32)` | Check whitelist status |
 | `pause()` | Pause registration |
 | `unpause()` | Unpause registration |
+| `registrationRestricted()` | True when only whitelisted owners may register |
 
 ## Errors
 
@@ -143,13 +150,16 @@ Logic:
 | `WorkloadAlreadyExists(bytes32 workloadId)` | Duplicate registration |
 | `WorkloadNotFound(bytes32 workloadId)` | ID doesn't exist |
 | `WorkloadNotActive(bytes32 workloadId)` | Workload is revoked |
-| `InvalidSignature()` | Signature verification failed |
-| `Unauthorized()` | Signer != owner |
-| `SignatureExpired()` | `block.timestamp > expireAt` |
-| `InvalidPcrOrder()` | PCR specs not sorted ascending |
+| `InvalidSignature(bytes32 messageHash, bytes32 signerFingerprint)` | Signature verification failed |
+| `Unauthorized(bytes32 actualOwner, bytes32 expectedOwner)` | Signer does not own the workload |
+| `SignatureExpired(uint64 opExpiresAt, uint64 nowTs)` | `block.timestamp > opExpiresAt` |
+| `InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex)` | PCR specs are not strictly ascending |
 | `PcrIndexOutOfRange(uint8 pcrIndex)` | PCR index >= 24 |
 | `EmptyMatchData(uint8 pcrIndex)` | `DYNAMIC_SUBSET` / `DYNAMIC_SUBSEQUENCE` spec with zero-length `matchData` |
+| `InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength)` | `STATIC` spec does not contain exactly one `matchData` entry |
 | `DuplicateRequirementKey(bytes32 key)` | Repeated key in requirements array |
+| `InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength)` | A reserved Boolean has the wrong number of values, or an Intel TDX or AMD SEV-SNP packed requirement does not contain exactly one value |
+| `InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue)` | A reserved Boolean is invalid, the Intel TDX TCB mask is invalid, or an AMD SEV-SNP packed value has an invalid layout |
 | `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not whitelisted |
 
 ## Events
@@ -163,10 +173,14 @@ Logic:
 
 ## Validation Rules
 
-1. **PCR ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, and every `pcrIndex` must be `< 24`
-2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateUniqueRequirementKeys`)
-3. **Signature expiry**: `block.timestamp <= expireAt`
-4. **Registration gating**: If `paused()` and owner not in `_whitelist`, revert `NotWhitelisted`. Unpaused = open registration.
+1. **PCR shape and ordering**: `pcrSpecs` must be sorted ascending by `pcrIndex`, every `pcrIndex` must be `< 24`, `STATIC` must contain exactly one `matchData` entry, and both dynamic types must contain at least one
+2. **Requirement key uniqueness**: No duplicate keys in `requirements` array (hash-table check via `_validateRequirements`)
+3. **Reserved Boolean TEE requirements**: Intel TDX debug, AMD SEV-SNP debug, and AMD SEV-SNP `MIGRATE_MA` accept only `[bytes32(0)]` or `[bytes32(0), bytes32(uint256(1))]`. Missing means `[false]`. This is the canonical encoding written here; `verifyTeePolicy` matches the verified state against the listed values themselves, so it does not depend on this contract having normalized them.
+4. **Intel TDX TCB requirement**: Exactly one mask is required. The mask must include `ok` and may contain only bits in `0x33f`. Missing means `ok` only.
+5. **AMD SEV-SNP packed requirements**: `tcb.minimum` and `platform-info.policy` each accept exactly one valid packed value. A missing requirement resolves to the active exact-CPUID `AmdSnpSecurityPolicyRegistry` default during verification. An explicit requirement replaces that workload-side default. Only the *layout* of the value is validated here, never its magnitude — a workload may state a value weaker than the registry default, which takes effect if and only if the base image states a matching relaxation. See [the default-not-floor section](cvm-registry-amd-snp-policy.md) before relying on the registry record as a minimum.
+6. **Base-image set**: `baseImageIds` are stored without a `BaseImageRegistry` lookup. An empty `WHITELIST` denies every base image; an empty `BLACKLIST` allows every base image.
+7. **Signature expiry**: `block.timestamp <= opExpiresAt`
+8. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration.
 
 ## Initialization
 

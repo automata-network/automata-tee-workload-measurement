@@ -1,7 +1,6 @@
 # CVM Registry Contracts -- Architecture Overview
 
-**Source**: `~/work/automata-tee-workload-measurement/`
-**Total**: ~5,487 lines of Solidity across 30 source files
+**Source**: repository root
 **Framework**: Foundry
 
 ## High-Level Architecture
@@ -11,13 +10,13 @@ Three-tier on-chain registry establishing cryptographic chains of trust from TEE
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    SessionRegistry                          │
-│         (orchestrator: 9-step attestation pipeline)         │
+│       (attestation verification and session lifecycle)      │
 │   Merges policies from both registries below, verifies     │
 │   TEE + TPM evidence, creates time-bounded sessions        │
 ├──────────────────────────┬──────────────────────────────────┤
 │   BaseImageRegistry      │      WorkloadRegistry            │
 │   (OS/platform layer)    │      (application layer)         │
-│   PCR 0-19 policies      │      PCR 20-23 policies          │
+│   Platform PCR policies  │      Workload PCR policies       │
 │   Platform profiles +    │      Base image access control   │
 │   machine variants       │      Attribute requirements      │
 └──────────┬───────────────┴──────────────┬───────────────────┘
@@ -29,9 +28,11 @@ Three-tier on-chain registry establishing cryptographic chains of trust from TEE
            │                              │
      ┌─────┴──────────────┐      ┌────────┴────────┐
      │ TpmVerifier         │      │  KeyResolver    │
-     │ AkCollateralVerifier│      │ (fingerprint    │
-     │ (TPM quote/certify) │      │  directory)     │
-     └─────────────────────┘      └─────────────────┘
+     │ (inherited TPM      │      │ (fingerprint    │
+     │  quote/certify)     │      │  directory)     │
+     └─────────┬───────────┘      └─────────────────┘
+               │ external
+        AkCollateralVerifier ── MaaKeyRegistry
 ```
 
 ## Core Design Principles
@@ -40,11 +41,20 @@ Three-tier on-chain registry establishing cryptographic chains of trust from TEE
 
 2. **Signature-verified operations** -- No `msg.sender` checks. Owner operations require off-chain signatures. Anyone can submit a valid signature on behalf of the owner. Prevents address-based front-running; enables intent-based access control.
 
-3. **Policy hierarchy** -- Platform invariants + machine-specific variant overrides, merged at session registration time. BaseImage provides PCR 0-19, Workload provides PCR 20-23.
+3. **Policy hierarchy** -- Platform invariants and machine-specific variant
+overrides are merged at session registration time. By convention, a base image
+defines platform PCR policy and a workload defines workload PCR policy. The
+contracts require sorted PCR indexes below 24 but do not enforce a fixed
+platform-versus-workload index split.
 
-4. **Stateless verifiers** -- `TeeVerifier` and `SignatureVerifier` are immutable, stateless, shared across registries. No storage, no upgrades needed.
+4. **Verified TEE policy** -- `TeeVerifier` extracts signed security state.
+`AmdSnpSecurityPolicyRegistry` stores per-CPUID AMD defaults and evaluates TEE
+and metadata attributes. An explicit value replaces a default on its policy
+side; the registry value is not an independent mandatory floor.
 
-5. **UUPS upgradeable registries** -- `BaseImageRegistry` (gap=46), `WorkloadRegistry` (gap=47), `SessionRegistry` (gap=47), `KeyResolver` (gap=49) all use UUPS proxy pattern with storage gaps.
+5. **UUPS upgradeable registries** -- `BaseImageRegistry`, `WorkloadRegistry`,
+`SessionRegistry`, `AmdSnpSecurityPolicyRegistry`, and `KeyResolver` use the
+UUPS proxy pattern with storage gaps.
 
 6. **Nonce-based replay protection** -- Per-owner nonce in SessionRegistry, bound into TPM quote `extraData`.
 
@@ -54,21 +64,24 @@ Three-tier on-chain registry establishing cryptographic chains of trust from TEE
 
 ```
 src/
-├── BaseImageRegistry.sol          (525 lines)
-├── WorkloadRegistry.sol           (305 lines)
-├── SessionRegistry.sol            (1,312 lines)
-├── KeyResolver.sol                (102 lines)
+├── BaseImageRegistry.sol
+├── WorkloadRegistry.sol
+├── SessionRegistry.sol
+├── AmdSnpSecurityPolicyRegistry.sol
+├── KeyResolver.sol
 ├── MaaKeyRegistry.sol             (per-region MAA signing keys for AzureMaaJwt)
-├── TeeVerifier.sol                (298 lines)
-├── SignatureVerifier.sol          (172 lines)
+├── TeeVerifier.sol
+├── SignatureVerifier.sol
 ├── bases/
-│   ├── TpmBase.sol                (30 lines)
-│   ├── TpmVerifier.sol            (197 lines)
+│   ├── TpmBase.sol
+│   ├── TpmVerifier.sol
 │   └── AkCollateralVerifier.sol   (MAA JWT + GCP cert chain verification)
 ├── interfaces/
+│   ├── IAkCollateralVerifier.sol
 │   ├── ISignatureVerifier.sol
 │   ├── ITeeVerifier.sol
 │   ├── registries/
+│   │   ├── IAmdSnpSecurityPolicyRegistry.sol
 │   │   ├── IBaseImageRegistry.sol
 │   │   ├── IWorkloadRegistry.sol
 │   │   ├── ISessionRegistry.sol
@@ -99,10 +112,12 @@ src/
 
 ```
 SessionRegistry
-  ├── inherits: TpmVerifier, AkCollateralVerifier, OwnableUpgradeable, UUPSUpgradeable
-  ├── immutable refs: ITeeVerifier, ISignatureVerifier, IBaseImageRegistry,
-  │                   IWorkloadRegistry, IMaaKeyRegistry
-  └── uses: LibKey, LibBytes, Sha2Ext, BytesUtils
+  ├── inherits: ISessionRegistry, TpmVerifier, OwnableUpgradeable, UUPSUpgradeable
+  ├── immutable refs: ITeeVerifier, IAkCollateralVerifier,
+  │                   ISignatureVerifier, IBaseImageRegistry, IWorkloadRegistry,
+  │                   IAmdSnpSecurityPolicyRegistry, and ITpmAttestation
+  │                   through TpmBase
+  └── uses: LibKey, LibBytes, Sha2Ext
 
 BaseImageRegistry
   ├── inherits: IBaseImageRegistry, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable
@@ -117,7 +132,11 @@ WorkloadRegistry
 TeeVerifier
   ├── inherits: ITeeVerifier
   ├── immutable refs: IDcapAttestation, ISnpAttestation
-  └── uses: LibBytes, BytesUtils
+  └── uses: inline assembly for byte extraction
+
+AmdSnpSecurityPolicyRegistry
+  ├── inherits: IAmdSnpSecurityPolicyRegistry, OwnableUpgradeable, UUPSUpgradeable
+  └── uses: AmdSnpPolicy
 
 SignatureVerifier
   ├── inherits: ISignatureVerifier
@@ -129,7 +148,6 @@ KeyResolver
 
 MaaKeyRegistry
   ├── inherits: IMaaKeyRegistry, OwnableUpgradeable, UUPSUpgradeable
-  ├── immutable ref: ISignatureVerifier
   └── stores: per-region Microsoft Azure Attestation signing keys (RS256 / RSA-2048)
               consumed by AkCollateralVerifier when verifying AzureMaaJwt collateral
 
@@ -137,11 +155,10 @@ TpmVerifier (abstract)
   ├── inherits: TpmBase
   └── uses: LibKey
 
-AkCollateralVerifier (abstract)
-  ├── inherits: TpmBase
-  ├── immutable ref: IMaaKeyRegistry
-  ├── virtual: _signatureVerifier() (overridden by SessionRegistry)
-  └── uses: LibString, Base64 (Solady)
+AkCollateralVerifier
+  ├── implements: IAkCollateralVerifier; inherits: TpmBase
+  ├── immutable refs: IMaaKeyRegistry, ISignatureVerifier
+  └── uses: LibString, Base64 (Solady), LibKey, LibX509
 
 TpmBase (abstract)
   └── holds: ITpmAttestation immutable
@@ -173,19 +190,17 @@ NOTE: All use `abi.encode` (not `encodePacked`).
 
 All owner-signed messages use **sha256** (NOT keccak256) and include **chainid + address(this)** for replay protection:
 ```
-message = sha256(abi.encode(MSG_SEPARATOR, block.chainid, address(this), expireAt, ...params))
+message = sha256(abi.encode(MSG_SEPARATOR, block.chainid, address(this), opExpiresAt, ...params))
 ```
 
-## Deployment (Hoodi Testnet)
+## Deployment status
 
-| Contract | Address |
-|---|---|
-| SessionRegistry | `0xD1860020870ffEd23a644d0CD4CA9E7b3Ff53D6c` |
-| BaseImageRegistry | `0x15A8F7A012b2dBad3fAD6020a0dF1F81E86F6171` |
-| WorkloadRegistry | `0xFA8Eb822594d7aA7221aBE3Cd7f3F17c3F16bA9E` |
-| TeeVerifier | `0x80c17Fb23a7f747174DCD29Ec94B8D5a7227F266` |
-| SignatureVerifier | `0x996eB4a6E1FEbF1788B027FA990643B2328A5E72` |
-| KeyResolver | `0x74Ee5a4c6e9207cFDa2Bb28E79bf97CcA42F18E4` |
+The verified TEE attribute implementation adds
+`AmdSnpSecurityPolicyRegistry` and changes the immutable dependencies of
+`SessionRegistry`. It is not the deployment recorded by the older address
+snapshot in `deployment/560048.json`. Do not treat addresses in that file as a
+deployment of this feature. Verify the active implementation and every
+immutable dependency from live chain state before an upgrade.
 
 ## TEE Platform Support
 
@@ -196,7 +211,10 @@ message = sha256(abi.encode(MSG_SEPARATOR, block.chainid, address(this), expireA
 | Intel TDX | GCP | Certificate chain via `ITpmAttestation.verifyCertChain` | `sha256(bytes32(0) || bytes16(0) || UUID)`; RTMR3 = `sha384(bytes48(0) || bytes32(0) || UUID)` |
 | AMD SEV-SNP | GCP | Certificate chain | `sha256(bytes32(0) || report_id)` |
 
-Azure binding (both TDX and SNP) runs entirely inside `_verifyAzureAkCollateral` via the MAA JWT path. `_verifyTeeAkBinding` returns `expectedPcr15 = bytes32(0)` for Azure; no `REPORT_DATA` extraction is performed in `_verifyTeeAkBinding` for the Azure branch.
+For Azure TDX and Azure SEV-SNP, `_verifyAzureAkCollateral` returns the
+MAA-signed `sha256(hclVarData)` as `bindingHash`. `_verifyTeeAkBinding` then
+requires the independently verified raw TEE report's `REPORT_DATA` to equal
+`bindingHash || bytes32(0)`. Azure does not use PCR15 for this binding.
 
 ## Signature Algorithm Support
 

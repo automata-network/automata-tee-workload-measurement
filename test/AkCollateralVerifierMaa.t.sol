@@ -9,7 +9,7 @@ import {AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVer
 import {MaaKeyRegistry} from "../src/MaaKeyRegistry.sol";
 import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {AkPubCollateral, AkPubCollateralType} from "../src/types/Evidence.sol";
+import {AkPubCollateral, AkPubCollateralType, TEEType} from "../src/types/Evidence.sol";
 import {PublicIdentity} from "../src/types/Common.sol";
 import {ALGO_ID_ES256K, ALGO_ID_RS256} from "../src/types/Constants.sol";
 import {LibString} from "@solady/utils/LibString.sol";
@@ -82,6 +82,7 @@ contract AkCollateralVerifierMaaTest is Test {
         AkCollateralVerificationResult memory r = verifier.verifyAkCollateral(c);
 
         assertTrue(r.valid, "valid");
+        assertEq(uint8(r.teeType), uint8(TEEType.IntelTDX), "MAA tee type");
         assertEq(r.bindingHash, bindingHash, "bindingHash equals sha256(hclVarData)");
         assertEq(r.akPub.typeId, ALGO_ID_RS256, "akPub typeId is RS256");
         assertGt(r.akPub.key.length, 0, "akPub key non-empty");
@@ -102,6 +103,7 @@ contract AkCollateralVerifierMaaTest is Test {
         AkCollateralVerificationResult memory r = verifier.verifyAkCollateral(c);
 
         assertTrue(r.valid, "valid");
+        assertEq(uint8(r.teeType), uint8(TEEType.AmdSevSnp), "MAA tee type");
         assertEq(r.bindingHash, bindingHash, "bindingHash matches");
     }
 
@@ -169,6 +171,7 @@ contract AkCollateralVerifierMaaTest is Test {
         // claims with the wrong issuer
         string memory claims = string.concat(
             '{"iss":"https://wrong-issuer.attest.azure.net",',
+            '"iat":1,"nbf":1,"exp":4102444800,',
             '"x-ms-attestation-type":"tdxvm",',
             '"x-ms-compliance-status":"azure-compliant-cvm",',
             '"tdx_report_data":"',
@@ -192,7 +195,8 @@ contract AkCollateralVerifierMaaTest is Test {
         string memory claims = string.concat(
             '{"iss":"',
             TEST_ISSUER_URL,
-            '","x-ms-attestation-type":"tdxvm",',
+            '","iat":1,"nbf":1,"exp":4102444800,',
+            '"x-ms-attestation-type":"tdxvm",',
             '"x-ms-compliance-status":"azure-noncompliant",',
             '"tdx_report_data":"',
             reportData,
@@ -276,7 +280,8 @@ contract AkCollateralVerifierMaaTest is Test {
         string memory claims = string.concat(
             '{"iss":"',
             TEST_ISSUER_URL,
-            '","x-ms-attestation-type":"unknownvm",',
+            '","iat":1,"nbf":1,"exp":4102444800,',
+            '"x-ms-attestation-type":"unknownvm",',
             '"x-ms-compliance-status":"azure-compliant-cvm",',
             '"tdx_report_data":"',
             reportData,
@@ -287,6 +292,82 @@ contract AkCollateralVerifierMaaTest is Test {
 
         vm.expectPartialRevert(AkCollateralVerifier.MaaJwtAttestationTypeUnsupported.selector);
         verifier.verifyAkCollateral(AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: data}));
+    }
+
+    function test_accept_at_nbf_and_before_exp() public {
+        vm.warp(100);
+        AkCollateralVerificationResult memory result =
+            verifier.verifyAkCollateral(_tdxCollateralWithTimes(100, 100, 101));
+        assertTrue(result.valid);
+    }
+
+    function test_revert_before_nbf() public {
+        vm.warp(99);
+        AkPubCollateral memory collateral = _tdxCollateralWithTimes(99, 100, 200);
+        vm.expectRevert(
+            abi.encodeWithSelector(AkCollateralVerifier.MaaJwtNotYetValid.selector, uint64(100), uint256(99))
+        );
+        verifier.verifyAkCollateral(collateral);
+    }
+
+    function test_revert_at_exp() public {
+        vm.warp(200);
+        AkPubCollateral memory collateral = _tdxCollateralWithTimes(100, 100, 200);
+        vm.expectRevert(abi.encodeWithSelector(AkCollateralVerifier.MaaJwtExpired.selector, uint64(200), uint256(200)));
+        verifier.verifyAkCollateral(collateral);
+    }
+
+    function test_revert_when_iat_is_in_future() public {
+        vm.warp(100);
+        AkPubCollateral memory collateral = _tdxCollateralWithTimes(101, 100, 200);
+        vm.expectRevert(
+            abi.encodeWithSelector(AkCollateralVerifier.MaaJwtIssuedInFuture.selector, uint64(101), uint256(100))
+        );
+        verifier.verifyAkCollateral(collateral);
+    }
+
+    function test_revert_when_validity_window_is_empty() public {
+        vm.warp(100);
+        AkPubCollateral memory collateral = _tdxCollateralWithTimes(100, 200, 200);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AkCollateralVerifier.MaaJwtValidityWindowInvalid.selector, uint64(100), uint64(200), uint64(200)
+            )
+        );
+        verifier.verifyAkCollateral(collateral);
+    }
+
+    function test_revert_when_required_numeric_date_is_missing() public {
+        string[3] memory rawTimes =
+            [string('"iat":1,"nbf":1,'), '"iat":1,"exp":4102444800,', '"nbf":1,"exp":4102444800,'];
+        bytes32[3] memory missing = [keccak256("exp"), keccak256("nbf"), keccak256("iat")];
+        for (uint256 i = 0; i < rawTimes.length; i++) {
+            AkPubCollateral memory collateral = _tdxCollateralWithRawTimes(rawTimes[i]);
+            vm.expectRevert(abi.encodeWithSelector(AkCollateralVerifier.MaaJwtClaimMissing.selector, missing[i]));
+            verifier.verifyAkCollateral(collateral);
+        }
+    }
+
+    function test_nested_exp_cannot_override_expired_top_level_claim() public {
+        vm.warp(200);
+        AkPubCollateral memory collateral =
+            _tdxCollateralWithRawTimes('"x-ms-runtime":{"exp":4102444800},"iat":100,"nbf":100,"exp":200,');
+        vm.expectRevert(abi.encodeWithSelector(AkCollateralVerifier.MaaJwtExpired.selector, uint64(200), uint256(200)));
+        verifier.verifyAkCollateral(collateral);
+    }
+
+    function test_revert_when_numeric_date_is_not_canonical_uint64() public {
+        string[4] memory rawTimes = [
+            string('"iat":1,"nbf":1,"exp":"4102444800",'),
+            '"iat":1,"nbf":1,"exp":-1,',
+            '"iat":1,"nbf":1,"exp":18446744073709551616,',
+            '"iat":1,"nbf":1,"exp":01,'
+        ];
+        for (uint256 i = 0; i < rawTimes.length; i++) {
+            AkPubCollateral memory collateral = _tdxCollateralWithRawTimes(rawTimes[i]);
+            vm.expectPartialRevert(AkCollateralVerifier.MaaJwtNumericClaimMalformed.selector);
+            verifier.verifyAkCollateral(collateral);
+        }
     }
 
     // ───────────────────────────────────────────────────────────────────────────
@@ -311,11 +392,61 @@ contract AkCollateralVerifierMaaTest is Test {
         return bytes(string.concat('{"keys":[{"kid":"HCLAkPub","kty":"RSA","e":"', eB64, '","n":"', nB64, '"}]}'));
     }
 
+    function _tdxCollateralWithTimes(uint64 issuedAt, uint64 notBefore, uint64 expiresAt)
+        internal
+        pure
+        returns (AkPubCollateral memory)
+    {
+        bytes memory hclVarData = _buildHclVarData();
+        string memory reportData = string.concat(
+            _bytes32ToHex64Lower(sha256(hclVarData)), "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        bytes memory jwt = _buildJwt(_tdxClaimsWithTimes(reportData, issuedAt, notBefore, expiresAt));
+        return
+            AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: abi.encode(jwt, hclVarData)});
+    }
+
+    function _tdxCollateralWithRawTimes(string memory rawTimes) internal pure returns (AkPubCollateral memory) {
+        bytes memory hclVarData = _buildHclVarData();
+        string memory reportData = string.concat(
+            _bytes32ToHex64Lower(sha256(hclVarData)), "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        string memory claims = string.concat(
+            '{"iss":"',
+            TEST_ISSUER_URL,
+            '",',
+            rawTimes,
+            '"x-ms-attestation-type":"tdxvm",',
+            '"x-ms-compliance-status":"azure-compliant-cvm",',
+            '"tdx_report_data":"',
+            reportData,
+            '"}'
+        );
+        return AkPubCollateral({
+            akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: abi.encode(_buildJwt(claims), hclVarData)
+        });
+    }
+
     function _tdxClaims(string memory reportDataHex) internal pure returns (string memory) {
+        return _tdxClaimsWithTimes(reportDataHex, 1, 1, 4_102_444_800);
+    }
+
+    function _tdxClaimsWithTimes(string memory reportDataHex, uint64 issuedAt, uint64 notBefore, uint64 expiresAt)
+        internal
+        pure
+        returns (string memory)
+    {
         return string.concat(
             '{"iss":"',
             TEST_ISSUER_URL,
-            '","x-ms-attestation-type":"tdxvm",',
+            '","iat":',
+            LibString.toString(issuedAt),
+            ',"nbf":',
+            LibString.toString(notBefore),
+            ',"exp":',
+            LibString.toString(expiresAt),
+            ",",
+            '"x-ms-attestation-type":"tdxvm",',
             '"x-ms-compliance-status":"azure-compliant-cvm",',
             '"tdx_report_data":"',
             reportDataHex,
@@ -327,7 +458,8 @@ contract AkCollateralVerifierMaaTest is Test {
         return string.concat(
             '{"iss":"',
             TEST_ISSUER_URL,
-            '","x-ms-attestation-type":"sevsnpvm",',
+            '","iat":1,"nbf":1,"exp":4102444800,',
+            '"x-ms-attestation-type":"sevsnpvm",',
             '"x-ms-compliance-status":"azure-compliant-cvm",',
             '"x-ms-sevsnpvm-reportdata":"',
             reportDataHex,

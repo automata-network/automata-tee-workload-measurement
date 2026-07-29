@@ -8,6 +8,10 @@ import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "./interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "./interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "./interfaces/registries/IWorkloadRegistry.sol";
+import {
+    IAmdSnpSecurityPolicyRegistry,
+    VerifiedTeePolicyInputs
+} from "./interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {ISessionRegistry, CVMSessionStorage} from "./interfaces/registries/ISessionRegistry.sol";
 import {TeeVerificationResult} from "./types/Evidence.sol";
 import {TpmVerifier, TpmQuoteVerificationResult, TpmCertifyVerificationResult, TpmBase} from "./bases/TpmVerifier.sol";
@@ -50,7 +54,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title SessionRegistry
-/// @notice Central orchestrator for CVM session registration with 9-step attestation verification
+/// @notice Central orchestrator for CVM session registration, attestation, and policy verification
 /// @dev Inherits TPM verification capabilities from TpmVerifier and delegates AK collateral
 ///      verification to a separate contract to keep this implementation deployable under EIP-170.
 contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, UUPSUpgradeable {
@@ -65,6 +69,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     uint256 private constant DCAP_RTMR3_SIZE = 48;
     /// @dev Offset of reportData UUID in TDX quote body
     uint256 private constant DCAP_REPORT_DATA_OFFSET = 520;
+    /// @dev Offset of report_data in an SNP attestation report
+    uint256 private constant SNP_REPORT_DATA_OFFSET = 0x50;
     /// @dev Offset of report_id in SNP attestation report
     uint256 private constant SNP_REPORT_ID_OFFSET = 0x140;
     /// @dev Size of report_id field
@@ -93,6 +99,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice Workload registry for workload policy enforcement
     IWorkloadRegistry public immutable workloadRegistry;
 
+    /// @notice AMD SEV-SNP registry defaults and policy evaluator.
+    IAmdSnpSecurityPolicyRegistry public immutable amdSnpSecurityPolicyRegistry;
+
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Storage - Session State
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -106,7 +115,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @dev Session fingerprint to session ID mapping
     mapping(bytes32 => bytes32) private _sessionFingerprintsToIds;
 
-    /// @dev Storage gap for future upgrades (4 existing mappings → 46-slot gap)
+    /// @dev Storage gap for future upgrades (3 existing mappings → 47-slot gap)
     uint256[47] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -137,6 +146,18 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice GCP cert-chain collateral with a TEE type that has no binding rule
     error UnsupportedGcpTeeType(TEEType teeType);
 
+    /// @notice Azure MAA collateral with a TEE type that has no binding rule
+    error UnsupportedAzureTeeType(TEEType teeType);
+
+    /// @notice Azure raw TEE report_data does not contain the MAA-signed HCL binding
+    error AzureTeeReportDataMismatch(bytes32 actualBindingHash, bytes32 expectedBindingHash, bytes32 actualPadding);
+
+    /// @notice Azure verified TEE result is too short to contain the 64-byte report_data
+    error AzureTeeReportDataTooShort(uint256 actualLength, uint256 minRequired);
+
+    /// @notice The TEE type authenticated by the Azure MAA JWT differs from the verified report.
+    error AzureMaaTeeTypeMismatch(TEEType teeReportType, TEEType maaTeeType);
+
     /// @notice AK collateral type fell through both Azure and GCP branches during binding
     error UnsupportedAkCollateralForBinding(AkPubCollateralType collateralType);
 
@@ -147,8 +168,17 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice Session key delegation signature failed verification
     error SessionKeyDelegationFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint);
 
+    /// @notice Session key proof-of-possession signature failed verification
+    error SessionKeyPossessionFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint);
+
+    /// @notice Another active session already owns the session key fingerprint
+    error SessionFingerprintInUse(bytes32 sessionKeyFingerprint, bytes32 activeSessionId);
+
     /// @notice STATIC PCR measured value does not match the spec
     error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
+
+    /// @notice STATIC requires exactly one expected final PCR value.
+    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
 
     /// @notice DYNAMIC PCR spec rejected because the measured event log is empty
     ///         (no event-hash chain to cross-check against the PCR value)
@@ -171,11 +201,32 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @notice Required PCR index from the spec is missing in the measured set
     error PCRNotFound(uint8 pcrIndex);
 
+    /// @notice The measurement variant pins a PCR index that its platform profile already
+    ///         declares invariant. Invariants always hold, so this is rejected rather than
+    ///         resolved in the variant's favour. BaseImageRegistry rejects such a variant at
+    ///         registration; reaching this means pre-existing storage violates the rule.
+    error PcrVariantOverridesInvariant(uint8 pcrIndex);
+
     /// @notice Attribute not found
     error AttributeNotFound(bytes32 key);
 
     /// @notice Attribute value is not in the requirement's allow-list
     error AttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
+
+    /// @notice A TEE verifier returned valid=false instead of reverting.
+    error TeeVerificationFailed();
+
+    /// @notice An AK collateral verifier returned valid=false instead of reverting.
+    error AkCollateralVerificationFailed();
+
+    /// @notice The effective base-image declaration differs from the verified TEE state.
+    error TeeAttributeBaseImageMismatch(bytes32 key, bytes32 declaredValue, bytes32 verifiedValue);
+
+    /// @notice The verified TEE state is not permitted by the workload.
+    error TeeAttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
+
+    /// @notice Base-image and workload PLATFORM_INFO requirements contradict each other.
+    error TeeAttributePolicyConflict(bytes32 key, bytes32 baseValue, bytes32 workloadValue);
 
     /// @notice Workload not active
     error WorkloadNotActive(bytes32 workloadId);
@@ -197,19 +248,22 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @param akCollateralVerifier_ AK collateral verifier for Azure MAA JWT and GCP cert-chain verification
     /// @param baseImageRegistry_ Base image registry for platform profiles
     /// @param workloadRegistry_ Workload registry for workload policies
+    /// @param amdSnpSecurityPolicyRegistry_ AMD SEV-SNP registry defaults and policy evaluator
     constructor(
         ITeeVerifier teeVerifier_,
         ITpmAttestation tpmAttestation_,
         ISignatureVerifier signatureVerifier_,
         IAkCollateralVerifier akCollateralVerifier_,
         IBaseImageRegistry baseImageRegistry_,
-        IWorkloadRegistry workloadRegistry_
+        IWorkloadRegistry workloadRegistry_,
+        IAmdSnpSecurityPolicyRegistry amdSnpSecurityPolicyRegistry_
     ) TpmBase(tpmAttestation_) {
         teeVerifier = teeVerifier_;
         signatureVerifier = signatureVerifier_;
         akCollateralVerifier = akCollateralVerifier_;
         baseImageRegistry = baseImageRegistry_;
         workloadRegistry = workloadRegistry_;
+        amdSnpSecurityPolicyRegistry = amdSnpSecurityPolicyRegistry_;
         _disableInitializers();
     }
 
@@ -292,6 +346,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
         // Revoke session
         sessionStorage.isRevoked = true;
+        _clearSessionFingerprint(sessionId, sessionStorage.session.sessionKeyFingerprint);
 
         emit SessionRevoked(sessionId, ownerFingerprint);
     }
@@ -360,6 +415,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         );
 
         predecessor.isRevoked = true;
+        _clearSessionFingerprint(oldSessionId, predecessor.session.sessionKeyFingerprint);
         emit SessionRevoked(oldSessionId, ownerFingerprint);
         _finalizeFullSession(
             result, workloadId, baseImageId, platformProfileId, measurementVariantId, newEvidence.sessionKey
@@ -382,6 +438,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         _requireNotExpired(opExpiresAt);
         CVMSessionStorage storage predecessor = _sessions[oldSessionId];
         if (!predecessor.exists) revert SessionNotFound();
+        // A recovery consumes its predecessor by revoking it, so an already-revoked predecessor
+        // cannot authorize a second one. This makes recovery single-use per predecessor without
+        // a dedicated flag. It costs the caller nothing: recovery is registerSession plus
+        // revokeSession, so an owner whose predecessor is already revoked has nothing left to
+        // revoke and simply calls registerSession. Checked before _prepareFullSession so a
+        // repeat attempt fails cheaply.
+        if (predecessor.isRevoked) revert SessionAlreadyRevoked();
         bytes32 ownerFingerprint = _requireFingerprint(ownerIdentity, predecessor.owner);
 
         FullSessionResult memory result = _prepareFullSession(
@@ -402,10 +465,9 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             ownerSignature
         );
 
-        if (!predecessor.isRevoked) {
-            predecessor.isRevoked = true;
-            emit SessionRevoked(oldSessionId, ownerFingerprint);
-        }
+        predecessor.isRevoked = true;
+        _clearSessionFingerprint(oldSessionId, predecessor.session.sessionKeyFingerprint);
+        emit SessionRevoked(oldSessionId, ownerFingerprint);
         _finalizeFullSession(
             result, workloadId, baseImageId, platformProfileId, measurementVariantId, newEvidence.sessionKey
         );
@@ -426,7 +488,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     }
 
     function getSessionId(bytes32 sessionFingerprint) external view returns (bytes32 sessionId) {
-        return _sessionFingerprintsToIds[sessionFingerprint];
+        sessionId = _sessionFingerprintsToIds[sessionFingerprint];
+        if (sessionId == bytes32(0) || !_isSessionActive(_sessions[sessionId])) {
+            return bytes32(0);
+        }
     }
 
     function getSessionOwner(bytes32 sessionId) external view returns (bytes32 ownerFingerprint) {
@@ -446,7 +511,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     function isSessionExpired(bytes32 sessionId) external view returns (bool) {
         CVMSessionStorage storage sessionStorage = _sessions[sessionId];
         if (!sessionStorage.exists) {
-            return false;
+            revert SessionNotFound();
         }
         return block.timestamp > sessionStorage.session.sessionExpiresAt;
     }
@@ -538,7 +603,13 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 ownerFingerprint
     ) private returns (FullSessionResult memory result) {
         PolicyContext memory policyCtx = _lookupPolicy(workloadId, baseImageId, platformProfileId, measurementVariantId);
-        result.attestation = _verifyAttestation(evidence, ownerFingerprint);
+        result.attestation = _verifyAttestation(
+            evidence,
+            ownerFingerprint,
+            policyCtx.platformProfile.attributes,
+            policyCtx.variant.attributes,
+            policyCtx.workloadSpec.requirements
+        );
         result.sessionId =
             _computeSessionId(result.attestation.tpmSignatureHash, teeVerifier.getTeeReportHash(evidence.teeReport));
         if (_sessions[result.sessionId].exists) revert SessionAlreadyExists();
@@ -754,6 +825,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         _requireSignature(ownerIdentity, message, ownerSignature);
 
         _sessions[oldSessionId].isRevoked = true;
+        _clearSessionFingerprint(oldSessionId, _sessions[oldSessionId].session.sessionKeyFingerprint);
         emit SessionRevoked(oldSessionId, ctx.ownerFingerprint);
 
         _createSession(
@@ -786,23 +858,54 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @param evidence The attestation evidence bundle
     /// @param ownerFingerprint Pre-computed owner fingerprint
     /// @return result Attestation verification results
-    function _verifyAttestation(AttestationEvidence calldata evidence, bytes32 ownerFingerprint)
-        private
-        returns (AttestationResult memory result)
-    {
+    function _verifyAttestation(
+        AttestationEvidence calldata evidence,
+        bytes32 ownerFingerprint,
+        Attribute[] memory profileAttributes,
+        Attribute[] memory variantAttributes,
+        AttributeRequirement[] memory requirements
+    ) private returns (AttestationResult memory result) {
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 2: TEE Report Verification (verifier reverts with rich errors on failure)
         // ─────────────────────────────────────────────────────────────────────────────────
         TeeVerificationResult memory teeResult = teeVerifier.verifyTeeReport(evidence.teeReport);
+        if (!teeResult.valid) {
+            revert TeeVerificationFailed();
+        }
+        amdSnpSecurityPolicyRegistry.verifyTeePolicy(
+            VerifiedTeePolicyInputs({
+                teeType: teeResult.teeType,
+                enabledTeeAttributes: teeResult.enabledTeeAttributes,
+                intelTdxTcbStatusBit: teeResult.intelTdxTcbStatusBit,
+                amdSevSnpTcbValues: teeResult.amdSevSnpTcbValues,
+                amdSevSnpPlatformInfo: teeResult.amdSevSnpPlatformInfo,
+                amdSevSnpCpuid: teeResult.amdSevSnpCpuid,
+                amdSevSnpReportVersion: teeResult.amdSevSnpReportVersion,
+                amdSevSnpLaunchMitigationVector: teeResult.amdSevSnpLaunchMitigationVector,
+                amdSevSnpCurrentMitigationVector: teeResult.amdSevSnpCurrentMitigationVector
+            }),
+            profileAttributes,
+            variantAttributes,
+            requirements
+        );
 
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 3: AK Collateral + TEE↔vTPM Binding (verifier reverts with rich errors)
         // ─────────────────────────────────────────────────────────────────────────────────
         AkCollateralVerificationResult memory akResult =
             akCollateralVerifier.verifyAkCollateral(evidence.akPubCollateral);
+        if (!akResult.valid) {
+            revert AkCollateralVerificationFailed();
+        }
+        if (
+            evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt
+                && akResult.teeType != teeResult.teeType
+        ) {
+            revert AzureMaaTeeTypeMismatch(teeResult.teeType, akResult.teeType);
+        }
 
         // Verify TEE-AK binding and get expected PCR15 for GCP
-        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence);
+        bytes32 expectedPcr15 = _verifyTeeAkBinding(teeResult, evidence, akResult.bindingHash);
 
         // ─────────────────────────────────────────────────────────────────────────────────
         // STEP 4: TPM Quote Verification
@@ -957,7 +1060,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
 
     /// @dev Verifies session key delegation signature
     /// @param certifiedKey The certified TPM signing key
-    /// @param sessionKeySignature The delegation signature
+    /// @param sessionKeySignature abi.encode(TPM delegation signature, session-key proof-of-possession signature)
     /// @param sessionKey The session key being delegated to
     /// @param baseImageId The base image identifier
     /// @param workloadId The workload identifier
@@ -972,6 +1075,8 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         bytes32 sessionId
     ) private view returns (bytes32 sessionKeyFingerprint) {
         sessionKeyFingerprint = LibKey.computeKeyFingerprint(sessionKey);
+        (bytes memory tpmDelegationSignature, bytes memory sessionKeyPossessionSignature) =
+            abi.decode(sessionKeySignature, (bytes, bytes));
 
         bytes32 delegationMessage = keccak256(
             abi.encode(
@@ -985,8 +1090,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             )
         );
 
-        if (!signatureVerifier.verify(certifiedKey, delegationMessage, sessionKeySignature)) {
+        if (!signatureVerifier.verify(certifiedKey, delegationMessage, tpmDelegationSignature)) {
             revert SessionKeyDelegationFailed(delegationMessage, sessionKeyFingerprint);
+        }
+        if (!signatureVerifier.verify(sessionKey, delegationMessage, sessionKeyPossessionSignature)) {
+            revert SessionKeyPossessionFailed(delegationMessage, sessionKeyFingerprint);
         }
 
         return sessionKeyFingerprint;
@@ -1025,6 +1133,11 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @dev Creates a new session and updates related storage
     /// @param params Session parameters for the new session
     function _createSession(SessionParams memory params) private {
+        bytes32 mappedSessionId = _sessionFingerprintsToIds[params.sessionKeyFingerprint];
+        if (mappedSessionId != bytes32(0) && _isSessionActive(_sessions[mappedSessionId])) {
+            revert SessionFingerprintInUse(params.sessionKeyFingerprint, mappedSessionId);
+        }
+
         _sessions[params.sessionId] = CVMSessionStorage({
             exists: true,
             isRevoked: false,
@@ -1045,11 +1158,18 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         _sessionFingerprintsToIds[params.sessionKeyFingerprint] = params.sessionId;
     }
 
+    /// @dev Clears the reverse lookup only when it still points at the session being revoked.
+    function _clearSessionFingerprint(bytes32 sessionId, bytes32 sessionKeyFingerprint) private {
+        if (_sessionFingerprintsToIds[sessionKeyFingerprint] == sessionId) {
+            delete _sessionFingerprintsToIds[sessionKeyFingerprint];
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Internal - Policy Evaluation (Steps 7-8)
+    // Internal - PCR Policy Evaluation (Step 7)
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Executes Steps 7-8: PCR and attribute policy evaluation
+    /// @dev Executes Step 7: platform, variant, workload, and GCP binding PCR evaluation
     /// @param pcrValues The PCR values from TPM quote
     /// @param platformProfile The platform profile (invariants + attributes)
     /// @param variant The measurement variant (overrides + attributes)
@@ -1085,16 +1205,6 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 revert GcpPcr15Mismatch(measuredPcr15.value, expectedPcr15);
             }
         }
-
-        // ─────────────────────────────────────────────────────────────────────────────────
-        // STEP 8: Attribute Requirements Evaluation
-        // ─────────────────────────────────────────────────────────────────────────────────
-
-        // Merge platform profile attributes with variant attributes (variant overrides)
-        Attribute[] memory effectiveAttributes = _mergeAttributes(platformProfile.attributes, variant.attributes);
-
-        // Evaluate workload attribute requirements
-        _evaluateAttributeRequirements(workloadSpec.requirements, effectiveAttributes);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -1104,19 +1214,31 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @dev Verifies TEE-AK binding based on cloud provider and TEE type
     /// @param teeResult TEE verification result (contains reportData)
     /// @param evidence Attestation evidence bundle
+    /// @param bindingHash MAA-signed sha256(hclVarData) for Azure; zero for GCP
     /// @return expectedPcr15 Expected PCR15 value for GCP binding (zero for Azure)
-    function _verifyTeeAkBinding(TeeVerificationResult memory teeResult, AttestationEvidence calldata evidence)
-        private
-        pure
-        returns (bytes32 expectedPcr15)
-    {
+    function _verifyTeeAkBinding(
+        TeeVerificationResult memory teeResult,
+        AttestationEvidence calldata evidence,
+        bytes32 bindingHash
+    ) private pure returns (bytes32 expectedPcr15) {
         if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt) {
-            // Azure binding is anchored end-to-end inside verifyAkCollateral (§8.3.1, §14.9):
-            // the MAA-signed JWT covers `tdx_report_data` / `x-ms-sevsnpvm-reportdata` which
-            // commits to sha256(hclVarData), and verifyAkCollateral has already cross-checked
-            // sha256(hclVarData) against that claim. The on-chain teeReport is independently
-            // verified for hardware signature in Step 2; we do NOT re-check its REPORT_DATA
-            // against akResult.bindingHash here. No PCR15 binding for Azure.
+            uint256 reportDataOffset;
+            if (teeResult.teeType == TEEType.IntelTDX) {
+                reportDataOffset = DCAP_REPORT_DATA_OFFSET;
+            } else if (teeResult.teeType == TEEType.AmdSevSnp) {
+                reportDataOffset = SNP_REPORT_DATA_OFFSET;
+            } else {
+                revert UnsupportedAzureTeeType(teeResult.teeType);
+            }
+            uint256 minRequired = reportDataOffset + 64;
+            if (teeResult.reportData.length < minRequired) {
+                revert AzureTeeReportDataTooShort(teeResult.reportData.length, minRequired);
+            }
+            bytes32 actualBindingHash = LibBytes.readBytes32(teeResult.reportData, reportDataOffset);
+            bytes32 actualPadding = LibBytes.readBytes32(teeResult.reportData, reportDataOffset + 32);
+            if (actualBindingHash != bindingHash || actualPadding != bytes32(0)) {
+                revert AzureTeeReportDataMismatch(actualBindingHash, bindingHash, actualPadding);
+            }
             return bytes32(0);
         } else if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.GcpCertChain) {
             // GCP binding: different logic based on TEE type
@@ -1185,10 +1307,14 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     // Internal Helpers - PCR Evaluation
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Merges platform invariants with variant overrides (variant replaces at matching pcrIndex)
+    /// @dev Unions platform invariants with the variant's PCR specs. A profile invariant always
+    ///      holds: a variant may only pin PCR indices the profile leaves unpinned, never restate
+    ///      or relax one. BaseImageRegistry rejects an overlapping variant at registration; this
+    ///      check re-enforces the invariant at evaluation time so no storage state — including
+    ///      anything written by an earlier implementation — can silently drop a profile invariant.
     /// @param invariants Platform profile invariants
-    /// @param overrides Variant PCR overrides
-    /// @return merged Effective PCR specifications
+    /// @param overrides Variant PCR specs (must not collide with `invariants`)
+    /// @return merged Effective PCR specifications, sorted ascending by pcrIndex
     function _mergePcrSpecs(PcrSpec[] memory invariants, PcrSpec[] memory overrides)
         private
         pure
@@ -1200,7 +1326,7 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
         uint256 overrideMask = 0;
         uint256 presentMask = 0;
 
-        // Apply overrides while building overrideMask
+        // Place the variant specs while building overrideMask
         uint256 overridesLen = overrides.length;
         for (uint256 i = 0; i < overridesLen;) {
             uint256 idx = uint256(overrides[i].pcrIndex);
@@ -1214,15 +1340,18 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
             }
         }
 
-        // Insert invariants that are not overridden
+        // Insert every invariant. An invariant is non-negotiable, so a variant spec at the
+        // same index is a conflict rather than an override — fail closed instead of dropping
+        // the stricter platform-level spec.
         uint256 invariantsLen = invariants.length;
         for (uint256 i = 0; i < invariantsLen;) {
             uint256 idx = uint256(invariants[i].pcrIndex);
             uint256 bit = (uint256(1) << idx);
-            if ((overrideMask & bit) == 0) {
-                merged[idx] = invariants[i];
-                presentMask |= bit;
+            if ((overrideMask & bit) != 0) {
+                revert PcrVariantOverridesInvariant(uint8(idx));
             }
+            merged[idx] = invariants[i];
+            presentMask |= bit;
             unchecked {
                 ++i;
             }
@@ -1308,6 +1437,10 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
     /// @param measured Measured PCR value
     function _evaluateSinglePcr(PcrSpec memory spec, PcrValue memory measured) internal pure {
         if (spec.verifyType == PcrVerifyType.STATIC) {
+            uint256 matchDataLength = spec.matchData.length;
+            if (matchDataLength != 1) {
+                revert InvalidStaticMatchDataLength(spec.pcrIndex, matchDataLength);
+            }
             // STATIC: exact value match
             if (measured.value != spec.matchData[0]) {
                 revert PCRStaticMismatch(spec.pcrIndex, measured.value, spec.matchData[0]);
@@ -1366,118 +1499,6 @@ contract SessionRegistry is ISessionRegistry, TpmVerifier, OwnableUpgradeable, U
                 // count of unmatched landmarks is exposed. Do not surface matchData[matchIdx]
                 // as "the expected hash" (see workload-spec subsequence semantics).
                 revert PCRSubsequenceLandmarkMissing(spec.pcrIndex, matchIdx, matchLen);
-            }
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Internal Helpers - Attribute Evaluation
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
-    /// @dev Merges platform profile attributes with variant attributes (variant overrides at matching keys)
-    /// @param profileAttrs Platform profile attributes
-    /// @param variantAttrs Variant attributes
-    /// @return merged Effective attributes
-    /// TODO: unionize platform and variant attributes
-    function _mergeAttributes(Attribute[] memory profileAttrs, Attribute[] memory variantAttrs)
-        private
-        pure
-        returns (Attribute[] memory merged)
-    {
-        // Allocate max-size array (worst case: no overlaps)
-        merged = new Attribute[](profileAttrs.length + variantAttrs.length);
-        uint256 writeIdx = 0;
-
-        // Single-pass: add profile attributes that are not overridden
-        uint256 profileLen = profileAttrs.length;
-        uint256 variantLen = variantAttrs.length;
-        for (uint256 i = 0; i < profileLen;) {
-            bool overridden = false;
-            for (uint256 j = 0; j < variantLen;) {
-                if (profileAttrs[i].key == variantAttrs[j].key) {
-                    overridden = true;
-                    break;
-                }
-                unchecked {
-                    ++j;
-                }
-            }
-            if (!overridden) {
-                merged[writeIdx] = profileAttrs[i];
-                unchecked {
-                    ++writeIdx;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-
-        // Add all variant attributes
-        for (uint256 i = 0; i < variantLen;) {
-            merged[writeIdx] = variantAttrs[i];
-            unchecked {
-                ++writeIdx;
-                ++i;
-            }
-        }
-
-        // Trim array to actual size using assembly
-        assembly ("memory-safe") {
-            mstore(merged, writeIdx)
-        }
-
-        return merged;
-    }
-
-    /// @dev Evaluates workload attribute requirements against effective attributes
-    /// @param requirements Workload attribute requirements
-    /// @param attributes Effective attributes (merged platform + variant)
-    function _evaluateAttributeRequirements(AttributeRequirement[] memory requirements, Attribute[] memory attributes)
-        private
-        pure
-    {
-        uint256 reqLen = requirements.length;
-        uint256 attrsLen = attributes.length;
-        for (uint256 i = 0; i < reqLen;) {
-            // Find attribute by key
-            bool found = false;
-            bytes32 attributeValue;
-
-            for (uint256 j = 0; j < attrsLen;) {
-                if (attributes[j].key == requirements[i].key) {
-                    found = true;
-                    attributeValue = attributes[j].value;
-                    break;
-                }
-                unchecked {
-                    ++j;
-                }
-            }
-
-            if (!found) {
-                revert AttributeNotFound(requirements[i].key);
-            }
-
-            // Check allowedValues (empty array = any value accepted)
-            uint256 allowedLen = requirements[i].allowedValues.length;
-            if (allowedLen > 0) {
-                bool valueAllowed = false;
-                for (uint256 k = 0; k < allowedLen;) {
-                    if (attributeValue == requirements[i].allowedValues[k]) {
-                        valueAllowed = true;
-                        break;
-                    }
-                    unchecked {
-                        ++k;
-                    }
-                }
-                if (!valueAllowed) {
-                    revert AttributeValueNotAllowed(requirements[i].key, attributeValue);
-                }
-            }
-            unchecked {
-                ++i;
             }
         }
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {ISnpAttestation, VerifierJournal, VerificationResult} from "../interfaces/external/ISnpAttestation.sol";
+import {ISnpAttestation, VerifierJournal, VerificationResult} from "../../src/interfaces/external/ISnpAttestation.sol";
 
 /// @title MockAutomataSnpAttestation
 /// @notice Test double for the AMD SEV-SNP verifier. It parses the SDK's *packed* zkVM public
