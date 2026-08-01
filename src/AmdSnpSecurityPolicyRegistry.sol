@@ -59,6 +59,7 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
     error AttributeNotFound(bytes32 key);
     error AttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
     error EmptyTeeAttributeRequirement(bytes32 key);
+    error InvalidPackedTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -345,7 +346,8 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
 
     /// @dev Resolves the workload's explicit value for a packed reserved attribute. A workload
     ///      that states a requirement on one of these keys must name the value it requires, so an
-    ///      empty allowed set is malformed rather than a silent "no opinion" — the
+    ///      allowed set must contain exactly one value rather than silently selecting or
+    ///      substituting a value — the
     ///      "empty array = any value accepted" convention on `AttributeRequirement` applies to
     ///      ordinary metadata keys only. Omitting the requirement entirely is how a workload
     ///      defers to the registry default. `WorkloadRegistry._validateRequirements` already
@@ -360,6 +362,9 @@ contract AmdSnpSecurityPolicyRegistry is IAmdSnpSecurityPolicyRegistry, OwnableU
             if (requirements[i].key != key) continue;
             bytes32[] calldata allowedValues = requirements[i].allowedValues;
             if (allowedValues.length == 0) revert EmptyTeeAttributeRequirement(key);
+            if (allowedValues.length != 1) {
+                revert InvalidPackedTeeAttributeRequirementLength(key, allowedValues.length);
+            }
             return allowedValues[0];
         }
         return defaultValue;

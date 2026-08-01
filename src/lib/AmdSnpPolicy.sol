@@ -51,6 +51,9 @@ library AmdSnpPolicy {
         for (uint256 laneShift = 0; laneShift < 256; laneShift += 64) {
             uint64 actualLane = uint64(actualValue >> laneShift);
             uint64 minimumLane = uint64(minimumValue >> laneShift);
+            if (((actualLane | minimumLane) & ~TCB_SUPPORTED_COMPONENT_MASK) != 0) {
+                return false;
+            }
             for (uint256 componentShift = 0; componentShift < 32; componentShift += 8) {
                 if (uint8(actualLane >> componentShift) < uint8(minimumLane >> componentShift)) {
                     return false;
@@ -61,12 +64,14 @@ library AmdSnpPolicy {
     }
 
     /// @notice Combines two PLATFORM_INFO requirements into a single packed policy.
-    /// @dev The caller must validate each input first. This helper does not revert so the
-    ///      caller can report the conflict with its own domain-specific error; `merged` is
-    ///      only meaningful when `ok` is true.
+    /// @dev This helper does not revert so the caller can report invalid input or a conflict
+    ///      with its own domain-specific error; `merged` is only meaningful when `ok` is true.
     /// @return ok False when one side requires a bit set that the other requires cleared.
     /// @return merged The union of both required-set masks and of both required-clear masks.
     function tryMergePlatformInfoPolicies(bytes32 left, bytes32 right) internal pure returns (bool ok, bytes32 merged) {
+        if (!isValidPlatformInfoPolicy(left) || !isValidPlatformInfoPolicy(right)) {
+            return (false, bytes32(0));
+        }
         uint64 requiredSet = uint64(uint256(left)) | uint64(uint256(right));
         uint64 requiredClear = uint64(uint256(left) >> 64) | uint64(uint256(right) >> 64);
         merged = bytes32(uint256(requiredSet) | (uint256(requiredClear) << 64));
@@ -87,6 +92,9 @@ library AmdSnpPolicy {
 
     /// @notice Returns true when PLATFORM_INFO satisfies the packed policy.
     function platformInfoMatches(uint64 actual, bytes32 packedPolicy) internal pure returns (bool) {
+        if (!isValidPlatformInfoPolicy(packedPolicy)) {
+            return false;
+        }
         uint64 requiredSet = uint64(uint256(packedPolicy));
         uint64 requiredClear = uint64(uint256(packedPolicy) >> 64);
         return (actual & requiredSet) == requiredSet && (actual & requiredClear) == 0;
