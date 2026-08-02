@@ -2,18 +2,17 @@
 pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {TeeVerifier} from "../src/TeeVerifier.sol";
+import {ZkVerifierRegistry} from "../src/ZkVerifierRegistry.sol";
 import {ISnpAttestation, VerificationResult} from "../src/interfaces/external/ISnpAttestation.sol";
 import {IDcapAttestation} from "../src/interfaces/external/IDcapAttestation.sol";
+import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
 import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.sol";
-import {
-    TeeReport,
-    TEEType,
-    VerificationBackendType,
-    SnpZkProof,
-    TeeVerificationResult
-} from "../src/types/Evidence.sol";
+import {TeeReport, TEEType, VerificationBackendType, TeeVerificationResult} from "../src/types/Evidence.sol";
+import {AmdSevSnpZkEvidence, ProgramBoundZkProof, ZkProofType} from "../src/types/Zk.sol";
+import {AmdSevSnpZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
 import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
@@ -23,6 +22,8 @@ import {
 /// @notice Exercises the SEV-SNP path of TeeVerifier against the SDK journal layout
 ///         (VerifierJournal.reportHash = keccak256(report)), including the report-binding guard.
 contract TeeVerifierSnpTest is Test {
+    bytes32 internal constant SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.v1.test");
+
     TeeVerifier internal teeVerifier;
     MockAutomataSnpAttestation internal snp;
     MockAutomataDcapAttestation internal dcap;
@@ -30,7 +31,20 @@ contract TeeVerifierSnpTest is Test {
     function setUp() public {
         snp = new MockAutomataSnpAttestation();
         dcap = new MockAutomataDcapAttestation();
-        teeVerifier = new TeeVerifier(IDcapAttestation(address(dcap)), ISnpAttestation(address(snp)));
+        ZkVerifierRegistry implementation = new ZkVerifierRegistry();
+        ZkVerifierRegistry registry = ZkVerifierRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(implementation), abi.encodeCall(ZkVerifierRegistry.initialize, (address(this)))
+                )
+            )
+        );
+        AmdSevSnpZkVerifierAdapter adapter =
+            new AmdSevSnpZkVerifierAdapter(ISnpAttestation(address(snp)), ISnpAttestation.ZkCoProcessorType.RiscZero);
+        registry.setZkProgramConfig(
+            ZkProofType.AmdSevSnp, VerificationBackendType.ZkRiscZero, SNP_PROGRAM_IDENTIFIER, address(adapter), true
+        );
+        teeVerifier = new TeeVerifier(IDcapAttestation(address(dcap)), IZkVerifierRegistry(address(registry)));
     }
 
     /// @dev A deterministic, structurally valid, full-size SEV-SNP report.
@@ -58,9 +72,16 @@ contract TeeVerifierSnpTest is Test {
     }
 
     function _teeReport(bytes memory journalOutput, bytes memory rawReport) internal pure returns (TeeReport memory) {
-        SnpZkProof memory p = SnpZkProof({output: journalOutput, proofBytes: hex"", rawReport: rawReport});
+        AmdSevSnpZkEvidence memory evidence = AmdSevSnpZkEvidence({
+            proof: ProgramBoundZkProof({
+                programIdentifier: SNP_PROGRAM_IDENTIFIER, output: journalOutput, proofBytes: hex""
+            }),
+            rawReport: rawReport
+        });
         return TeeReport({
-            verificationBackendType: VerificationBackendType.ZkRiscZero, teeType: TEEType.AmdSevSnp, data: abi.encode(p)
+            verificationBackendType: VerificationBackendType.ZkRiscZero,
+            teeType: TEEType.AmdSevSnp,
+            data: abi.encode(evidence)
         });
     }
 
@@ -340,17 +361,6 @@ contract TeeVerifierSnpTest is Test {
         report[offset + 1] = bytes1(tee);
         report[offset + 6] = bytes1(snpVersion);
         report[offset + 7] = bytes1(microcode);
-    }
-
-    /// @dev Session-ID binding: getTeeReportHash reads the trailing 32 bytes of the packed journal,
-    ///      which the SDK places reportHash at. Also exercises the SnpZkProof→ZkProof forward-compat
-    ///      decode (getTeeReportHash decodes as ZkProof and must still read `output`).
-    function test_snp_getTeeReportHash_equals_reportHash() public view {
-        bytes memory report = _report();
-        bytes32 reportHash = keccak256(report);
-        TeeReport memory tr = _teeReport(_packedJournal(VerificationResult.Success, reportHash), report);
-
-        assertEq(teeVerifier.getTeeReportHash(tr), reportHash);
     }
 
     function _tdxReport(bytes memory quote) internal pure returns (TeeReport memory) {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {WorkloadSpec, PublicIdentity} from "../../types/Common.sol";
+import {PublicIdentity, WorkloadSpec} from "../../types/Common.sol";
 
 /// @notice Storage wrapper for workload specifications
 struct WorkloadSpecStorage {

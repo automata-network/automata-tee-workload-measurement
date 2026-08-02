@@ -8,26 +8,23 @@
 
 ```
 ISessionRegistry
-TpmVerifier (abstract, inherits TpmBase)
 OwnableUpgradeable
 UUPSUpgradeable
 ```
 
-AK collateral verification is delegated through an immutable
-`IAkCollateralVerifier` constructor dependency. It is external to keep the
-registry runtime below the EIP-170 bytecode limit.
+TPM Quote and Certify verification uses an immutable, separately deployed
+`TpmVerifier`. Attestation Key collateral verification uses an immutable,
+separately deployed `IAkCollateralVerifier`. This split keeps the
+`SessionRegistry` runtime below the EIP-170 bytecode limit.
 
 ## Constants
 
 ```solidity
 uint64 private constant DEFAULT_CVM_TTL = 30 days;       // Used when workload sessionTtl == 0
-uint256 private constant DCAP_RTMR3_OFFSET = 472;
-uint256 private constant DCAP_RTMR3_SIZE = 48;
 uint256 private constant DCAP_REPORT_DATA_OFFSET = 520;
+uint256 private constant SNP_REPORT_DATA_OFFSET = 0x50;
 uint256 private constant SNP_REPORT_ID_OFFSET = 0x140;
-uint256 private constant SNP_REPORT_ID_SIZE = 32;
-uint8 private constant GCP_BINDING_PCR_INDEX = 15;
-uint256 private constant GCP_UUID_SIZE = 16;
+uint8 private constant PROVIDER_BINDING_PCR_INDEX = 15;
 ```
 
 ## Immutables
@@ -35,12 +32,12 @@ uint256 private constant GCP_UUID_SIZE = 16;
 | Variable | Type | Purpose |
 |---|---|---|
 | `teeVerifier` | `ITeeVerifier` | TEE attestation dispatcher |
+| `tpmVerifier` | `TpmVerifier` | TPM Quote and Certify verifier |
 | `signatureVerifier` | `ISignatureVerifier` | Cryptographic signature verification |
-| `akCollateralVerifier` | `IAkCollateralVerifier` | External Azure/GCP AK collateral verification |
+| `akCollateralVerifier` | `IAkCollateralVerifier` | External Azure, GCP, and AWS Attestation Key collateral verification |
 | `baseImageRegistry` | `IBaseImageRegistry` | Platform policy lookup |
 | `workloadRegistry` | `IWorkloadRegistry` | Application policy lookup |
 | `amdSnpSecurityPolicyRegistry` | `IAmdSnpSecurityPolicyRegistry` | AMD SEV-SNP defaults and verified TEE attribute evaluation |
-| `tpmAttestation` | `ITpmAttestation` | (inherited from TpmBase) TPM operations |
 
 ## Storage
 
@@ -108,9 +105,8 @@ struct AttestationResult {
     bytes32 akPubFingerprint;
     bytes32 tpmSigningKeyFingerprint;
     bytes32 ownerFingerprint;
-    PcrValue[] pcrValues;
-    bytes32 expectedPcr15;             // GCP binding (zero for Azure)
-    bytes32 tpmSignatureHash;          // keccak256(tpmQuoteReport.tpmSignature)
+    bytes32 teeReportBytesHash;
+    bytes32 tpmSignatureHash;
 }
 
 struct RotationContext {
@@ -217,63 +213,38 @@ attributes assigned to `teeResult.teeType`. A base image may contain
 declarations for both Intel TDX and AMD SEV-SNP. Declarations for the other
 TEE platform are not evaluated for the current session.
 
-### Step 3: AK Collateral & TEE-AK Binding (`_verifyTeeAkBinding`)
+### Step 3: Attestation Key Collateral and Provider Binding (`_verifyProviderEvidence`)
 ```
-Input: evidence.akPubCollateral, teeVerificationResult
+Input: evidence.akPub, evidence.akPubCollateral, teeVerificationResult, resolved PCR policy
 Actions:
-  - Call the external akCollateralVerifier.verifyAkCollateral(collateral)
-    -> AkCollateralVerificationResult { valid, akPub, akPubFingerprint, teeType, bindingHash }
-  - Revert AkCollateralVerificationFailed if !result.valid
-  - The current AkCollateralVerifier reverts on every failure and returns
-    valid=true on success. The explicit check also fails closed for any other
-    verifier implementation.
-  - Platform-specific binding:
-    Azure (AzureMaaJwt):
-      - verifyAkCollateral (§8.3.1):
-        - abi.decode (bytes jwt, bytes hclVarData) from collateral.data
-        - Verify the MAA-signed RS256 JWT against the per-region signing key
-          looked up by JWT header `kid` in the MAA Signing Key Registry (§10.3)
-        - Assert iss, x-ms-attestation-type in {"tdxvm","sevsnpvm"}, and
-          x-ms-compliance-status == "azure-compliant-cvm"
-        - Hex-decode the first 32 bytes of tdx_report_data (TDX) or
-          x-ms-sevsnpvm-reportdata (SNP); next 32 bytes must be zero
-        - Assert sha256(hclVarData) equals those 32 bytes
-        - Parse HCLAkPub from hclVarData using the §14.3-scoped JWK parser
-      - Require akResult.teeType == teeResult.teeType; otherwise revert
-        AzureMaaTeeTypeMismatch
-      - akResult.bindingHash = sha256(hclVarData)
-      - For TDX, extract the 64-byte REPORT_DATA at quote-body offset 520
-      - For SNP, extract the 64-byte REPORT_DATA at report offset 0x50
-      - Require REPORT_DATA = akResult.bindingHash || bytes32(0)
-      - Return expectedPcr15 = bytes32(0)
-    GCP (GcpCertChain) + TDX:
-      - Extract UUID (16 bytes) from quoteBody at offset 520
-      - Verify RTMR3 (at offset 472) == sha384(bytes48(0) || (bytes32(0) || UUID))
-      - Compute expectedPcr15 = sha256(bytes32(0) || (bytes16(0) || UUID))
-    GCP (GcpCertChain) + SNP:
-      - Extract report_id (32 bytes) from rawReport at offset 0x140
-      - Compute expectedPcr15 = sha256(bytes32(0) || report_id)
-Output: expectedPcr15
+  - Validate the supplied Attestation Key for the collateral type
+  - Verify Azure MAA JWT, GCP certificate-chain, or AwsNitroTpmProof collateral
+  - Require the verified collateral fingerprint to match evidence.akPub
+  - Azure: match the MAA binding hash and TEE type to the verified report
+  - GCP: derive SHA-256 PCR15 from the verified TDX UUID or SNP REPORT_ID
+  - AWS: require AMD SEV-SNP, the raw-report hash, trusted Nitro root,
+    qualifyingData, document freshness, and a SHA-384 PCR15 Quote/document join
+Output: ProviderPcrRequirements
 ```
 
-### Step 4: TPM Quote Verification (`_verifyTpmQuoteWithNonce`)
+### Step 4: TPM Quote Verification (`TpmVerifier.verifyTpmQuote`)
 ```
 Input: evidence.tpmQuoteReport, akPub, ownerFingerprint
 Actions:
   - Compute nonce = _ownerNonces[ownerFingerprint]
-  - Compute expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce))
-  - Call verifyTpmQuote(tpmQuoteReport, akPub, abi.encodePacked(expectedExtraData))
+  - Compute expectedQualifyingData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce))
+  - Call tpmVerifier.verifyTpmQuote(tpmQuoteReport, akPub, expectedQualifyingData, resolvedPolicy, providerRequirements)
   - The verifier reverts with a specific TpmVerifier error on failure
   - Write the nonce increment immediately; it persists only if the transaction succeeds
-  - Extract tpmSignatureHash = keccak256(quoteReport.tpmSignature)
-Output: pcrValues[], tpmSignatureHash
+  - For AWS, match the Quote and NitroTPM document SHA-384 PCR-set commitments
+Output: TpmQuoteVerificationResult
 ```
 
 ### Step 5: TPM Certify Verification (`_verifyCertifiedKey`)
 ```
 Input: evidence.tpmCertifyReport, akPub
 Actions:
-  - Call verifyTpmCertify(tpmCertifyReport, akPub)
+  - Call tpmVerifier.verifyTpmCertify(tpmCertifyReport, akPub)
   - The verifier reverts with a specific TpmVerifier error on failure
   - Extract certified key (TPM signing key) and fingerprint
 Output: certifiedKey (PublicIdentity), certifiedKeyFingerprint
@@ -283,7 +254,7 @@ Output: certifiedKey (PublicIdentity), certifiedKeyFingerprint
 ```
 Input: tpmSignatureHash, teeReportBytesHash, certifiedKey, sessionKeySignature, sessionKey
 Actions:
-  - teeReportBytesHash = teeVerifier.getTeeReportHash(evidence.teeReport)
+  - teeReportBytesHash = teeVerificationResult.teeReportBytesHash
   - sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
   - Revert SessionAlreadyExists if session exists
   - Delegation message = keccak256(abi.encode(DELEGATION_DOMAIN, block.chainid, address(this), baseImageId, workloadId, sessionId, sessionKeyFingerprint))
@@ -295,28 +266,17 @@ Actions:
 Output: sessionId, sessionKeyFingerprint
 ```
 
-### Step 7: PCR Policy Evaluation (`_evaluatePolicy`)
+### Step 7: PCR Policy Evaluation
 ```
-Input: pcrValues from TPM quote, PolicyContext, expectedPcr15
+Input: resolved PCR policy and ProviderPcrRequirements
 Actions:
-  - Union platform invariants with variant PCR specs via _mergePcrSpecs()
-    (a variant entry at an invariant pcrIndex REVERTS PcrVariantOverridesInvariant;
-     invariants always hold and are never replaced)
-  - Evaluate merged PCR specs against measured values (_evaluatePcrSpecs)
-  - Evaluate workload PCR specs against measured values (_evaluatePcrSpecs)
-    NOTE: SessionRegistry does not enforce a hard platform-vs-workload PCR index split; it evaluates whatever sorted specs the registries provide
-  - For each PCR spec:
-    STATIC: require exactly one matchData entry, then pcrValue.value == matchData[0]
-    DYNAMIC_SUBSET: pcrValue.eventLogHashes must be non-empty AND every matchData entry must occur in the event log (order irrelevant; extra observed events permitted)
-      (empty event log is rejected — the TPM lib skips the value↔events hash-chain check when
-      events are empty, so accepting empty would let an attacker submit any `value` and bypass
-      the policy)
-    DYNAMIC_SUBSEQUENCE: pcrValue.eventLogHashes must be non-empty AND matchData must appear
-      as a subsequence (same empty-event-log rejection rationale)
-  - If expectedPcr15 != 0: verify measured PCR15 value matches expectedPcr15
-Output: All PCR checks pass, or the contract reverts with
-`InvalidStaticMatchDataLength`, `PCRStaticMismatch`, `PCREventLogEmpty`, `PCRSubsetLandmarkMissing`,
-`PCRSubsequenceLandmarkMissing`, `PCRNotFound`, or `GcpPcr15Mismatch`
+  - TpmVerifier evaluates the selected SHA-256 and SHA-384 policy banks
+  - STATIC compares the authenticated final PCR value
+  - DYNAMIC_SUBSET requires every landmark in any order
+  - DYNAMIC_SUBSEQUENCE requires every landmark in order
+  - Provider PCR bindings and join indexes stay separate from registry policy
+  - Dynamic SHA-384 policy requires tpm_quote.v1
+Output: TpmQuoteVerificationResult or a specific TpmVerifier revert
 ```
 
 ### Attribute Requirements Evaluation (executed in Step 2a)
@@ -407,7 +367,7 @@ Rotation steps:
 6. Verify session key delegation (step 6)
 7. Require the inherited workload and base image to remain active, require
    the base image to remain allowed by the workload, and evaluate the current
-   PCR rules with expectedPcr15=0. Rotation has no new TEE report, so it does
+   PCR rules with empty provider PCR requirements. Rotation has no new TEE report, so it does
    not re-evaluate verified TEE attributes or current AMD registry defaults;
    it inherits the security state accepted by the predecessor's full
    attestation.
@@ -648,8 +608,8 @@ implementation is outside this version.
 sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
 ```
 Where:
-- `tpmSignatureHash = keccak256(quoteReport.tpmSignature)` (from decoded TpmQuoteReport)
-- `teeReportBytesHash = teeVerifier.getTeeReportHash(evidence.teeReport)` (keccak256 for Solidity, last 32 bytes for ZK)
+- `tpmSignatureHash = tpmQuoteVerificationResult.tpmSignatureHash`
+- `teeReportBytesHash = teeVerificationResult.teeReportBytesHash` from the verified TEE result
 
 ### Key Storage Philosophy
 Public keys (AK, TPM signing key, session key) are NEVER stored on-chain. Only their fingerprints are stored. Full keys are emitted in `AttestationKeysRevealed` event for off-chain indexing.
@@ -662,7 +622,7 @@ This binds the session key to a specific base image, workload, and session.
 
 ### Rotation Key Differences from Registration
 - TEE is NOT re-attested during rotation (teeReportBytesHash provided directly)
-- GCP PCR15 binding check is skipped (expectedPcr15 = bytes32(0))
+- Provider PCR binding checks are skipped because rotation has no new TEE report
 - Old session's `sessionExpiresAt` is preserved (NOT recomputed from TTL)
 - Rotation authorization: old TPM signing key must sign rotation message
 - Owner `opExpiresAt` and owner signature are checked late in
@@ -679,7 +639,3 @@ This binds the session key to a specific base image, workload, and session.
 - `_isSessionActive(storage)` -- exists && !revoked && block.timestamp <= sessionExpiresAt && !workloadRegistry.isWorkloadRevoked(session.workloadId) && !baseImageRegistry.isBaseImageRevoked(session.baseImageId) (fail-closed cascade)
 - `_createSession(params)` -- stores session + updates fingerprint->ID mapping
 - `_computeSessionId(tpmSignatureHash, teeReportBytesHash)` -- domain-separated keccak256
-- `_mergePcrSpecs(invariants, overrides)` -- bitmask merge
-- `_evaluatePcrSpecs(specs, pcrValues)` -- sorted merge-join evaluation
-- `_evaluateSinglePcr(spec, measured)` -- STATIC/DYNAMIC_SUBSET/DYNAMIC_SUBSEQUENCE
-- `_findPcrValue(pcrValues, pcrIndex)` -- linear scan

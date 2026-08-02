@@ -204,34 +204,33 @@ Their layouts are documented in
 struct TpmReport {
     VerificationBackendType verificationBackendType;
     TpmReportType tpmReportType;
-    bytes data;   // ABI-encoded TpmQuoteReport or TpmCertifyReport
+    bytes data;   // TpmQuoteEvidence, TpmCertifyEvidence, or ProgramBoundZkProof
 }
 
-struct TpmQuoteReport {
-    bytes tpm2bAttest;       // Marshalled TPMS_ATTEST (no TPM2B size prefix). See note below.
-    bytes tpmSignature;      // TPM signature over tpm2bAttest
-    PcrValue[] pcrValues;    // PCR register values
+struct TpmQuoteEvidence {
+    bytes tpmsAttest;
+    bytes tpmSignature;
+    uint8 pcr0StartupLocality;
+    PcrValue256[] pcrValues256;
+    PcrValue384[] pcrValues384;
 }
 
-struct TpmCertifyReport {
-    bytes tpm2bAttest;       // Marshalled TPMS_ATTEST (no TPM2B size prefix). See note below.
-    bytes tpmSignature;      // TPM signature over tpm2bAttest
-    bytes tpmtPublic;        // TPMT_PUBLIC of certified key
+struct TpmCertifyEvidence {
+    bytes tpmsAttest;
+    bytes tpmSignature;
+    bytes tpmtPublic;
 }
 
-// Note on `tpm2bAttest`: despite the field name, the bytes are the bare
-// marshalled `TPMS_ATTEST` — i.e. they start with the TPM2.0 magic
-// `0xFF544347` at offset 0. The 2-byte `TPM2B_ATTEST` size prefix the TPM
-// ABI returns MUST be stripped before populating this field. TPM2.0
-// signatures are computed over `TPMS_ATTEST` (not the size-prefixed
-// `TPM2B_ATTEST`), and `LibTpm.parseAttestHeaders` reverts with
-// `InvalidTpmMagic()` if the prefix is present.
-
-// PcrValue imported from @automata-network/automata-tpm-attestation/types/Types.sol
-struct PcrValue {
+struct PcrValue256 {
     uint8 pcrIndex;
-    bytes32 value;              // Static PCR value
-    bytes32[] eventLogHashes;   // Dynamic event log hashes (used by DYNAMIC_SUBSET/SUBSEQUENCE)
+    bytes32 value;
+    bytes32[] eventLogHashes;
+}
+
+struct PcrValue384 {
+    uint8 pcrIndex;
+    Bytes48 value;
+    Bytes48[] eventLogHashes;
 }
 ```
 
@@ -240,8 +239,10 @@ struct PcrValue {
 ```solidity
 struct AkPubCollateral {
     AkPubCollateralType akPubCollateralType;
+    VerificationBackendType verificationBackendType;
     bytes data;   // Azure: abi.encode((bytes jwt, bytes hclVarData));
-                  // GCP: ABI-encoded bytes[] certs
+                  // GCP: ABI-encoded bytes[] certs;
+                  // AWS: abi.encode(ProgramBoundZkProof)
 }
 ```
 
@@ -250,6 +251,7 @@ struct AkPubCollateral {
 ```solidity
 struct AttestationEvidence {
     TeeReport teeReport;
+    PublicIdentity akPub;
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
     AkPubCollateral akPubCollateral;
@@ -277,8 +279,15 @@ struct SessionRenewalAuthorization {
 
 ```solidity
 struct TpmQuoteVerificationResult {
-    bool valid;
-    PcrValue[] pcrValues;
+    bytes32 akPubFingerprint;
+    bytes32 qualifyingData;
+    bytes32 tpmSignatureHash;
+    bytes32 sha256PolicyCommitment;
+    bytes32 sha384PolicyCommitment;
+    bytes32 sha256PcrBindingCommitment;
+    bytes32 sha384PcrBindingCommitment;
+    bytes32 sha256PcrSetCommitment;
+    bytes32 sha384PcrSetCommitment;
 }
 
 struct TpmCertifyVerificationResult {
@@ -292,15 +301,14 @@ struct TpmCertifyVerificationResult {
 
 ```solidity
 struct AkCollateralVerificationResult {
-    bool valid;
-    PublicIdentity akPub;
     bytes32 akPubFingerprint;
-    TEEType teeType;       // Azure: authenticated x-ms-attestation-type; ignored for GCP
-    bytes32 bindingHash;   // Azure: sha256(hclVarData) (asserted equal to MAA JWT's
-                           //   tdx_report_data / x-ms-sevsnpvm-reportdata claim prefix
-                           //   inside verifyAkCollateral, then matched against the
-                           //   verified raw TEE report by SessionRegistry)
-                           // GCP: bytes32(0) (binding via PCR15 in SessionRegistry step 7)
+    TEEType teeType;
+    bytes32 bindingHash;
+    bytes32 amdSevSnpReportHash;
+    bytes32 awsNitroRootCertHash;
+    bytes32 qualifyingData;
+    uint64 documentTimestampSeconds;
+    bytes32 sha384PcrSetCommitment;
 }
 ```
 

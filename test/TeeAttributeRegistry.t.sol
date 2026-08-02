@@ -12,7 +12,9 @@ import {
     AttributeRequirement,
     BaseImageSpec,
     MeasurementVariant,
-    PcrSpec,
+    PcrBankSelection,
+    PcrSpec256,
+    PcrSpec384,
     PlatformProfile,
     PublicIdentity,
     WorkloadSpec
@@ -215,7 +217,7 @@ contract TeeAttributeRegistryTest is Test {
         _addPlatformVariant(
             falseBaseImageId,
             "test-platform",
-            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE),
+            _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_FALSE),
             _attributes(TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA, TEE_ATTRIBUTE_TRUE)
         );
 
@@ -232,13 +234,19 @@ contract TeeAttributeRegistryTest is Test {
         bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, profileId, "test-variant"));
 
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] =
-            PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: "test-platform",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: new PcrSpec256[](0),
+            invariants384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "test-variant",
-            overridePcrs: new PcrSpec[](0),
+            variantPcrs256: new PcrSpec256[](0),
+            variantPcrs384: new PcrSpec384[](0),
             attributes: _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE)
         });
 
@@ -251,11 +259,16 @@ contract TeeAttributeRegistryTest is Test {
     function test_add_platform_variants_allows_inherited_or_explicit_true_when_stored_profile_is_true() public {
         bytes32 baseImageId = _registerBaseImage(_attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE));
 
-        _addPlatformVariant(baseImageId, "test-platform", new Attribute[](0), new Attribute[](0));
         _addPlatformVariant(
             baseImageId,
             "test-platform",
-            new Attribute[](0),
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE),
+            new Attribute[](0)
+        );
+        _addPlatformVariant(
+            baseImageId,
+            "test-platform",
+            _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE),
             _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE)
         );
     }
@@ -375,12 +388,21 @@ contract TeeAttributeRegistryTest is Test {
         BaseImageSpec memory spec =
             BaseImageSpec({name: "tee-attribute-base", version: vm.toString(nextVersion), uri: ""});
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] =
-            PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: profileAttributes});
+        profiles[0] = PlatformProfile({
+            name: "test-platform",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: new PcrSpec256[](0),
+            invariants384: new PcrSpec384[](0),
+            attributes: profileAttributes
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: variantAttributes});
+        variants[0][0] = MeasurementVariant({
+            name: "test-variant",
+            variantPcrs256: new PcrSpec256[](0),
+            variantPcrs384: new PcrSpec384[](0),
+            attributes: variantAttributes
+        });
         return baseImageRegistry.registerBaseImage(
             spec, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
         );
@@ -395,7 +417,8 @@ contract TeeAttributeRegistryTest is Test {
             baseImageMode: AccessMode.ANY,
             baseImageIds: new bytes32[](0),
             requirements: requirements,
-            pcrs: new PcrSpec[](0)
+            workloadPcrs256: new PcrSpec256[](0),
+            workloadPcrs384: new PcrSpec384[](0)
         });
         return workloadRegistry.registerWorkload(spec, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
     }
@@ -409,11 +432,21 @@ contract TeeAttributeRegistryTest is Test {
         nextVariant++;
         string memory variantName = string.concat("appended-variant-", vm.toString(nextVariant));
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] = PlatformProfile({name: profileName, invariants: new PcrSpec[](0), attributes: profileAttributes});
+        profiles[0] = PlatformProfile({
+            name: profileName,
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: new PcrSpec256[](0),
+            invariants384: new PcrSpec384[](0),
+            attributes: profileAttributes
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: variantName, overridePcrs: new PcrSpec[](0), attributes: variantAttributes});
+        variants[0][0] = MeasurementVariant({
+            name: variantName,
+            variantPcrs256: new PcrSpec256[](0),
+            variantPcrs384: new PcrSpec384[](0),
+            attributes: variantAttributes
+        });
         baseImageRegistry.addPlatformVariants(
             baseImageId, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
         );

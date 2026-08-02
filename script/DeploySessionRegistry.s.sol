@@ -4,13 +4,13 @@ pragma solidity ^0.8.0;
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
 import {SESSION_REGISTRY_IMPL_SALT, SESSION_REGISTRY_PROXY_SALT} from "./utils/Salt.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
 import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
-import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "forge-std/console.sol";
@@ -18,24 +18,24 @@ import "forge-std/console.sol";
 contract DeploySessionRegistry is DeploymentConfig {
     function _deploySessionRegistryImpl() internal returns (address) {
         address teeVerifierAddr = readContractAddress("TeeVerifier");
+        address tpmVerifierAddr = readContractAddress("TpmVerifier");
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
         address akCollateralVerifierAddr = readContractAddress("AkCollateralVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
         address amdSnpSecurityPolicyRegistryAddr = readContractAddress("AmdSnpSecurityPolicyRegistry");
-        address tpmAttestationAddr = vm.envAddress("TPM_ATTESTATION_ADDR");
 
         console.log("Using TeeVerifier at:", teeVerifierAddr);
+        console.log("Using TpmVerifier at:", tpmVerifierAddr);
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
         console.log("Using AkCollateralVerifier at:", akCollateralVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
         console.log("Using AmdSnpSecurityPolicyRegistry at:", amdSnpSecurityPolicyRegistryAddr);
-        console.log("Using TPM attestation at:", tpmAttestationAddr);
 
         SessionRegistry impl = new SessionRegistry{salt: SESSION_REGISTRY_IMPL_SALT}(
             ITeeVerifier(teeVerifierAddr),
-            ITpmAttestation(tpmAttestationAddr),
+            TpmVerifier(tpmVerifierAddr),
             ISignatureVerifier(signatureVerifierAddr),
             IAkCollateralVerifier(akCollateralVerifierAddr),
             IBaseImageRegistry(baseImageRegistryAddr),

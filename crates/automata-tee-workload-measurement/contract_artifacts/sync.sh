@@ -13,3 +13,4 @@ sync_file TpmVerifier
 sync_file TeeVerifier
 sync_file AkCollateralVerifier
 sync_file AmdSnpSecurityPolicyRegistry
+sync_file ZkVerifierRegistry

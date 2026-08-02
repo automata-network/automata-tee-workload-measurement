@@ -146,13 +146,14 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 ```
 SessionRegistry
 ├── ISessionRegistry
-├── TpmVerifier (TPM quote + TPM2_Certify verification logic)
 ├── OwnableUpgradeable (admin control)
 └── UUPSUpgradeable (upgradeability pattern)
 ```
 
-`SessionRegistry` calls the separately deployed `IAkCollateralVerifier` and
-holds an immutable `IAmdSnpSecurityPolicyRegistry` reference.
+`SessionRegistry` calls separately deployed `TpmVerifier` and
+`IAkCollateralVerifier` contracts. It also holds immutable
+`ITeeVerifier`, `ISignatureVerifier`, `IBaseImageRegistry`,
+`IWorkloadRegistry`, and `IAmdSnpSecurityPolicyRegistry` references.
 
 **BaseImageRegistry / WorkloadRegistry**:
 ```
@@ -189,6 +190,7 @@ they are not fields in `CVMSession`.
 
 **Solidity (`src/`)**:
 - `SessionRegistry.sol` - Attestation verification and session lifecycle
+- `ZkVerifierRegistry.sol` - exact proof type, backend, program identifier, and verifier adapter routes
 - `BaseImageRegistry.sol` - OS/platform policy management
 - `WorkloadRegistry.sol` - Application policy management
 - `AmdSnpSecurityPolicyRegistry.sol` - AMD SEV-SNP policy defaults by exact CPUID
@@ -196,7 +198,7 @@ they are not fields in `CVMSession`.
 - `TeeVerifier.sol` - TEE attestation dispatcher
 - `SignatureVerifier.sol` - ECDSA/RSA signature verification
 - `KeyResolver.sol` - Future: ENS-style key resolution (not yet integrated)
-- `bases/` - Base contracts for verification logic (TpmVerifier, AkCollateralVerifier)
+- `bases/` - Separately deployed TPM and Attestation Key collateral verifiers plus shared TPM code
 - `interfaces/` - Contract interfaces and storage structs
 - `types/` - Common data structures (Common.sol, Evidence.sol, Constants.sol)
 - `lib/` - Utility libraries (LibKey, LibBytes, Sha2Ext, Asn1Decode, BytesUtils)

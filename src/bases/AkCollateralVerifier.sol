@@ -3,22 +3,27 @@ pragma solidity ^0.8.27;
 
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {AkPubCollateral, AkPubCollateralType, TEEType} from "../types/Evidence.sol";
+import {AkPubCollateral, AkPubCollateralType, TEEType, VerificationBackendType} from "../types/Evidence.sol";
 import {PublicIdentity} from "../types/Common.sol";
-import {ALGO_ID_RS256} from "../types/Constants.sol";
+import {AwsNitroTpmJournalV1, ProgramBoundZkProof, ZkProofType} from "../types/Zk.sol";
+import {ALGO_ID_ES256, ALGO_ID_RS256} from "../types/Constants.sol";
 import {ISignatureVerifier} from "../interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../interfaces/IAkCollateralVerifier.sol";
 import {IMaaKeyRegistry, MaaSigningKey} from "../interfaces/registries/IMaaKeyRegistry.sol";
+import {IZkVerifierRegistry} from "../interfaces/registries/IZkVerifierRegistry.sol";
+import {IAwsNitroTpmZkVerifierAdapter} from "../interfaces/zk/IZkVerifierAdapters.sol";
 import {LibString} from "@solady/utils/LibString.sol";
 import {Base64} from "@solady/utils/Base64.sol";
 import {LibKey} from "../lib/LibKey.sol";
 import {TpmBase} from "./TpmBase.sol";
 
 /// @title AkCollateralVerifier
-/// @notice Abstract base contract for verifying AK collateral (Azure MAA JWT / GCP cert chain)
+/// @notice Separately deployed verifier for Azure MAA JWT, GCP certificate-chain, and AWS NitroTPM proof collateral
 /// @dev Deployed separately from SessionRegistry so Azure JWT parsing and certificate-chain logic
 ///      do not count against SessionRegistry's EIP-170 runtime size budget.
 contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
+    uint256 private constant P256_FIELD_MODULUS = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF;
+    uint256 private constant P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B;
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -29,23 +34,32 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
     /// @notice Signature verifier used for MAA JWT RS256 signature verification
     ISignatureVerifier public immutable signatureVerifier;
 
+    IZkVerifierRegistry public immutable zkVerifierRegistry;
+
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    constructor(IMaaKeyRegistry _maaKeyRegistry, ISignatureVerifier _signatureVerifier, ITpmAttestation _tpmAttestation)
-        TpmBase(_tpmAttestation)
-    {
+    constructor(
+        IMaaKeyRegistry _maaKeyRegistry,
+        ISignatureVerifier _signatureVerifier,
+        ITpmAttestation _tpmAttestation,
+        IZkVerifierRegistry _zkVerifierRegistry
+    ) TpmBase(_tpmAttestation) {
         maaKeyRegistry = _maaKeyRegistry;
         signatureVerifier = _signatureVerifier;
+        zkVerifierRegistry = _zkVerifierRegistry;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Errors
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice AK collateral type is not supported
-    error UnsupportedAkCollateralType(AkPubCollateralType actual);
+    error AkCollateralBackendNotConfigured(
+        AkPubCollateralType akPubCollateralType, VerificationBackendType verificationBackendType
+    );
+    error InvalidAttestationKeyAlgorithm(AkPubCollateralType collateralType, uint8 actualTypeId);
+    error InvalidAttestationKeyEncoding(AkPubCollateralType collateralType);
 
     /// @notice HCLAkPub JWK field extraction from hclVarData failed
     error AzureJwkParsingFailed();
@@ -128,13 +142,57 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         override
         returns (AkCollateralVerificationResult memory result)
     {
-        if (collateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt) {
+        if (
+            collateral.akPubCollateralType == AkPubCollateralType.AzureMaaJwt
+                && collateral.verificationBackendType == VerificationBackendType.Solidity
+        ) {
             return _verifyAzureAkCollateral(collateral.data);
-        } else if (collateral.akPubCollateralType == AkPubCollateralType.GcpCertChain) {
+        } else if (
+            collateral.akPubCollateralType == AkPubCollateralType.GcpCertChain
+                && collateral.verificationBackendType == VerificationBackendType.Solidity
+        ) {
             return _verifyGcpAkCollateral(collateral.data);
-        } else {
-            revert UnsupportedAkCollateralType(collateral.akPubCollateralType);
+        } else if (
+            collateral.akPubCollateralType == AkPubCollateralType.AwsNitroTpmProof
+                && collateral.verificationBackendType == VerificationBackendType.ZkSuccinct
+        ) {
+            return _verifyAwsNitroTpmCollateral(collateral.data, collateral.verificationBackendType);
         }
+        revert AkCollateralBackendNotConfigured(collateral.akPubCollateralType, collateral.verificationBackendType);
+    }
+
+    function validateAkPub(AkPubCollateralType collateralType, PublicIdentity calldata akPub)
+        external
+        pure
+        override
+        returns (bytes32 fingerprint)
+    {
+        if (collateralType == AkPubCollateralType.AzureMaaJwt) {
+            if (akPub.typeId != ALGO_ID_RS256) {
+                revert InvalidAttestationKeyAlgorithm(collateralType, akPub.typeId);
+            }
+            if (akPub.key.length == 0) revert InvalidAttestationKeyEncoding(collateralType);
+        } else {
+            if (akPub.typeId != ALGO_ID_ES256) {
+                revert InvalidAttestationKeyAlgorithm(collateralType, akPub.typeId);
+            }
+            if (!_isValidP256Point(akPub.key)) revert InvalidAttestationKeyEncoding(collateralType);
+        }
+        return LibKey.computeKeyFingerprint(akPub);
+    }
+
+    function _isValidP256Point(bytes calldata key) private pure returns (bool) {
+        if (key.length != 65 || key[0] != 0x04) return false;
+        uint256 x = uint256(bytes32(key[1:33]));
+        uint256 y = uint256(bytes32(key[33:65]));
+        if (x >= P256_FIELD_MODULUS || y >= P256_FIELD_MODULUS) return false;
+        uint256 left = mulmod(y, y, P256_FIELD_MODULUS);
+        uint256 xSquared = mulmod(x, x, P256_FIELD_MODULUS);
+        uint256 xCubed = mulmod(xSquared, x, P256_FIELD_MODULUS);
+        uint256 threeX = mulmod(3, x, P256_FIELD_MODULUS);
+        uint256 right = addmod(xCubed, P256_FIELD_MODULUS - threeX, P256_FIELD_MODULUS);
+        right = addmod(right, P256_B, P256_FIELD_MODULUS);
+        return left == right;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -262,11 +320,14 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         bytes32 akPubFingerprint = LibKey.computeKeyFingerprint(akPub);
 
         return AkCollateralVerificationResult({
-            valid: true,
-            akPub: akPub,
             akPubFingerprint: akPubFingerprint,
             teeType: isTdx ? TEEType.IntelTDX : TEEType.AmdSevSnp,
-            bindingHash: bindingHash
+            bindingHash: bindingHash,
+            amdSevSnpReportHash: bytes32(0),
+            awsNitroRootCertHash: bytes32(0),
+            qualifyingData: bytes32(0),
+            documentTimestampSeconds: 0,
+            sha384PcrSetCommitment: bytes32(0)
         });
     }
 
@@ -602,13 +663,37 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         bytes32 bindingHash = bytes32(0);
 
         return AkCollateralVerificationResult({
-            valid: true,
-            akPub: akPub,
             akPubFingerprint: akPubFingerprint,
             // GCP certificate collateral does not authenticate a TEE type. SessionRegistry
             // ignores this field for GcpCertChain.
             teeType: TEEType.IntelTDX,
-            bindingHash: bindingHash
+            bindingHash: bindingHash,
+            amdSevSnpReportHash: bytes32(0),
+            awsNitroRootCertHash: bytes32(0),
+            qualifyingData: bytes32(0),
+            documentTimestampSeconds: 0,
+            sha384PcrSetCommitment: bytes32(0)
+        });
+    }
+
+    function _verifyAwsNitroTpmCollateral(bytes calldata data, VerificationBackendType backend)
+        private
+        view
+        returns (AkCollateralVerificationResult memory result)
+    {
+        ProgramBoundZkProof memory proof = abi.decode(data, (ProgramBoundZkProof));
+        address adapter =
+            zkVerifierRegistry.resolveVerifierAdapter(ZkProofType.AwsNitroTpm, backend, proof.programIdentifier);
+        AwsNitroTpmJournalV1 memory journal = IAwsNitroTpmZkVerifierAdapter(adapter).verifyProof(proof);
+        return AkCollateralVerificationResult({
+            akPubFingerprint: journal.akPubFingerprint,
+            teeType: TEEType.AmdSevSnp,
+            bindingHash: bytes32(0),
+            amdSevSnpReportHash: journal.amdSevSnpReportHash,
+            awsNitroRootCertHash: journal.awsNitroRootCertHash,
+            qualifyingData: journal.qualifyingData,
+            documentTimestampSeconds: journal.documentTimestampSeconds,
+            sha384PcrSetCommitment: journal.sha384PcrSetCommitment
         });
     }
 }

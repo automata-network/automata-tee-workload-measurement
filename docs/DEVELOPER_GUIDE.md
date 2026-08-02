@@ -44,7 +44,7 @@ The system is composed of six contract groups with strict separation of concerns
 - **WorkloadRegistry** — Defines application-level policies including base image access control, attribute requirements, and PCR constraints. Managed by workload developers.
 - **SessionRegistry** — Orchestrates the full attestation verification workflow, creates on-chain session identities, and manages session lifecycle.
 - **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults plus mandatory mitigation-vector masks for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
-- **AkCollateralVerifier** — Separately deployed Azure MAA JWT and GCP AK certificate-chain verifier.
+- **AkCollateralVerifier** — Separately deployed Azure MAA JWT, GCP Attestation Key certificate-chain, and AWS NitroTPM proof verifier.
 - **MaaKeyRegistry** — Stores the owner-managed Microsoft Azure Attestation signing keys used by `AkCollateralVerifier`.
 - **TeeVerifier** — Stateless dispatcher for TEE attestation reports. Routes to DCAP (Intel TDX) or SNP (AMD SEV-SNP) verifiers. Supports ZK proof backends (RiscZero, SP1).
 - **SignatureVerifier** — Validates cryptographic signatures from any `PublicIdentity` key. Supports RS256, ES256 (P-256), and ES256K (secp256k1).
@@ -56,13 +56,13 @@ The system is composed of six contract groups with strict separation of concerns
 ```
 SessionRegistry
 ├── ISessionRegistry
-├── TpmVerifier (TPM Quote + TPM Certify verification)
 ├── OwnableUpgradeable
 └── UUPSUpgradeable
 ```
 
-`SessionRegistry` calls the separately deployed `IAkCollateralVerifier`.
-Its immutable registry references are `IBaseImageRegistry`,
+`SessionRegistry` calls separately deployed `TpmVerifier` and
+`IAkCollateralVerifier` contracts. Its other immutable references are
+`ITeeVerifier`, `ISignatureVerifier`, `IBaseImageRegistry`,
 `IWorkloadRegistry`, and `IAmdSnpSecurityPolicyRegistry`.
 
 **BaseImageRegistry / WorkloadRegistry:**
@@ -266,12 +266,12 @@ The **central orchestrator** that ties everything together. It verifies attestat
 
 The SessionRegistry holds immutable references to:
 - `ITeeVerifier` — TEE attestation verification
+- `TpmVerifier` — TPM Quote, TPM Certify, PCR policy, and proof verification
 - `ISignatureVerifier` — Cryptographic signature verification
-- `IAkCollateralVerifier` — Azure MAA JWT and GCP AK collateral verification
+- `IAkCollateralVerifier` — Azure MAA JWT, GCP Attestation Key collateral, and AWS NitroTPM proof verification
 - `IBaseImageRegistry` — Platform policy lookup
 - `IWorkloadRegistry` — Application policy lookup
 - `IAmdSnpSecurityPolicyRegistry` — AMD SEV-SNP policy defaults plus ordinary and reserved TEE attribute evaluation
-- `ITpmAttestation` — TPM Quote and Certify verification through the inherited `TpmBase`
 
 ### Key Operations
 
@@ -414,13 +414,14 @@ Verifies the Attestation Key (AK) and its binding to the TEE instance:
   `sha256(hclVarData) || bytes32(0)`. `SessionRegistry` then requires the
   independently verified TDX or SNP report's `REPORT_DATA` to contain the same
   value.
-- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. Also computes `expectedPcr15 = sha256(bytes32(0) || bytes16(0) || UUID)`. The 16-byte UUID is left-padded with zeros to fill each bank's register width (no intermediate hash).
-- **GCP (SNP)**: AK from X.509 chain. Binding via `report_id` at SNP report offset `0x140`. Computes `expectedPcr15 = sha256(0x00 || report_id)`.
+- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. `TeeVerifier.deriveGcpPcr15` returns `sha256(bytes32(0) || bytes16(0) || UUID)` for `PcrBinding256.expectedValue`. The 16-byte UUID is left-padded with zeros to fill each bank's register width (no intermediate hash).
+- **GCP (SNP)**: AK from X.509 chain. Binding via `report_id` at SNP report offset `0x140`. `TeeVerifier.deriveGcpPcr15` returns `sha256(bytes32(0) || report_id)` for `PcrBinding256.expectedValue`.
 
 ### Step 4: TPM Quote Verification
 
 Verifies the TPM Quote report:
-- Validates the AK signature over the marshalled `TPMS_ATTEST` (carried in the `tpm2bAttest` field; the historical name is preserved but the bytes have **no** `TPM2B` 2-byte size prefix — see `Evidence.sol`)
+- Validates the Attestation Key signature over `TpmQuoteEvidence.tpmsAttest`,
+  or verifies the exact `tpm_quote.v1` proof
 - Checks nonce binding: `extraData == keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, currentNonce))`
 - Extracts measured PCR values from the quote
 - Writes the owner nonce increment immediately after successful Quote
@@ -440,8 +441,8 @@ Verifies the TPM2_Certify report:
 
 Computes the session ID:
 ```
-tpmSignatureHash = keccak256(tpmQuoteReport.tpmSignature)
-teeReportBytesHash = teeVerifier.getTeeReportHash(evidence.teeReport)
+tpmSignatureHash = tpmQuoteVerificationResult.tpmSignatureHash
+teeReportBytesHash = teeVerificationResult.teeReportBytesHash
 sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
 ```
 

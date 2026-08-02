@@ -25,7 +25,7 @@ echo "expected reportHash = keccak256(report) = $(cast keccak "$REPORT")"
 echo "journal trailing 32 bytes               = 0x${OUTPUT: -64}   (must match above)"
 echo
 
-# teeReport.data = abi.encode(SnpZkProof{ output, proofBytes, rawReport })
+# teeReport.data = abi.encode(AmdSevSnpZkEvidence{ proof, rawReport })
 SNP=$(cast abi-encode "x((bytes,bytes,bytes))" "($OUTPUT,$PROOF,$REPORT)")
 
 echo "=== isolated TeeVerifier.verifyTeeReport(ZkSuccinct=2, AmdSevSnp=1) on $TEE ==="

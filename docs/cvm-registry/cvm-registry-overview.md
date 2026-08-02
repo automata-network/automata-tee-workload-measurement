@@ -28,11 +28,13 @@ Three-tier on-chain registry establishing cryptographic chains of trust from TEE
            │                              │
      ┌─────┴──────────────┐      ┌────────┴────────┐
      │ TpmVerifier         │      │  KeyResolver    │
-     │ (inherited TPM      │      │ (fingerprint    │
+     │ (separate TPM       │      │ (fingerprint    │
      │  quote/certify)     │      │  directory)     │
      └─────────┬───────────┘      └─────────────────┘
                │ external
         AkCollateralVerifier ── MaaKeyRegistry
+               │
+        ZkVerifierRegistry
 ```
 
 ## Core Design Principles
@@ -53,8 +55,8 @@ and metadata attributes. An explicit value replaces a default on its policy
 side; the registry value is not an independent mandatory floor.
 
 5. **UUPS upgradeable registries** -- `BaseImageRegistry`, `WorkloadRegistry`,
-`SessionRegistry`, `AmdSnpSecurityPolicyRegistry`, and `KeyResolver` use the
-UUPS proxy pattern with storage gaps.
+`SessionRegistry`, `ZkVerifierRegistry`, `AmdSnpSecurityPolicyRegistry`, and
+`KeyResolver` use the UUPS proxy pattern with storage gaps.
 
 6. **Nonce-based replay protection** -- Per-owner nonce in SessionRegistry, bound into TPM quote `extraData`.
 
@@ -67,6 +69,7 @@ src/
 ├── BaseImageRegistry.sol
 ├── WorkloadRegistry.sol
 ├── SessionRegistry.sol
+├── ZkVerifierRegistry.sol
 ├── AmdSnpSecurityPolicyRegistry.sol
 ├── KeyResolver.sol
 ├── MaaKeyRegistry.sol             (per-region MAA signing keys for AzureMaaJwt)
@@ -85,12 +88,15 @@ src/
 │   │   ├── IBaseImageRegistry.sol
 │   │   ├── IWorkloadRegistry.sol
 │   │   ├── ISessionRegistry.sol
+│   │   ├── IZkVerifierRegistry.sol
 │   │   ├── IKeyResolver.sol
 │   │   └── IMaaKeyRegistry.sol
-│   └── external/
+│   ├── external/
 │       ├── IDcapAttestation.sol   (Intel DCAP)
 │       ├── ISnpAttestation.sol    (AMD SNP)
-│       └── INitroEnclaveVerifier.sol (AWS Nitro, not yet integrated)
+│       └── INitroEnclaveVerifier.sol
+│   └── zk/
+│       └── IZkVerifierAdapters.sol
 ├── types/
 │   ├── Common.sol                 (core data structures)
 │   ├── Evidence.sol               (attestation evidence types)
@@ -101,6 +107,8 @@ src/
 │   ├── Sha2Ext.sol                (SHA-384/512)
 │   ├── Asn1Decode.sol             (ASN.1 DER parsing)
 │   └── BytesUtils.sol             (byte string utilities)
+├── zk/
+│   └── ZkVerifierAdapters.sol     (typed Intel TDX, AMD SEV-SNP, TPM Quote, and AWS NitroTPM adapters)
 └── mock/
     ├── MockTpmAttestation.sol
     ├── MockSignatureVerifier.sol
@@ -112,12 +120,11 @@ src/
 
 ```
 SessionRegistry
-  ├── inherits: ISessionRegistry, TpmVerifier, OwnableUpgradeable, UUPSUpgradeable
-  ├── immutable refs: ITeeVerifier, IAkCollateralVerifier,
+  ├── inherits: ISessionRegistry, OwnableUpgradeable, UUPSUpgradeable
+  ├── immutable refs: ITeeVerifier, TpmVerifier, IAkCollateralVerifier,
   │                   ISignatureVerifier, IBaseImageRegistry, IWorkloadRegistry,
-  │                   IAmdSnpSecurityPolicyRegistry, and ITpmAttestation
-  │                   through TpmBase
-  └── uses: LibKey, LibBytes, Sha2Ext
+  │                   and IAmdSnpSecurityPolicyRegistry
+  └── uses: LibKey and LibBytes
 
 BaseImageRegistry
   ├── inherits: IBaseImageRegistry, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable
@@ -131,8 +138,8 @@ WorkloadRegistry
 
 TeeVerifier
   ├── inherits: ITeeVerifier
-  ├── immutable refs: IDcapAttestation, ISnpAttestation
-  └── uses: inline assembly for byte extraction
+  ├── immutable refs: IDcapAttestation, IZkVerifierRegistry
+  └── resolves Intel TDX and AMD SEV-SNP ZK adapters by exact program identifier
 
 AmdSnpSecurityPolicyRegistry
   ├── inherits: IAmdSnpSecurityPolicyRegistry, OwnableUpgradeable, UUPSUpgradeable
@@ -151,14 +158,19 @@ MaaKeyRegistry
   └── stores: per-region Microsoft Azure Attestation signing keys (RS256 / RSA-2048)
               consumed by AkCollateralVerifier when verifying AzureMaaJwt collateral
 
-TpmVerifier (abstract)
+TpmVerifier
   ├── inherits: TpmBase
-  └── uses: LibKey
+  ├── immutable ref: IZkVerifierRegistry
+  └── verifies raw Solidity TPM Quotes, `tpm_quote.v1` proofs, and TPM Certify evidence
 
 AkCollateralVerifier
   ├── implements: IAkCollateralVerifier; inherits: TpmBase
-  ├── immutable refs: IMaaKeyRegistry, ISignatureVerifier
-  └── uses: LibString, Base64 (Solady), LibKey, LibX509
+  ├── immutable refs: IMaaKeyRegistry, ISignatureVerifier, IZkVerifierRegistry
+  └── verifies Azure MAA JWT, GCP certificate-chain, and `aws_nitrotpm.v1` evidence
+
+ZkVerifierRegistry
+  ├── inherits: IZkVerifierRegistry, OwnableUpgradeable, UUPSUpgradeable
+  └── maps one exact proof type, backend, and program identifier to one verifier adapter
 
 TpmBase (abstract)
   └── holds: ITpmAttestation immutable
@@ -210,9 +222,10 @@ immutable dependency from live chain state before an upgrade.
 | AMD SEV-SNP | Azure | MAA-signed JWT (RS256); `x-ms-sevsnpvm-reportdata` claim commits to `sha256(hclVarData)`; same per-region MAA key signs both TDX and SNP paths | N/A |
 | Intel TDX | GCP | Certificate chain via `ITpmAttestation.verifyCertChain` | `sha256(bytes32(0) || bytes16(0) || UUID)`; RTMR3 = `sha384(bytes48(0) || bytes32(0) || UUID)` |
 | AMD SEV-SNP | GCP | Certificate chain | `sha256(bytes32(0) || report_id)` |
+| AMD SEV-SNP | AWS | `aws_nitrotpm.v1` `AwsNitroTpmProof` | SHA-384 PCR15 joins the Quote and NitroTPM document; `Sha256AndSha384` also binds SHA-256 PCR15 to `REPORT_ID` |
 
 For Azure TDX and Azure SEV-SNP, `_verifyAzureAkCollateral` returns the
-MAA-signed `sha256(hclVarData)` as `bindingHash`. `_verifyTeeAkBinding` then
+MAA-signed `sha256(hclVarData)` as `bindingHash`. `_verifyProviderEvidence` then
 requires the independently verified raw TEE report's `REPORT_DATA` to equal
 `bindingHash || bytes32(0)`. Azure does not use PCR15 for this binding.
 

@@ -96,7 +96,7 @@ impl Relay {
 
         // Pre-compute session ID for logging
         let session_id = compute_session_id_from_parts(
-            &request.evidence.tpm_quote_report.data,
+            &request.evidence.tpm_quote_report,
             &request.evidence.tee_report,
         )?;
 
@@ -146,10 +146,8 @@ impl Relay {
         let owner_signature: Bytes = request.owner_signature;
 
         // Pre-compute new session ID for logging
-        let new_session_id = compute_new_session_id(
-            tee_report_bytes_hash,
-            &rotation_evidence.tpm_quote_report.data,
-        )?;
+        let new_session_id =
+            compute_new_session_id(tee_report_bytes_hash, &rotation_evidence.tpm_quote_report)?;
 
         info!(
             old_session_id = %old_session_id,

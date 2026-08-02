@@ -11,7 +11,9 @@ import {
     Attribute,
     BaseImageSpec,
     MeasurementVariant,
-    PcrSpec,
+    PcrBankSelection,
+    PcrSpec256,
+    PcrSpec384,
     PlatformProfile,
     PublicIdentity
 } from "../src/types/Common.sol";
@@ -71,7 +73,9 @@ contract RegistrationRestrictedTest is Test {
 
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
         profiles[0].name = "azure-snp";
-        profiles[0].invariants = new PcrSpec[](0);
+        profiles[0].pcrBankSelection = PcrBankSelection.Sha256;
+        profiles[0].invariants256 = new PcrSpec256[](0);
+        profiles[0].invariants384 = new PcrSpec384[](0);
         profiles[0].attributes = new Attribute[](0);
 
         MeasurementVariant[][] memory noVariants = new MeasurementVariant[][](1);
@@ -92,7 +96,8 @@ contract RegistrationRestrictedTest is Test {
         MeasurementVariant[][] memory newVariants = new MeasurementVariant[][](1);
         newVariants[0] = new MeasurementVariant[](1);
         newVariants[0][0].name = "debug-variant";
-        newVariants[0][0].overridePcrs = new PcrSpec[](0);
+        newVariants[0][0].variantPcrs256 = new PcrSpec256[](0);
+        newVariants[0][0].variantPcrs384 = new PcrSpec384[](0);
         newVariants[0][0].attributes = new Attribute[](1);
         newVariants[0][0].attributes[0] = Attribute({key: TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, value: TEE_ATTRIBUTE_TRUE});
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
+import {Bytes48} from "../lib/LibBytes.sol";
+
 // ============================================================================
 // Verification & Access Control
 // ============================================================================
@@ -38,7 +40,7 @@ struct PublicIdentity {
 }
 
 /// @notice Platform Configuration Register (PCR) specification for verification
-struct PcrSpec {
+struct PcrSpec256 {
     /// @dev PCR index (0-23 per TPM 2.0 specification)
     uint8 pcrIndex;
     /// @dev Verification strategy: STATIC (exact match), DYNAMIC_SUBSET (required unordered landmarks), DYNAMIC_SUBSEQUENCE (ordered landmarks)
@@ -51,6 +53,20 @@ struct PcrSpec {
     ///      - DYNAMIC_SUBSEQUENCE: matchData = required event sequence (must appear in order in
     ///        a non-empty event log; empty event log is rejected for the same reason).
     bytes32[] matchData;
+}
+
+/// @notice SHA-384 PCR policy rule. Digest bytes use normal byte order.
+struct PcrSpec384 {
+    uint8 pcrIndex;
+    PcrVerifyType verifyType;
+    Bytes48[] matchData;
+}
+
+/// @notice PCR policy bank or banks evaluated for one platform profile.
+enum PcrBankSelection {
+    Sha256,
+    Sha384,
+    Sha256AndSha384
 }
 
 /// @notice Generic key-value attribute for metadata
@@ -70,12 +86,10 @@ struct Attribute {
 struct MeasurementVariant {
     /// @dev Human-readable machine type name (e.g., "n2d-standard-16", "Standard_D4s_v4")
     string name;
-    /// @dev PCR specifications for indices the parent PlatformProfile leaves unpinned.
-    ///      `overridePcrs` is a historical name kept for ABI/SDK compatibility: entries MUST be
-    ///      disjoint from `PlatformProfile.invariants`. A profile invariant always holds — an
-    ///      overlapping entry is rejected at registration (VariantOverridesInvariantPcr) and
-    ///      again at session evaluation (PcrVariantOverridesInvariant), never applied.
-    PcrSpec[] overridePcrs;
+    /// @dev SHA-256 rules for indices the parent profile leaves unpinned.
+    PcrSpec256[] variantPcrs256;
+    /// @dev SHA-384 rules for indices the parent profile leaves unpinned.
+    PcrSpec384[] variantPcrs384;
     /// @dev Machine-type-specific attributes (e.g., "machine_series": "n2d", "gpu": "nvidia-t4")
     Attribute[] attributes;
 }
@@ -86,8 +100,12 @@ struct MeasurementVariant {
 struct PlatformProfile {
     /// @dev Human-readable platform profile name (e.g., "azure-tdx-westus2")
     string name;
-    /// @dev PCRs constant across all machine types in this platform (e.g., BIOS, bootloader, OS kernel)
-    PcrSpec[] invariants;
+    /// @dev Policy bank or banks evaluated for this platform.
+    PcrBankSelection pcrBankSelection;
+    /// @dev SHA-256 PCRs constant across all machine types in this platform.
+    PcrSpec256[] invariants256;
+    /// @dev SHA-384 PCRs constant across all machine types in this platform.
+    PcrSpec384[] invariants384;
     /// @dev Platform-wide attributes (e.g., "cloud": "Azure", "tee": "IntelTDX")
     Attribute[] attributes;
 }
@@ -136,8 +154,51 @@ struct WorkloadSpec {
     bytes32[] baseImageIds;
     /// @dev Attribute requirements (ALL must be satisfied for session registration)
     AttributeRequirement[] requirements;
-    /// @dev PCR specifications for workload measurements (typically PCR 20-23)
-    PcrSpec[] pcrs;
+    /// @dev SHA-256 workload PCR rules.
+    PcrSpec256[] workloadPcrs256;
+    /// @dev SHA-384 workload PCR rules.
+    PcrSpec384[] workloadPcrs384;
+}
+
+struct ResolvedPcrPolicy {
+    bytes32 workloadId;
+    bytes32 baseImageId;
+    bytes32 platformProfileId;
+    bytes32 measurementVariantId;
+    PcrBankSelection pcrBankSelection;
+    PcrSpec256[] invariants256;
+    PcrSpec256[] variantPcrs256;
+    PcrSpec256[] workloadPcrs256;
+    PcrSpec384[] invariants384;
+    PcrSpec384[] variantPcrs384;
+    PcrSpec384[] workloadPcrs384;
+}
+
+struct PcrBinding256 {
+    uint8 pcrIndex;
+    bytes32 expectedValue;
+}
+
+struct PcrBinding384 {
+    uint8 pcrIndex;
+    Bytes48 expectedValue;
+}
+
+struct ProviderPcrRequirements {
+    PcrBinding256[] pcrBindings256;
+    uint8[] pcrJoinIndexes256;
+    PcrBinding384[] pcrBindings384;
+    uint8[] pcrJoinIndexes384;
+}
+
+struct PcrSetEntry256 {
+    uint8 pcrIndex;
+    bytes32 value;
+}
+
+struct PcrSetEntry384 {
+    uint8 pcrIndex;
+    Bytes48 value;
 }
 
 // ============================================================================

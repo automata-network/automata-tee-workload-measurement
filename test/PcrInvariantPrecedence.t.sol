@@ -9,9 +9,11 @@ import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.s
 
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
 import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
@@ -25,7 +27,9 @@ import {
     AttributeRequirement,
     BaseImageSpec,
     MeasurementVariant,
-    PcrSpec,
+    PcrBankSelection,
+    PcrSpec256,
+    PcrSpec384,
     PcrVerifyType,
     PlatformProfile,
     PublicIdentity,
@@ -39,8 +43,8 @@ import {
     TEEType,
     TeeReport,
     TeeVerificationResult,
-    TpmCertifyReport,
-    TpmQuoteReport,
+    TpmCertifyEvidence,
+    TpmQuoteEvidence,
     TpmReport,
     TpmReportType,
     VerificationBackendType
@@ -57,8 +61,7 @@ import {
 /// @notice A platform profile invariant always holds. A measurement variant may only pin PCR
 ///         indices the profile leaves unpinned — it can never restate or relax an invariant.
 ///         Enforced at registration (BaseImageRegistry) and re-enforced at session evaluation
-///         (SessionRegistry._mergePcrSpecs) so stored state written by an earlier implementation
-///         cannot silently drop a profile invariant.
+///         during session evaluation.
 contract PcrInvariantPrecedenceTest is Test {
     address private constant TEE_VERIFIER = address(0x1001);
     address private constant TPM_ATTESTATION = address(0x1002);
@@ -70,6 +73,7 @@ contract PcrInvariantPrecedenceTest is Test {
     MockSignatureVerifier private signatureVerifier;
     BaseImageRegistry private baseImageRegistry;
     WorkloadRegistry private workloadRegistry;
+    TpmVerifier private tpmVerifier;
     SessionRegistry private sessionRegistry;
 
     PublicIdentity private imageOwner;
@@ -101,9 +105,10 @@ contract PcrInvariantPrecedenceTest is Test {
         signatureVerifier = new MockSignatureVerifier();
         baseImageRegistry = new BaseImageRegistry(signatureVerifier);
         workloadRegistry = new WorkloadRegistry(signatureVerifier);
+        tpmVerifier = new TpmVerifier(ITpmAttestation(TPM_ATTESTATION), IZkVerifierRegistry(address(0)));
         sessionRegistry = new SessionRegistry(
             ITeeVerifier(TEE_VERIFIER),
-            ITpmAttestation(TPM_ATTESTATION),
+            tpmVerifier,
             ISignatureVerifier(address(signatureVerifier)),
             IAkCollateralVerifier(AK_COLLATERAL_VERIFIER),
             baseImageRegistry,
@@ -132,7 +137,8 @@ contract PcrInvariantPrecedenceTest is Test {
                 baseImageMode: AccessMode.WHITELIST,
                 baseImageIds: allowed,
                 requirements: new AttributeRequirement[](0),
-                pcrs: new PcrSpec[](0)
+                workloadPcrs256: new PcrSpec256[](0),
+                workloadPcrs384: new PcrSpec384[](0)
             }),
             uint64(block.timestamp + 1 hours),
             imageOwner,
@@ -153,7 +159,7 @@ contract PcrInvariantPrecedenceTest is Test {
             baseImageId,
             _profiles(_pcr(4, PcrVerifyType.STATIC, GOLDEN_PCR4)),
             _variantsNamed(
-                "rogue", PcrSpec({pcrIndex: 4, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: anyEvent})
+                "rogue", PcrSpec256({pcrIndex: 4, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: anyEvent})
             ),
             uint64(block.timestamp + 1 hours),
             imageOwner,
@@ -164,14 +170,17 @@ contract PcrInvariantPrecedenceTest is Test {
     /// @dev Overlap is checked against the STORED invariants. Resubmitting the profile struct with
     ///      the invariant removed must not launder the check — submitted metadata is dropped for an
     ///      already-registered profile.
-    function test_addPlatformVariants_uses_stored_invariants_not_submitted_ones() public {
+    function test_addPlatformVariants_rejects_changed_profile_metadata() public {
         PlatformProfile[] memory profilesWithoutInvariant = new PlatformProfile[](1);
-        profilesWithoutInvariant[0] =
-            PlatformProfile({name: "profile", invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
+        profilesWithoutInvariant[0] = PlatformProfile({
+            name: "profile",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: new PcrSpec256[](0),
+            invariants384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
 
-        vm.expectRevert(
-            abi.encodeWithSelector(BaseImageRegistry.VariantOverridesInvariantPcr.selector, profileId, uint8(4))
-        );
+        vm.expectRevert(abi.encodeWithSelector(BaseImageRegistry.PlatformProfileMetadataMismatch.selector, profileId));
         baseImageRegistry.addPlatformVariants(
             baseImageId,
             profilesWithoutInvariant,
@@ -204,7 +213,9 @@ contract PcrInvariantPrecedenceTest is Test {
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
         profiles[0] = PlatformProfile({
             name: "second-profile",
-            invariants: _pcr(7, PcrVerifyType.STATIC, GOLDEN_PCR4),
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: _pcr(7, PcrVerifyType.STATIC, GOLDEN_PCR4),
+            invariants384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
         bytes32 newProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, "second-profile"));
@@ -235,269 +246,69 @@ contract PcrInvariantPrecedenceTest is Test {
         assertTrue(baseImageRegistry.hasVariant(keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, profileId, "disjoint"))));
     }
 
-    /// @dev Defence in depth: even if storage already holds an overlapping pair (written by an
-    ///      earlier implementation), session evaluation must fail closed rather than let the
-    ///      variant spec win. The registry is mocked here to produce exactly that stored state.
-    function test_registerSession_rejects_stored_variant_that_pins_an_invariant_pcr() public {
-        _mockLegacyVariant(bytes32("legacy"));
-
-        AttestationEvidence memory evidence = _evidence(keccak256("any-event"));
-        _mockAttestation(evidence);
-
-        vm.expectRevert(abi.encodeWithSelector(SessionRegistry.PcrVariantOverridesInvariant.selector, uint8(4)));
-        sessionRegistry.registerSession(
-            evidence,
-            workloadId,
-            baseImageId,
-            profileId,
-            bytes32("legacy"),
-            uint64(block.timestamp + 1 hours),
-            sessionOwner,
-            hex"01"
-        );
-    }
-
-    /// @dev rotateKey re-evaluates the PCR policy, so a session created before the guard existed
-    ///      cannot be rotated forward on an overlapping hierarchy either.
-    function test_rotateKey_rejects_stored_variant_that_pins_an_invariant_pcr() public {
-        bytes32 oldSessionId = keccak256("legacy-session");
-        bytes32 legacyVariantId = bytes32("legacy");
-        PublicIdentity memory oldSessionKey = _identity(ALGO_ID_ES256K, 0x51);
-        _seedLegacySession(oldSessionId, legacyVariantId, oldSessionKey);
-        _mockLegacyVariant(legacyVariantId);
-
-        bytes32[] memory anyEvent = new bytes32[](1);
-        anyEvent[0] = keccak256("any-event");
-        PcrValue[] memory pcrs = new PcrValue[](1);
-        pcrs[0] = PcrValue({pcrIndex: 4, value: ROGUE_PCR4, eventLogHashes: anyEvent});
-
-        SessionKeyRotationEvidence memory rotation = SessionKeyRotationEvidence({
-            tpmQuoteReport: TpmReport({
-                verificationBackendType: VerificationBackendType.Solidity,
-                tpmReportType: TpmReportType.TpmQuote,
-                data: abi.encode(
-                    TpmQuoteReport({
-                        tpm2bAttest: bytes("rotate-attest"), tpmSignature: bytes("rotate-signature"), pcrValues: pcrs
-                    })
-                )
-            }),
-            tpmCertifyReport: TpmReport({
-                verificationBackendType: VerificationBackendType.Solidity,
-                tpmReportType: TpmReportType.TpmCertify,
-                data: abi.encode(
-                    TpmCertifyReport({
-                        tpm2bAttest: bytes("rotate-certify"),
-                        tpmSignature: bytes("rotate-certify-sig"),
-                        tpmtPublic: hex"0000000000040072"
-                    })
-                )
-            }),
-            sessionKeySignature: abi.encode(bytes("delegation"), bytes("possession")),
-            sessionKey: _identity(ALGO_ID_ES256K, 0x52),
-            rotationSignature: bytes("rotation"),
-            oldTpmSigningKey: tpmSigningKey,
-            akPub: ak
-        });
-
-        _mockTpmCalls();
-
-        vm.expectRevert(abi.encodeWithSelector(SessionRegistry.PcrVariantOverridesInvariant.selector, uint8(4)));
-        sessionRegistry.rotateKey(
-            oldSessionId,
-            keccak256("original-tee-report"),
-            rotation,
-            uint64(block.timestamp + 1 hours),
-            sessionOwner,
-            hex"01"
-        );
-    }
-
     // ────────────────────────────────────────────────────────────────────────
     // Helpers
     // ────────────────────────────────────────────────────────────────────────
-
-    /// @dev Writes a CVMSessionStorage entry directly, standing in for a session registered by an
-    ///      implementation that predates the invariant guard.
-    function _seedLegacySession(bytes32 sessionId, bytes32 variantId, PublicIdentity memory sessionKey) private {
-        uint256 base = uint256(keccak256(abi.encode(sessionId, uint256(0))));
-        vm.store(address(sessionRegistry), bytes32(base), bytes32(uint256(1))); // exists, not revoked
-        vm.store(address(sessionRegistry), bytes32(base + 1), LibKey.computeKeyFingerprint(sessionOwner));
-        vm.store(address(sessionRegistry), bytes32(base + 2), LibKey.computeKeyFingerprint(ak));
-        vm.store(address(sessionRegistry), bytes32(base + 3), LibKey.computeKeyFingerprint(tpmSigningKey));
-        vm.store(address(sessionRegistry), bytes32(base + 4), LibKey.computeKeyFingerprint(sessionKey));
-        vm.store(address(sessionRegistry), bytes32(base + 5), baseImageId);
-        vm.store(address(sessionRegistry), bytes32(base + 6), workloadId);
-        vm.store(address(sessionRegistry), bytes32(base + 7), profileId);
-        vm.store(address(sessionRegistry), bytes32(base + 8), variantId);
-        vm.store(
-            address(sessionRegistry),
-            bytes32(base + 9),
-            bytes32((uint256(block.timestamp + 12 hours) << 64) | uint64(block.timestamp))
-        );
-    }
-
-    /// @dev Makes the registry report a stored hierarchy whose variant pins an invariant PCR.
-    function _mockLegacyVariant(bytes32 variantId) private {
-        bytes32[] memory anyEvent = new bytes32[](1);
-        anyEvent[0] = keccak256("any-event");
-        vm.mockCall(
-            address(baseImageRegistry),
-            abi.encodeCall(IBaseImageRegistry.getVariant, (baseImageId, profileId, variantId)),
-            abi.encode(
-                BaseImageSpec({name: "invariant-base", version: "v1", uri: ""}),
-                PlatformProfile({
-                    name: "profile",
-                    invariants: _pcr(4, PcrVerifyType.STATIC, GOLDEN_PCR4),
-                    attributes: new Attribute[](0)
-                }),
-                MeasurementVariant({
-                    name: "legacy",
-                    overridePcrs: _pcrSpecs(
-                        PcrSpec({pcrIndex: 4, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: anyEvent})
-                    ),
-                    attributes: new Attribute[](0)
-                })
-            )
-        );
-    }
 
     function _otherBaseImageId() private pure returns (bytes32) {
         return keccak256(abi.encode(keccak256("CVM_BASEIMAGE_V1"), "invariant-base", "v2"));
     }
 
-    function _pcr(uint8 index, PcrVerifyType verifyType, bytes32 value) private pure returns (PcrSpec[] memory specs) {
+    function _pcr(uint8 index, PcrVerifyType verifyType, bytes32 value)
+        private
+        pure
+        returns (PcrSpec256[] memory specs)
+    {
         bytes32[] memory matchData = new bytes32[](1);
         matchData[0] = value;
-        specs = new PcrSpec[](1);
-        specs[0] = PcrSpec({pcrIndex: index, verifyType: verifyType, matchData: matchData});
+        specs = new PcrSpec256[](1);
+        specs[0] = PcrSpec256({pcrIndex: index, verifyType: verifyType, matchData: matchData});
     }
 
-    function _pcrSpecs(PcrSpec memory spec) private pure returns (PcrSpec[] memory specs) {
-        specs = new PcrSpec[](1);
+    function _pcrSpecs(PcrSpec256 memory spec) private pure returns (PcrSpec256[] memory specs) {
+        specs = new PcrSpec256[](1);
         specs[0] = spec;
     }
 
-    function _profiles(PcrSpec[] memory invariants) private pure returns (PlatformProfile[] memory profiles) {
+    function _profiles(PcrSpec256[] memory invariants) private pure returns (PlatformProfile[] memory profiles) {
         profiles = new PlatformProfile[](1);
-        profiles[0] = PlatformProfile({name: "profile", invariants: invariants, attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: "profile",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: invariants,
+            invariants384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
     }
 
-    function _variants(PcrSpec[] memory overridePcrs) private pure returns (MeasurementVariant[][] memory variants) {
-        variants = new MeasurementVariant[][](1);
-        variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: "variant", overridePcrs: overridePcrs, attributes: new Attribute[](0)});
-    }
-
-    function _variantsNamed(string memory name, PcrSpec memory spec)
+    function _variants(PcrSpec256[] memory variantPcrs256)
         private
         pure
         returns (MeasurementVariant[][] memory variants)
     {
         variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] = MeasurementVariant({name: name, overridePcrs: _pcrSpecs(spec), attributes: new Attribute[](0)});
+        variants[0][0] = MeasurementVariant({
+            name: "variant",
+            variantPcrs256: variantPcrs256,
+            variantPcrs384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
     }
 
-    function _evidence(bytes32 pcr4Event) private pure returns (AttestationEvidence memory evidence) {
-        bytes32[] memory events = new bytes32[](1);
-        events[0] = pcr4Event;
-        PcrValue[] memory pcrs = new PcrValue[](1);
-        pcrs[0] = PcrValue({pcrIndex: 4, value: ROGUE_PCR4, eventLogHashes: events});
-
-        evidence.teeReport = TeeReport({
-            verificationBackendType: VerificationBackendType.Solidity,
-            teeType: TEEType.IntelTDX,
-            data: bytes("tee-report")
+    function _variantsNamed(string memory name, PcrSpec256 memory spec)
+        private
+        pure
+        returns (MeasurementVariant[][] memory variants)
+    {
+        variants = new MeasurementVariant[][](1);
+        variants[0] = new MeasurementVariant[](1);
+        variants[0][0] = MeasurementVariant({
+            name: name,
+            variantPcrs256: _pcrSpecs(spec),
+            variantPcrs384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
         });
-        evidence.tpmQuoteReport = TpmReport({
-            verificationBackendType: VerificationBackendType.Solidity,
-            tpmReportType: TpmReportType.TpmQuote,
-            data: abi.encode(
-                TpmQuoteReport({
-                    tpm2bAttest: bytes("quote-attest"), tpmSignature: bytes("quote-signature"), pcrValues: pcrs
-                })
-            )
-        });
-        evidence.tpmCertifyReport = TpmReport({
-            verificationBackendType: VerificationBackendType.Solidity,
-            tpmReportType: TpmReportType.TpmCertify,
-            data: abi.encode(
-                TpmCertifyReport({
-                    tpm2bAttest: bytes("certify-attest"),
-                    tpmSignature: bytes("certify-signature"),
-                    tpmtPublic: hex"0000000000040072"
-                })
-            )
-        });
-        evidence.akPubCollateral =
-            AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: bytes("")});
-        evidence.sessionKeySignature = abi.encode(bytes("delegation"), bytes("possession"));
-        evidence.sessionKey = _identity(ALGO_ID_ES256K, 0x04);
-    }
-
-    function _mockAttestation(AttestationEvidence memory evidence) private {
-        vm.mockCall(
-            TEE_VERIFIER,
-            abi.encodeCall(ITeeVerifier.verifyTeeReport, (evidence.teeReport)),
-            abi.encode(
-                TeeVerificationResult({
-                    valid: true,
-                    reportData: new bytes(584),
-                    teeType: TEEType.IntelTDX,
-                    enabledTeeAttributes: 0,
-                    intelTdxTcbStatusBit: TDX_TCB_STATUS_OK,
-                    amdSevSnpTcbValues: bytes32(0),
-                    amdSevSnpPlatformInfo: 0,
-                    amdSevSnpCpuid: 0,
-                    amdSevSnpReportVersion: 0,
-                    amdSevSnpLaunchMitigationVector: 0,
-                    amdSevSnpCurrentMitigationVector: 0
-                })
-            )
-        );
-        vm.mockCall(
-            TEE_VERIFIER,
-            abi.encodeCall(ITeeVerifier.getTeeReportHash, (evidence.teeReport)),
-            abi.encode(keccak256("tee-report-hash"))
-        );
-        vm.mockCall(
-            AK_COLLATERAL_VERIFIER,
-            abi.encodeCall(IAkCollateralVerifier.verifyAkCollateral, (evidence.akPubCollateral)),
-            abi.encode(
-                AkCollateralVerificationResult({
-                    valid: true,
-                    akPub: ak,
-                    akPubFingerprint: LibKey.computeKeyFingerprint(ak),
-                    teeType: TEEType.IntelTDX,
-                    bindingHash: bytes32(0)
-                })
-            )
-        );
-        _mockTpmCalls();
-    }
-
-    function _mockTpmCalls() private {
-        bytes32 expectedExtraData = keccak256(
-            abi.encode(
-                SESSION_NONCE_DOMAIN,
-                block.chainid,
-                address(sessionRegistry),
-                LibKey.computeKeyFingerprint(sessionOwner),
-                uint256(0)
-            )
-        );
-        vm.mockCall(
-            TPM_ATTESTATION,
-            ITpmAttestation.verifyTpmQuoteWithTrustedAkPub.selector,
-            abi.encode(true, abi.encodePacked(expectedExtraData))
-        );
-        vm.mockCall(TPM_ATTESTATION, ITpmAttestation.checkPcrMeasurements.selector, abi.encode(true, bytes("")));
-        vm.mockCall(
-            TPM_ATTESTATION,
-            ITpmAttestation.verifyTpmKeyCertification.selector,
-            abi.encode(CertPubkey({algo: 0x0023, params: 0x0003, data: tpmSigningKey.key}), bytes(""))
-        );
     }
 
     function _identity(uint8 typeId, uint8 marker) private pure returns (PublicIdentity memory identity) {

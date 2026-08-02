@@ -3,6 +3,8 @@ pragma solidity ^0.8.27;
 
 import {DeploySignatureVerifier} from "./DeploySignatureVerifier.s.sol";
 import {DeployTeeVerifier} from "./DeployTeeVerifier.s.sol";
+import {DeployTpmVerifier} from "./DeployTpmVerifier.s.sol";
+import {DeployZkVerifierRegistry} from "./DeployZkVerifierRegistry.s.sol";
 import {DeployBaseImageRegistry} from "./DeployBaseImageRegistry.s.sol";
 import {DeployWorkloadRegistry} from "./DeployWorkloadRegistry.s.sol";
 import {DeployKeyResolver} from "./DeployKeyResolver.s.sol";
@@ -25,7 +27,9 @@ import "forge-std/console.sol";
 ///      forge script script/DeployProd.s.sol:DeployProd --rpc-url $RPC_URL --broadcast --verify
 contract DeployProd is
     DeploySignatureVerifier,
+    DeployZkVerifierRegistry,
     DeployTeeVerifier,
+    DeployTpmVerifier,
     DeployBaseImageRegistry,
     DeployWorkloadRegistry,
     DeployKeyResolver,
@@ -38,7 +42,9 @@ contract DeployProd is
         public
         override(
             DeploySignatureVerifier,
+            DeployZkVerifierRegistry,
             DeployTeeVerifier,
+            DeployTpmVerifier,
             DeployBaseImageRegistry,
             DeployWorkloadRegistry,
             DeployKeyResolver,
@@ -52,7 +58,9 @@ contract DeployProd is
 
         // 1. Immutable contracts first
         deploySignatureVerifier();
+        deployZkVerifierRegistry();
         deployTeeVerifier();
+        deployTpmVerifier();
 
         // 2. Proxy registries (read deps from JSON written above)
         deployBaseImageRegistryProxy(address(0));

@@ -59,6 +59,7 @@ override.
 ```
 src/
 ├── SessionRegistry.sol           # Attestation verification and session lifecycle
+├── ZkVerifierRegistry.sol         # Exact ZK program and verifier-adapter routes
 ├── BaseImageRegistry.sol         # OS/platform measurement policy management
 ├── WorkloadRegistry.sol          # Application measurement policy management
 ├── AmdSnpSecurityPolicyRegistry.sol # AMD SEV-SNP policy defaults by CPUID
@@ -66,7 +67,7 @@ src/
 ├── TeeVerifier.sol               # TEE attestation dispatcher (DCAP / SNP / ZK)
 ├── SignatureVerifier.sol          # Cryptographic signature verification (RS256, ES256, ES256K)
 ├── KeyResolver.sol               # Public key fingerprint directory
-├── bases/                        # Base verification contracts
+├── bases/                        # Separately deployed and shared verification contracts
 │   ├── TpmVerifier.sol           #   TPM Quote + TPM Certify verification
 │   └── AkCollateralVerifier.sol  #   Azure MAA JWT and GCP AK validation
 ├── interfaces/                   # Contract interfaces

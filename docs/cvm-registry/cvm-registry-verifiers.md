@@ -11,7 +11,7 @@
 | Variable | Type | Purpose |
 |---|---|---|
 | `dcapAttestation` | `IDcapAttestation` | Intel DCAP verification backend |
-| `snpAttestation` | `ISnpAttestation` | AMD SNP verification backend |
+| `zkVerifierRegistry` | `IZkVerifierRegistry` | Exact ZK program and verifier-adapter routes |
 
 ### Constants
 
@@ -36,17 +36,17 @@ uint256 constant SNP_REPORT_SIZE = 1184;
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "1.4.0";
+string public constant TEE_VERIFIER_VERSION = "2.0.0";
 ```
 
 ### Functions
 
-#### `getTeeReportHash`
+#### `deriveGcpPcr15`
 ```solidity
-function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32)
+function deriveGcpPcr15(TeeVerificationResult memory result) external pure returns (bytes32 pcr15)
 ```
-- Solidity backend: `keccak256(teeReport.data)`
-- ZK backend: decodes `ZkProof` from data, extracts last 32 bytes of `zkProof.output`
+- Intel TDX: validates RTMR3, then derives SHA-256 PCR15 from the verified UUID.
+- AMD SEV-SNP: derives SHA-256 PCR15 from the verified `REPORT_ID`.
 
 #### `verifyTeeReport`
 ```solidity
@@ -56,7 +56,8 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 **TDX (Intel) flow**:
 1. Dispatch based on `VerificationBackendType`:
    - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
-   - ZK RiscZero/Succinct: `dcapAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
+   - ZK Succinct: resolve the exact `intel_tdx_dcap.v1` adapter through
+     `ZkVerifierRegistry`
 2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
 3. Return the accepted status as `intelTdxTcbStatusBit = 1 << rawStatus`.
 4. Extract the quote body from DCAP output.
@@ -66,7 +67,8 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 8. Return the quote body with `valid=true`.
 
 **SNP (AMD) flow**:
-1. ZK only: `snpAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
+1. ZK only: resolve the exact `amd_sev_snp.v1` adapter through
+   `ZkVerifierRegistry`.
 2. Check the proof-bound report hash before reading report fields
 3. Require an exact 1,184-byte report and version 3 through 5
 4. Validate signature selection, key settings, policy, `VMPL`, raw TCB,
@@ -237,8 +239,11 @@ function verify(
 ## TpmVerifier
 
 **File**: `src/bases/TpmVerifier.sol`
-**Inheritance**: `TpmBase` (abstract)
-**Role**: TPM quote and certify verification
+**Inheritance**: `TpmBase`
+**Role**: Separately deployed TPM Quote and Certify verifier
+
+The constructor receives `ITpmAttestation` and `IZkVerifierRegistry`.
+`SessionRegistry` holds an immutable `TpmVerifier` reference.
 
 ### Constants
 
@@ -260,46 +265,55 @@ uint32 constant TPMA_OBJECT_REQUIRED_CLEAR = 0xFFFBFB8D;
 function verifyTpmQuote(
     TpmReport memory tpmReport,
     PublicIdentity memory akPub,
-    bytes memory expectedExtraData       // NOTE: bytes, not bytes32
-) internal returns (TpmQuoteVerificationResult memory)
+    bytes32 expectedQualifyingData,
+    ResolvedPcrPolicy memory policy,
+    ProviderPcrRequirements memory providerRequirements
+) public returns (TpmQuoteVerificationResult memory result)
 ```
 
-1. Validate `tpmReportType == TpmQuote`
-2. Validate `verificationBackendType == Solidity` (ZK not yet supported)
-3. Decode `TpmQuoteReport` from `tpmReport.data`
-4. Convert `PublicIdentity` → `CertPubkey` for TPM library compatibility
-5. Call `tpmAttestation.verifyTpmQuoteWithTrustedAkPub(tpm2bAttest, tpmSignature, akCertPubkey)`
-6. Verify `keccak256(extractedExtraData) == keccak256(expectedExtraData)`
-7. Call `tpmAttestation.checkPcrMeasurements(tpm2bAttest, pcrValues)`
-8. Return: `{ valid: true, pcrValues }`
+1. Require `tpmReportType == TpmQuote`.
+2. Use raw `TpmQuoteEvidence` for `VerificationBackendType.Solidity`, or
+   resolve the exact `tpm_quote.v1` adapter for
+   `VerificationBackendType.ZkSuccinct`.
+3. Require the Attestation Key fingerprint and `qualifyingData`.
+4. Require the SHA-256 and SHA-384 policy commitments.
+5. Require the provider PCR-binding commitments.
+6. Require each selected bank to return the needed PCR-set commitment.
+7. The Solidity path verifies the signed Quote selection and `pcrDigest`, then
+   evaluates static and dynamic SHA-256 policy plus static SHA-384 policy.
+   Dynamic SHA-384 policy requires `tpm_quote.v1`.
 
 #### `verifyTpmCertify`
 ```solidity
 function verifyTpmCertify(
     TpmReport memory tpmReport,
     PublicIdentity memory akPub
-) internal view returns (TpmCertifyVerificationResult memory)
+) public view returns (TpmCertifyVerificationResult memory result)
 ```
 
 1. Validate `tpmReportType == TpmCertify`
-2. Decode `TpmCertifyReport` from `tpmReport.data`
-3. Validate CLEAR bits on `tpmtPublic[4:8]` (via `_validateClearBits`)
-4. Call `tpmAttestation.verifyTpmKeyCertification(tpm2bAttest, tpmSignature, tpmtPublic, akCertPubkey, TPMA_OBJECT_REQUIRED_SET)`
-5. Validate `TPMA_OBJECT` bits on `tpmtPublic`:
+2. Require `verificationBackendType == Solidity`.
+3. Decode `TpmCertifyEvidence` from `tpmReport.data`.
+4. Validate CLEAR bits on `tpmtPublic[4:8]` (via `_validateClearBits`)
+5. Call `tpmAttestation.verifyTpmKeyCertification(tpmsAttest, tpmSignature, tpmtPublic, akCertPubkey, TPMA_OBJECT_REQUIRED_SET)`
+6. Validate `TPMA_OBJECT` bits on `tpmtPublic`:
    - All `REQUIRED_SET` bits must be set
    - All `REQUIRED_CLEAR` bits must be clear
-5. Convert certified key (`CertPubkey`) back to `PublicIdentity`
-6. Return: `{ valid: true, certifiedKey, certifiedKeyFingerprint }`
+7. Convert certified key (`CertPubkey`) back to `PublicIdentity`
+8. Return: `{ valid: true, certifiedKey, certifiedKeyFingerprint }`
 
 ### Errors
 
 | Error | Condition |
 |---|---|
 | `UnexpectedTpmReportType()` | Wrong report type for operation |
-| `UnsupportedTpmBackendType()` | ZK backends not yet implemented |
+| `TpmReportBackendNotConfigured()` | The selected report backend is not configured |
+| `TpmQuoteBackendDoesNotSatisfyPolicy()` | A raw Solidity Quote cannot evaluate the selected policy |
 | `TpmQuoteExtraDataMismatch()` | Nonce binding check failed |
-| `TpmQuotePcrCheckFailed()` | TPM PCR integrity check failed |
 | `TpmQuoteLibraryFailed()` | TPM attestation library returned error |
+| `PcrPolicyCommitmentMismatch()` | The proof returned a different registry-policy commitment |
+| `PcrBindingCommitmentMismatch()` | The proof returned different provider-binding requirements |
+| `PcrSetCommitmentMissing()` | A required bank has no authenticated PCR-set commitment |
 | `TpmaObjectForbiddenBitsSet()` | Certified key has forbidden attributes |
 | `TpmtPublicTooShort()` | tpmtPublic data too short to extract attributes |
 
@@ -308,16 +322,16 @@ function verifyTpmCertify(
 ## AkCollateralVerifier
 
 **File**: `src/bases/AkCollateralVerifier.sol`
-**Inheritance**: `TpmBase` (abstract)
-**Role**: AK (Attestation Key) certificate chain / collateral validation
+**Type**: separately deployed concrete verifier
+**Role**: Attestation Key algorithm, encoding, certificate-chain, Microsoft Azure Attestation, and AWS NitroTPM proof validation
 
 ### Function
 
 ```solidity
 function verifyAkCollateral(
-    AkPubCollateral memory collateral
-) internal returns (AkCollateralVerificationResult memory)
-// Returns: { valid, akPub, akPubFingerprint, bindingHash }
+    AkPubCollateral calldata collateral
+) external returns (AkCollateralVerificationResult memory)
+// Returns the Attestation Key fingerprint and provider-specific commitments.
 ```
 
 Dispatches based on `collateral.akPubCollateralType`:
@@ -367,6 +381,17 @@ GCP provides X.509 certificate chain:
 
 Binding: `bindingHash = bytes32(0)`. AK is bound to TEE via PCR15 computation (verified in SessionRegistry step 7).
 
+#### AwsNitroTpmProof
+
+AWS provides a `ProgramBoundZkProof` for `aws_nitrotpm.v1`.
+`AkCollateralVerifier` resolves the exact proof type, backend, and program
+identifier through `ZkVerifierRegistry`. The selected adapter verifies the
+proof and returns the Attestation Key fingerprint, exact AMD SEV-SNP report
+hash, trusted-root hash, qualifying data, document timestamp, and native
+SHA-384 PCR-set commitment. `SessionRegistry._verifyProviderEvidence` checks
+those commitments against the common TEE result, current nonce, trusted-root
+configuration, freshness window, and TPM Quote result.
+
 ### Errors
 
 | Error | Condition |
@@ -406,7 +431,7 @@ abstract contract TpmBase {
 ```
 
 `TpmVerifier` and `AkCollateralVerifier` each inherit `TpmBase`.
-`SessionRegistry` inherits `TpmVerifier` and calls a separately deployed
-`IAkCollateralVerifier`; it does not inherit `AkCollateralVerifier`. Each
-constructor receives its own immutable `ITpmAttestation` reference. A
-deployment may point both references at the same `ITpmAttestation` contract.
+`SessionRegistry` calls separately deployed `TpmVerifier` and
+`IAkCollateralVerifier` contracts. Each verifier constructor receives its own
+immutable `ITpmAttestation` reference. A deployment may point both references
+at the same `ITpmAttestation` contract.

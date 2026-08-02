@@ -4,7 +4,14 @@ pragma solidity ^0.8.27;
 import {Test} from "forge-std/Test.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
-import {AccessMode, AttributeRequirement, PcrSpec, PublicIdentity, WorkloadSpec} from "../src/types/Common.sol";
+import {
+    AccessMode,
+    AttributeRequirement,
+    PcrSpec256,
+    PcrSpec384,
+    PublicIdentity,
+    WorkloadSpec
+} from "../src/types/Common.sol";
 
 /// @notice Base-image access-mode validation at workload registration.
 contract WorkloadRegistryTest is Test {
@@ -76,7 +83,8 @@ contract WorkloadRegistryTest is Test {
             baseImageMode: mode,
             baseImageIds: baseImageIds,
             requirements: new AttributeRequirement[](0),
-            pcrs: new PcrSpec[](0)
+            workloadPcrs256: new PcrSpec256[](0),
+            workloadPcrs384: new PcrSpec384[](0)
         });
     }
 }

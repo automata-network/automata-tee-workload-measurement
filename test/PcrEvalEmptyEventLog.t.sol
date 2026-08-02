@@ -3,53 +3,35 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
-import {SessionRegistry} from "../src/SessionRegistry.sol";
-import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
+import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
-import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
-import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
-import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
-import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
-import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
-import {PcrSpec, PcrVerifyType} from "../src/types/Common.sol";
-import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
+import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
+import {PcrSpec256, PcrVerifyType} from "../src/types/Common.sol";
+import {PcrValue256} from "../src/types/Evidence.sol";
 
 // Re-declare the PCR errors here so tests can reference their selectors.
-// The actual definitions live on SessionRegistry but Solidity does not allow
-// referencing nested error declarations by name from a derived/external file
-// when the parent inherits them via `contract X is Y`. Keeping a parallel
+// The actual definitions live on TpmVerifier. Keeping a parallel
 // declaration with matching signatures makes `vm.expectPartialRevert` work.
-error PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected);
-error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
-error PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType);
-error PCRSubsetLandmarkMissing(uint8 pcrIndex, uint256 matchIdx, bytes32 matchHash);
-error PCRSubsequenceLandmarkMissing(uint8 pcrIndex, uint256 matchedCount, uint256 expectedCount);
+error InvalidPcrRule(uint16 algorithm, uint8 pcrIndex);
+error PcrEventLogEmpty(uint16 algorithm, uint8 pcrIndex, PcrVerifyType verifyType);
+error PcrSubsetLandmarkMissing(uint16 algorithm, uint8 pcrIndex, uint256 landmarkIndex);
+error PcrSubsequenceLandmarkMissing(uint16 algorithm, uint8 pcrIndex, uint256 matchedCount, uint256 expectedCount);
 
 /// @dev Harness exposing the internal PCR evaluator for direct testing without the
 ///      registerSession attestation pipeline.
-contract SessionRegistryHarness is SessionRegistry {
-    constructor()
-        SessionRegistry(
-            ITeeVerifier(address(0)),
-            ITpmAttestation(address(0)),
-            ISignatureVerifier(address(0)),
-            IAkCollateralVerifier(address(0)),
-            IBaseImageRegistry(address(0)),
-            IWorkloadRegistry(address(0)),
-            IAmdSnpSecurityPolicyRegistry(address(0))
-        )
-    {}
+contract TpmVerifierEvaluationHarness is TpmVerifier {
+    constructor() TpmVerifier(ITpmAttestation(address(0)), IZkVerifierRegistry(address(0))) {}
 
-    function evaluateSinglePcr(PcrSpec memory spec, PcrValue memory measured) external pure {
-        _evaluateSinglePcr(spec, measured);
+    function evaluateSinglePcr(PcrSpec256 memory spec, PcrValue256 memory measured) external pure {
+        _evaluateSinglePcr256(spec, measured, 0xff);
     }
 }
 
 contract PcrEvalEmptyEventLogTest is Test {
-    SessionRegistryHarness internal harness;
+    TpmVerifierEvaluationHarness internal harness;
 
     function setUp() public {
-        harness = new SessionRegistryHarness();
+        harness = new TpmVerifierEvaluationHarness();
     }
 
     function _matchSet() internal pure returns (bytes32[] memory) {
@@ -59,17 +41,21 @@ contract PcrEvalEmptyEventLogTest is Test {
         return m;
     }
 
-    function _measured(bytes32[] memory events) internal pure returns (PcrValue memory) {
-        return PcrValue({pcrIndex: 0, value: bytes32(0), eventLogHashes: events});
+    function _measured(bytes32[] memory events) internal pure returns (PcrValue256 memory) {
+        bytes32 value;
+        for (uint256 i; i < events.length; ++i) {
+            value = sha256(abi.encodePacked(value, events[i]));
+        }
+        return PcrValue256({pcrIndex: 0, value: value, eventLogHashes: events});
     }
 
     // ─── STATIC ──────────────────────────────────────────────────────────────────
 
     function testStatic_RevertsUnlessMatchDataHasExactlyOneEntry() public {
         for (uint256 length = 0; length <= 2; length += 2) {
-            PcrSpec memory spec =
-                PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: new bytes32[](length)});
-            vm.expectRevert(abi.encodeWithSelector(InvalidStaticMatchDataLength.selector, uint8(0), length));
+            PcrSpec256 memory spec =
+                PcrSpec256({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: new bytes32[](length)});
+            vm.expectRevert(abi.encodeWithSelector(InvalidPcrRule.selector, uint16(0x000b), uint8(0)));
             harness.evaluateSinglePcr(spec, _measured(new bytes32[](0)));
         }
     }
@@ -77,17 +63,20 @@ contract PcrEvalEmptyEventLogTest is Test {
     function testStatic_AcceptsExactlyOneMatchDataEntry() public view {
         bytes32[] memory matchData = new bytes32[](1);
         matchData[0] = bytes32(uint256(0xa1));
-        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: matchData});
-        PcrValue memory measured = PcrValue({pcrIndex: 0, value: matchData[0], eventLogHashes: new bytes32[](0)});
+        PcrSpec256 memory spec = PcrSpec256({pcrIndex: 0, verifyType: PcrVerifyType.STATIC, matchData: matchData});
+        PcrValue256 memory measured = PcrValue256({pcrIndex: 0, value: matchData[0], eventLogHashes: new bytes32[](0)});
         harness.evaluateSinglePcr(spec, measured);
     }
 
     // ─── DYNAMIC_SUBSET ──────────────────────────────────────────────────────────
 
     function testDynamicSubset_RevertsOnEmptyEventLog() public {
-        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
-        PcrValue memory measured = _measured(new bytes32[](0));
-        vm.expectRevert(abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSET));
+        PcrSpec256 memory spec =
+            PcrSpec256({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
+        PcrValue256 memory measured = _measured(new bytes32[](0));
+        vm.expectRevert(
+            abi.encodeWithSelector(PcrEventLogEmpty.selector, uint16(0x000b), uint8(0), PcrVerifyType.DYNAMIC_SUBSET)
+        );
         harness.evaluateSinglePcr(spec, measured);
     }
 
@@ -97,7 +86,8 @@ contract PcrEvalEmptyEventLogTest is Test {
         events[1] = bytes32(uint256(0xa2));
         events[2] = bytes32(uint256(0xbeef));
         events[3] = bytes32(uint256(0xa1));
-        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
+        PcrSpec256 memory spec =
+            PcrSpec256({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
         harness.evaluateSinglePcr(spec, _measured(events)); // no revert
     }
 
@@ -105,20 +95,24 @@ contract PcrEvalEmptyEventLogTest is Test {
         bytes32[] memory events = new bytes32[](2);
         events[0] = bytes32(uint256(0xdead));
         events[1] = bytes32(uint256(0xa1));
-        PcrSpec memory spec = PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
-        vm.expectRevert(
-            abi.encodeWithSelector(PCRSubsetLandmarkMissing.selector, uint8(0), uint256(1), bytes32(uint256(0xa2)))
-        );
-        harness.evaluateSinglePcr(spec, _measured(events));
+        PcrSpec256 memory spec =
+            PcrSpec256({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: _matchSet()});
+        PcrValue256 memory measured = _measured(events);
+        vm.expectRevert(abi.encodeWithSelector(PcrSubsetLandmarkMissing.selector, uint16(0x000b), uint8(0), uint256(1)));
+        harness.evaluateSinglePcr(spec, measured);
     }
 
     // ─── DYNAMIC_SUBSEQUENCE ─────────────────────────────────────────────────────
 
     function testDynamicSubsequence_RevertsOnEmptyEventLog() public {
-        PcrSpec memory spec =
-            PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
-        PcrValue memory measured = _measured(new bytes32[](0));
-        vm.expectRevert(abi.encodeWithSelector(PCREventLogEmpty.selector, uint8(0), PcrVerifyType.DYNAMIC_SUBSEQUENCE));
+        PcrSpec256 memory spec =
+            PcrSpec256({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
+        PcrValue256 memory measured = _measured(new bytes32[](0));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PcrEventLogEmpty.selector, uint16(0x000b), uint8(0), PcrVerifyType.DYNAMIC_SUBSEQUENCE
+            )
+        );
         harness.evaluateSinglePcr(spec, measured);
     }
 
@@ -126,8 +120,8 @@ contract PcrEvalEmptyEventLogTest is Test {
         bytes32[] memory events = new bytes32[](2);
         events[0] = bytes32(uint256(0xa1));
         events[1] = bytes32(uint256(0xa2));
-        PcrSpec memory spec =
-            PcrSpec({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
+        PcrSpec256 memory spec =
+            PcrSpec256({pcrIndex: 0, verifyType: PcrVerifyType.DYNAMIC_SUBSEQUENCE, matchData: _matchSet()});
         harness.evaluateSinglePcr(spec, _measured(events)); // no revert
     }
 }

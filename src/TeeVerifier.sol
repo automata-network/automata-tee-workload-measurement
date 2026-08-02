@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {
-    TeeReport,
-    TEEType,
-    VerificationBackendType,
-    ZkProof,
-    SnpZkProof,
-    TeeVerificationResult
-} from "./types/Evidence.sol";
+import {TeeReport, TEEType, VerificationBackendType, TeeVerificationResult} from "./types/Evidence.sol";
 import {IDcapAttestation} from "./interfaces/external/IDcapAttestation.sol";
-import {ISnpAttestation, VerifierJournal, VerificationResult} from "./interfaces/external/ISnpAttestation.sol";
+import {VerificationResult} from "./interfaces/external/ISnpAttestation.sol";
 import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
+import {IZkVerifierRegistry} from "./interfaces/registries/IZkVerifierRegistry.sol";
+import {IAmdSevSnpZkVerifierAdapter, IIntelTdxDcapZkVerifierAdapter} from "./interfaces/zk/IZkVerifierAdapters.sol";
+import {AmdSevSnpVerifierJournal, AmdSevSnpZkEvidence, ProgramBoundZkProof, ZkProofType} from "./types/Zk.sol";
 import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
@@ -19,6 +15,8 @@ import {
     SNP_PLATFORM_INFO_SUPPORTED_MASK
 } from "./types/Constants.sol";
 import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
+import {Bytes48, LibBytes} from "./lib/LibBytes.sol";
+import {Sha2Ext} from "./lib/Sha2Ext.sol";
 
 /// @title TeeVerifier
 /// @notice Standalone contract for verifying TEE attestation reports across multiple backends
@@ -30,7 +28,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Contract version
-    string public constant TEE_VERIFIER_VERSION = "1.4.0";
+    string public constant TEE_VERIFIER_VERSION = "2.0.0";
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
@@ -39,8 +37,8 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice DCAP attestation verifier contract for Intel TDX quotes
     IDcapAttestation public immutable dcapAttestation;
 
-    /// @notice SNP attestation verifier contract for AMD SEV-SNP reports
-    ISnpAttestation public immutable snpAttestation;
+    /// @notice Exact program and adapter registry for every ZK proof.
+    IZkVerifierRegistry public immutable zkVerifierRegistry;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants - DCAP Output Layout
@@ -89,6 +87,8 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @dev Offset of reportData within quote body
     uint256 private constant DCAP_REPORT_DATA_START = 520;
+    uint256 private constant DCAP_RTMR3_OFFSET = 472;
+    uint256 private constant SNP_REPORT_ID_OFFSET = 0x140;
 
     /// @dev Minimum valid quote body length (must contain reportData)
     uint256 private constant DCAP_MIN_OUTPUT_LEN = 584; // TD10_QUOTE_BODY_SIZE (520 + 64)
@@ -207,6 +207,8 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice The signed AMD SEV-SNP TCB values have an invalid security-version order.
     error InvalidSnpTcbOrder(bytes32 lower, bytes32 upper);
+    error UnsupportedGcpTeeType(TEEType teeType);
+    error GcpTdxRtmr3Mismatch(bytes actualRtmr3, bytes expectedRtmr3);
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -214,27 +216,10 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice Initializes the TeeVerifier with vendor-specific attestation contracts
     /// @param _dcapAttestation Address of the DCAP attestation verifier contract
-    /// @param _snpAttestation Address of the SNP attestation verifier contract
-    constructor(IDcapAttestation _dcapAttestation, ISnpAttestation _snpAttestation) {
+    /// @param _zkVerifierRegistry Exact ZK program and adapter registry
+    constructor(IDcapAttestation _dcapAttestation, IZkVerifierRegistry _zkVerifierRegistry) {
         dcapAttestation = _dcapAttestation;
-        snpAttestation = _snpAttestation;
-    }
-
-    function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32) {
-        if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
-            return keccak256(teeReport.data);
-        } else {
-            ZkProof memory zkProof = abi.decode(teeReport.data, (ZkProof));
-            bytes memory zkOutput = zkProof.output;
-            if (zkOutput.length < 32) revert TeeReportTooShort(zkOutput.length, 32);
-            // get the last 32 bytes of the output
-            bytes32 outputHash;
-            assembly ("memory-safe") {
-                let outputLen := mload(zkOutput)
-                outputHash := mload(add(zkOutput, add(0x20, sub(outputLen, 32))))
-            }
-            return outputHash;
-        }
+        zkVerifierRegistry = _zkVerifierRegistry;
     }
 
     /// @notice Verifies a TEE attestation report
@@ -248,6 +233,22 @@ contract TeeVerifier is ITeeVerifier {
         } else {
             revert UnsupportedTeeType(teeReport.teeType);
         }
+    }
+
+    function deriveGcpPcr15(TeeVerificationResult memory result) external pure returns (bytes32 pcr15) {
+        if (result.teeType == TEEType.IntelTDX) {
+            bytes memory uuid = LibBytes.slice(result.reportData, DCAP_REPORT_DATA_START, 16);
+            Bytes48 memory actualRtmr3 = LibBytes.readBytes48(result.reportData, DCAP_RTMR3_OFFSET);
+            Bytes48 memory expectedRtmr3 = Sha2Ext.sha384(abi.encodePacked(new bytes(48), new bytes(32), uuid));
+            if (!LibBytes.equal(actualRtmr3, expectedRtmr3)) {
+                revert GcpTdxRtmr3Mismatch(LibBytes.toBytes(actualRtmr3), LibBytes.toBytes(expectedRtmr3));
+            }
+            return sha256(abi.encodePacked(bytes32(0), bytes16(0), uuid));
+        }
+        if (result.teeType == TEEType.AmdSevSnp) {
+            return sha256(abi.encodePacked(bytes32(0), LibBytes.readBytes32(result.reportData, SNP_REPORT_ID_OFFSET)));
+        }
+        revert UnsupportedGcpTeeType(result.teeType);
     }
 
     /// @dev Extracts the full quote body from DCAP packed output bytes
@@ -507,14 +508,12 @@ contract TeeVerifier is ITeeVerifier {
             // Direct on-chain verification
             (success, output) = dcapAttestation.verifyAndAttestOnChain(teeReport.data);
         } else {
-            // ZK proof verification
-            ZkProof memory zkProof = abi.decode(teeReport.data, (ZkProof));
-
-            // Cast backend type to ZK coprocessor type (ordinals align after reordering)
-            IDcapAttestation.ZkCoProcessorType zkType =
-                IDcapAttestation.ZkCoProcessorType(uint8(teeReport.verificationBackendType));
-
-            (success, output) = dcapAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
+            ProgramBoundZkProof memory zkProof = abi.decode(teeReport.data, (ProgramBoundZkProof));
+            address adapter = zkVerifierRegistry.resolveVerifierAdapter(
+                ZkProofType.IntelTdxDcap, teeReport.verificationBackendType, zkProof.programIdentifier
+            );
+            output = IIntelTdxDcapZkVerifierAdapter(adapter).verifyProof(zkProof);
+            success = true;
         }
 
         // Surface DCAP failure with the verifier's raw output so off-chain decoders
@@ -550,7 +549,8 @@ contract TeeVerifier is ITeeVerifier {
             amdSevSnpCpuid: 0,
             amdSevSnpReportVersion: 0,
             amdSevSnpLaunchMitigationVector: 0,
-            amdSevSnpCurrentMitigationVector: 0
+            amdSevSnpCurrentMitigationVector: 0,
+            teeReportBytesHash: keccak256(quoteBody)
         });
     }
 
@@ -563,16 +563,11 @@ contract TeeVerifier is ITeeVerifier {
             revert UnsupportedBackendType(TEEType.AmdSevSnp, teeReport.verificationBackendType);
         }
 
-        // ZK proof verification. The SNP journal commits only to keccak256(report), so the full
-        // report body is carried separately in SnpZkProof.rawReport and bound to the proof below.
-        SnpZkProof memory zkProof = abi.decode(teeReport.data, (SnpZkProof));
-
-        // Cast backend type to ZK coprocessor type (ordinals align after reordering)
-        ISnpAttestation.ZkCoProcessorType zkType =
-            ISnpAttestation.ZkCoProcessorType(uint8(teeReport.verificationBackendType));
-
-        VerifierJournal memory journal =
-            snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
+        AmdSevSnpZkEvidence memory zkEvidence = abi.decode(teeReport.data, (AmdSevSnpZkEvidence));
+        address adapter = zkVerifierRegistry.resolveVerifierAdapter(
+            ZkProofType.AmdSevSnp, teeReport.verificationBackendType, zkEvidence.proof.programIdentifier
+        );
+        AmdSevSnpVerifierJournal memory journal = IAmdSevSnpZkVerifierAdapter(adapter).verifyProof(zkEvidence.proof);
 
         // Surface SNP verifier failure mode (was silently swallowed before).
         if (journal.result != VerificationResult.Success) {
@@ -581,12 +576,12 @@ contract TeeVerifier is ITeeVerifier {
 
         // Bind the supplied raw report to the proof. The journal only attests keccak256(report),
         // so without this check a valid proof could be paired with a forged report body.
-        bytes32 computedHash = keccak256(zkProof.rawReport);
+        bytes32 computedHash = keccak256(zkEvidence.rawReport);
         if (computedHash != journal.reportHash) {
             revert SnpReportHashMismatch(journal.reportHash, computedHash);
         }
 
-        bytes memory attestationReport = extractSnpAttestationReport(zkProof.rawReport);
+        bytes memory attestationReport = extractSnpAttestationReport(zkEvidence.rawReport);
         uint32 version = _readLeUint32(attestationReport, SNP_VERSION_OFFSET);
         if (version < 3 || version > 5) {
             revert UnsupportedSnpReportVersion(version);
@@ -631,7 +626,8 @@ contract TeeVerifier is ITeeVerifier {
             amdSevSnpCpuid: cpuid,
             amdSevSnpReportVersion: version,
             amdSevSnpLaunchMitigationVector: launchMitigationVector,
-            amdSevSnpCurrentMitigationVector: currentMitigationVector
+            amdSevSnpCurrentMitigationVector: currentMitigationVector,
+            teeReportBytesHash: computedHash
         });
     }
 }

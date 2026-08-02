@@ -268,33 +268,6 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         assertEq(registry.getActivePolicy(GENOA_CPUID).minimumTcb, MINIMUM_TCB);
     }
 
-    function testLegacyStoredPolicyReadsZeroMitigationMasksAndCanBeUpdated() public {
-        bytes32 baseSlot = keccak256(abi.encode(uint256(GENOA_CPUID), uint256(0)));
-        vm.store(address(registry), baseSlot, MINIMUM_TCB);
-        vm.store(address(registry), bytes32(uint256(baseSlot) + 1), PLATFORM_INFO_POLICY);
-        vm.store(address(registry), bytes32(uint256(baseSlot) + 2), SOURCE_DIGEST);
-        vm.store(address(registry), bytes32(uint256(baseSlot) + 3), bytes32(uint256(1) | (uint256(1) << 64)));
-
-        AmdSnpSecurityPolicy memory legacy = registry.getActivePolicy(GENOA_CPUID);
-        assertEq(legacy.revision, 1);
-        assertTrue(legacy.active);
-        assertEq(legacy.requiredLaunchMitigationVector, 0);
-        assertEq(legacy.requiredCurrentMitigationVector, 0);
-
-        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
-        updates[0] = _activeUpdate(GENOA_CPUID, 2);
-        updates[0].requiredLaunchMitigationVector = 0x03;
-        updates[0].requiredCurrentMitigationVector = 0x05;
-        vm.prank(OWNER);
-        registry.updatePolicies(updates, keccak256("mitigation-policy"));
-
-        AmdSnpSecurityPolicy memory updated = registry.getActivePolicy(GENOA_CPUID);
-        assertEq(updated.minimumTcb, MINIMUM_TCB);
-        assertEq(updated.platformInfoPolicy, PLATFORM_INFO_POLICY);
-        assertEq(updated.requiredLaunchMitigationVector, 0x03);
-        assertEq(updated.requiredCurrentMitigationVector, 0x05);
-    }
-
     function testVerifyAmdSnpMitigationVectorsRequireVersionFiveAndAllRequiredBits() public {
         AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
         updates[0] = _activeUpdate(GENOA_CPUID, 1);

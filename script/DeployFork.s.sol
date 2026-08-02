@@ -3,11 +3,14 @@ pragma solidity ^0.8.27;
 
 import {DeploySignatureVerifier} from "./DeploySignatureVerifier.s.sol";
 import {DeployTeeVerifier} from "./DeployTeeVerifier.s.sol";
+import {DeployTpmVerifier} from "./DeployTpmVerifier.s.sol";
+import {DeployZkVerifierRegistry} from "./DeployZkVerifierRegistry.s.sol";
 import {DeployBaseImageRegistry} from "./DeployBaseImageRegistry.s.sol";
 import {DeployWorkloadRegistry} from "./DeployWorkloadRegistry.s.sol";
 import {DeployMaaKeyRegistry} from "./DeployMaaKeyRegistry.s.sol";
 import {DeployKeyResolver} from "./DeployKeyResolver.s.sol";
 import {DeployAkCollateralVerifier} from "./DeployAkCollateralVerifier.s.sol";
+import {DeployAmdSnpSecurityPolicyRegistry} from "./DeployAmdSnpSecurityPolicyRegistry.s.sol";
 import {DeploySessionRegistry} from "./DeploySessionRegistry.s.sol";
 import "forge-std/console.sol";
 
@@ -25,28 +28,33 @@ import "forge-std/console.sol";
 ///   export TPM_ATTESTATION_ADDR=0x715e8A7B3E24C0a27dE09b6eaD7e13B2A797cf8B
 ///   export RPC_URL=http://<anvil-host>:8545
 ///   ~/.foundry/bin/forge script script/DeployFork.s.sol:DeployFork \
-///       --rpc-url $RPC_URL --broadcast --private-key <key> --ffi \
-///       --disable-code-size-limit --non-interactive
+///       --rpc-url $RPC_URL --broadcast --private-key <key> --ffi --non-interactive
 contract DeployFork is
     DeploySignatureVerifier,
+    DeployZkVerifierRegistry,
     DeployTeeVerifier,
+    DeployTpmVerifier,
     DeployBaseImageRegistry,
     DeployWorkloadRegistry,
     DeployMaaKeyRegistry,
     DeployKeyResolver,
     DeployAkCollateralVerifier,
+    DeployAmdSnpSecurityPolicyRegistry,
     DeploySessionRegistry
 {
     function run()
         public
         override(
             DeploySignatureVerifier,
+            DeployZkVerifierRegistry,
             DeployTeeVerifier,
+            DeployTpmVerifier,
             DeployBaseImageRegistry,
             DeployWorkloadRegistry,
             DeployMaaKeyRegistry,
             DeployKeyResolver,
             DeployAkCollateralVerifier,
+            DeployAmdSnpSecurityPolicyRegistry,
             DeploySessionRegistry
         )
     {
@@ -55,7 +63,9 @@ contract DeployFork is
 
         // 1. Immutable contracts (TeeVerifier wraps real DCAP/SNP from fork)
         deploySignatureVerifier();
+        deployZkVerifierRegistry();
         deployTeeVerifier();
+        deployTpmVerifier();
 
         // 2. Proxy registries (read deps from JSON written above)
         deployBaseImageRegistryProxy(address(0));
@@ -63,6 +73,7 @@ contract DeployFork is
         deployMaaKeyRegistryProxy(address(0));
         deployKeyResolverProxy(address(0));
         deployAkCollateralVerifier();
+        deployAmdSnpSecurityPolicyRegistryProxy(address(0));
 
         // 3. SessionRegistry last (depends on all others + real TPM_ATTESTATION_ADDR)
         deploySessionRegistryProxy(address(0));

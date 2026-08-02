@@ -5,17 +5,25 @@ import {Script, console} from "forge-std/Script.sol";
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
 import {MockAutomataDcapAttestation} from "../test/mocks/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../test/mocks/MockAutomataSnpAttestation.sol";
+import {ISnpAttestation} from "../src/interfaces/external/ISnpAttestation.sol";
 import {MockTpmAttestation} from "../test/mocks/MockTpmAttestation.sol";
 import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
+import {ZkVerifierRegistry} from "../src/ZkVerifierRegistry.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
+import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
 import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {SessionRegistry, AttestationEvidence} from "../src/SessionRegistry.sol";
+import {VerificationBackendType} from "../src/types/Evidence.sol";
+import {ZkProofType} from "../src/types/Zk.sol";
+import {AmdSevSnpZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /// @title DeployMock
 /// @notice Deploys SessionRegistry with mock TEE/TPM verifiers for development/testing.
@@ -44,9 +52,11 @@ contract DeployMock is Script, DeploymentConfig {
         SessionRegistry sessionRegistry;
         TeeVerifier teeVerifier;
         MockTpmAttestation tpmAttestation;
+        TpmVerifier tpmVerifier;
         AkCollateralVerifier akCollateralVerifier;
         MockAutomataDcapAttestation dcapAttestation;
         MockAutomataSnpAttestation snpAttestation;
+        ZkVerifierRegistry zkVerifierRegistry;
     }
 
     /// @notice Deploy mock infrastructure and return addresses.
@@ -65,8 +75,27 @@ contract DeployMock is Script, DeploymentConfig {
         d.tpmAttestation = new MockTpmAttestation();
         console.log("MockTpmAttestation deployed at:", address(d.tpmAttestation));
 
+        ZkVerifierRegistry zkImplementation = new ZkVerifierRegistry();
+        d.zkVerifierRegistry = ZkVerifierRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(zkImplementation), abi.encodeCall(ZkVerifierRegistry.initialize, (vm.envAddress("OWNER")))
+                )
+            )
+        );
+        AmdSevSnpZkVerifierAdapter amdAdapter =
+            new AmdSevSnpZkVerifierAdapter(d.snpAttestation, ISnpAttestation.ZkCoProcessorType.Succinct);
+        d.zkVerifierRegistry
+            .setZkProgramConfig(
+                ZkProofType.AmdSevSnp,
+                VerificationBackendType.ZkSuccinct,
+                0x00bc5bae7f7c200ec91f866ee2f2927cc01fcf365a55f76c819648e5277d1286,
+                address(amdAdapter),
+                true
+            );
+
         // 3. TeeVerifier with mock backends
-        d.teeVerifier = new TeeVerifier(d.dcapAttestation, d.snpAttestation);
+        d.teeVerifier = new TeeVerifier(d.dcapAttestation, d.zkVerifierRegistry);
         console.log("TeeVerifier deployed at:", address(d.teeVerifier));
 
         // 4. Read existing shared contract addresses
@@ -84,14 +113,20 @@ contract DeployMock is Script, DeploymentConfig {
         d.akCollateralVerifier = new AkCollateralVerifier(
             IMaaKeyRegistry(maaKeyRegistryAddr),
             ISignatureVerifier(signatureVerifierAddr),
-            ITpmAttestation(address(d.tpmAttestation))
+            ITpmAttestation(address(d.tpmAttestation)),
+            IZkVerifierRegistry(address(d.zkVerifierRegistry))
         );
         console.log("AkCollateralVerifier deployed at:", address(d.akCollateralVerifier));
+
+        d.tpmVerifier = new TpmVerifier(
+            ITpmAttestation(address(d.tpmAttestation)), IZkVerifierRegistry(address(d.zkVerifierRegistry))
+        );
+        console.log("TpmVerifier deployed at:", address(d.tpmVerifier));
 
         // 5. SessionRegistry with mock TEE/TPM but real signature verification
         d.sessionRegistry = new SessionRegistry(
             ITeeVerifier(address(d.teeVerifier)),
-            ITpmAttestation(address(d.tpmAttestation)),
+            d.tpmVerifier,
             ISignatureVerifier(signatureVerifierAddr),
             IAkCollateralVerifier(address(d.akCollateralVerifier)),
             IBaseImageRegistry(baseImageRegistryAddr),
@@ -124,6 +159,7 @@ contract DeployMock is Script, DeploymentConfig {
     /// @notice Write deployed addresses to deployment JSON.
     function _writeMockAddresses(MockDeployment memory d) internal {
         writeToJson("TeeVerifierMock", address(d.teeVerifier));
+        writeToJson("ZkVerifierRegistryMock", address(d.zkVerifierRegistry));
         writeToJson("AkCollateralVerifierMock", address(d.akCollateralVerifier));
         writeToJson("SessionRegistryMock", address(d.sessionRegistry));
     }

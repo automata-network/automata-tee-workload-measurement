@@ -9,12 +9,14 @@ import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.s
 
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {MockSignatureVerifier} from "../test/mocks/MockSignatureVerifier.sol";
 import {
@@ -24,7 +26,9 @@ import {
     BaseImageSpec,
     CVMSession,
     MeasurementVariant,
-    PcrSpec,
+    PcrBankSelection,
+    PcrSpec256,
+    PcrSpec384,
     PlatformProfile,
     PublicIdentity,
     WorkloadSpec
@@ -33,13 +37,15 @@ import {
     AkPubCollateral,
     AkPubCollateralType,
     AttestationEvidence,
+    PcrValue256,
+    PcrValue384,
     SessionKeyRotationEvidence,
     SessionRenewalAuthorization,
     TEEType,
     TeeReport,
     TeeVerificationResult,
-    TpmCertifyReport,
-    TpmQuoteReport,
+    TpmCertifyEvidence,
+    TpmQuoteEvidence,
     TpmReport,
     TpmReportType,
     VerificationBackendType
@@ -74,10 +80,6 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
         _rejection = rejection;
     }
 
-    function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32) {
-        return keccak256(teeReport.data);
-    }
-
     function verifyTeeReport(TeeReport memory) external view returns (TeeVerificationResult memory result) {
         if (_rejection == 1) revert TdxMigrationServiceTdNotSupported();
         if (_rejection == 2) revert SnpMigrationAgentNotSupported();
@@ -93,7 +95,8 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
             amdSevSnpCpuid: _teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
             amdSevSnpReportVersion: _teeType == TEEType.AmdSevSnp ? 3 : 0,
             amdSevSnpLaunchMitigationVector: 0,
-            amdSevSnpCurrentMitigationVector: 0
+            amdSevSnpCurrentMitigationVector: 0,
+            teeReportBytesHash: keccak256(reportData)
         });
     }
 
@@ -104,11 +107,23 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
     function extractSnpReportData(bytes memory) external pure returns (bytes memory) {
         return "";
     }
+
+    function deriveGcpPcr15(TeeVerificationResult memory) external pure returns (bytes32) {
+        return bytes32(0);
+    }
 }
 
 /// @dev Transaction-path mock only. The test sets the AK returned for the next operation.
 contract AnvilLifecycleAkVerifier is IAkCollateralVerifier {
     PublicIdentity private _akPub;
+
+    function validateAkPub(AkPubCollateralType, PublicIdentity calldata akPub)
+        external
+        pure
+        returns (bytes32 fingerprint)
+    {
+        return LibKey.computeKeyFingerprint(akPub);
+    }
 
     function setAk(PublicIdentity calldata akPub) external {
         _akPub = akPub;
@@ -119,13 +134,15 @@ contract AnvilLifecycleAkVerifier is IAkCollateralVerifier {
         view
         returns (AkCollateralVerificationResult memory result)
     {
-        PublicIdentity memory akPub = _akPub;
         return AkCollateralVerificationResult({
-            valid: true,
-            akPub: akPub,
-            akPubFingerprint: LibKey.computeKeyFingerprint(akPub),
+            akPubFingerprint: LibKey.computeKeyFingerprint(_akPub),
             teeType: TEEType.IntelTDX,
-            bindingHash: bytes32(0)
+            bindingHash: bytes32(0),
+            amdSevSnpReportHash: bytes32(0),
+            awsNitroRootCertHash: bytes32(0),
+            qualifyingData: bytes32(0),
+            documentTimestampSeconds: 0,
+            sha384PcrSetCommitment: bytes32(0)
         });
     }
 }
@@ -234,7 +251,8 @@ contract SessionLifecycleAnvilTest is Script {
     WorkloadRegistry private workloadRegistry;
     AmdSnpSecurityPolicyRegistry private amdSnpSecurityPolicyRegistry;
     AnvilLifecycleTeeVerifier private teeVerifier;
-    AnvilLifecycleTpmVerifier private tpmVerifier;
+    AnvilLifecycleTpmVerifier private tpmAttestation;
+    TpmVerifier private tpmVerifier;
     AnvilLifecycleAkVerifier private akVerifier;
     SessionRegistry private sessionRegistry;
     AnvilExpectedRevertProbe private expectedRevertProbe;
@@ -262,7 +280,8 @@ contract SessionLifecycleAnvilTest is Script {
         amdSnpSecurityPolicyRegistry.updatePolicies(amdPolicies, keccak256("anvil-test-policy"));
         teeVerifier = new AnvilLifecycleTeeVerifier();
         teeVerifier.configure(true, TEEType.IntelTDX, 0, 0);
-        tpmVerifier = new AnvilLifecycleTpmVerifier();
+        tpmAttestation = new AnvilLifecycleTpmVerifier();
+        tpmVerifier = new TpmVerifier(tpmAttestation, IZkVerifierRegistry(address(0)));
         akVerifier = new AnvilLifecycleAkVerifier();
         sessionRegistry = new SessionRegistry(
             teeVerifier,
@@ -393,10 +412,12 @@ contract SessionLifecycleAnvilTest is Script {
         bytes32[] memory falseOnly = new bytes32[](1);
         falseOnly[0] = bytes32(0);
         PolicyIds memory workloadVeto = _registerTeePolicy("workload-veto", TEE_ATTRIBUTE_TRUE, falseOnly);
-        _expectRegisterRevert(workloadVeto, 0x52, 6, SessionRegistry.TeeAttributeValueNotAllowed.selector);
+        _expectRegisterRevert(workloadVeto, 0x52, 6, AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector);
 
         PolicyIds memory baseMismatch = _registerTeePolicy("base-mismatch", bytes32(0), allowDebug);
-        _expectRegisterRevert(baseMismatch, 0x53, 6, SessionRegistry.TeeAttributeBaseImageMismatch.selector);
+        _expectRegisterRevert(
+            baseMismatch, 0x53, 6, AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector
+        );
 
         teeVerifier.configure(true, TEEType.IntelTDX, 0, 1);
         _expectRegisterRevert(
@@ -472,11 +493,21 @@ contract SessionLifecycleAnvilTest is Script {
             attributes[0] = Attribute({key: TEE_ATTRIBUTE_INTEL_TDX_DEBUG, value: baseValue});
         }
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] = PlatformProfile({name: "anvil-tdx", invariants: new PcrSpec[](0), attributes: attributes});
+        profiles[0] = PlatformProfile({
+            name: "anvil-tdx",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: new PcrSpec256[](0),
+            invariants384: new PcrSpec384[](0),
+            attributes: attributes
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: "anvil-variant", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        variants[0][0] = MeasurementVariant({
+            name: "anvil-variant",
+            variantPcrs256: new PcrSpec256[](0),
+            variantPcrs384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
         ids.baseImageId = baseImageRegistry.registerBaseImage(
             baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
         );
@@ -500,7 +531,8 @@ contract SessionLifecycleAnvilTest is Script {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: baseImages,
             requirements: requirements,
-            pcrs: new PcrSpec[](0)
+            workloadPcrs256: new PcrSpec256[](0),
+            workloadPcrs384: new PcrSpec384[](0)
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -513,12 +545,21 @@ contract SessionLifecycleAnvilTest is Script {
     {
         BaseImageSpec memory baseImage = BaseImageSpec({name: "anvil-lifecycle-base", version: baseVersion, uri: ""});
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] =
-            PlatformProfile({name: "anvil-platform", invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: "anvil-platform",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: new PcrSpec256[](0),
+            invariants384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: "anvil-variant", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        variants[0][0] = MeasurementVariant({
+            name: "anvil-variant",
+            variantPcrs256: new PcrSpec256[](0),
+            variantPcrs384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
         ids.baseImageId = baseImageRegistry.registerBaseImage(
             baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
         );
@@ -535,7 +576,8 @@ contract SessionLifecycleAnvilTest is Script {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: new AttributeRequirement[](0),
-            pcrs: new PcrSpec[](0)
+            workloadPcrs256: new PcrSpec256[](0),
+            workloadPcrs384: new PcrSpec384[](0)
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -550,7 +592,7 @@ contract SessionLifecycleAnvilTest is Script {
             abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(sessionRegistry), ownerFingerprint, nonce)
         );
         akVerifier.setAk(akPub);
-        tpmVerifier.configure(abi.encodePacked(extraData), certifiedKey);
+        tpmAttestation.configure(abi.encodePacked(extraData), certifiedKey);
     }
 
     function _fullEvidence(uint8 marker, PublicIdentity memory sessionKey)
@@ -565,16 +607,22 @@ contract SessionLifecycleAnvilTest is Script {
         });
         evidence.tpmQuoteReport = _quoteReport(marker);
         evidence.tpmCertifyReport = _certifyReport(marker);
-        evidence.akPubCollateral = AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: ""});
+        evidence.akPubCollateral = AkPubCollateral({
+            akPubCollateralType: AkPubCollateralType.AzureMaaJwt,
+            verificationBackendType: VerificationBackendType.Solidity,
+            data: ""
+        });
         evidence.sessionKeySignature = abi.encode(hex"01", hex"02");
         evidence.sessionKey = sessionKey;
     }
 
     function _quoteReport(uint8 marker) private pure returns (TpmReport memory) {
-        TpmQuoteReport memory quote = TpmQuoteReport({
-            tpm2bAttest: abi.encodePacked("anvil-quote-", marker),
+        TpmQuoteEvidence memory quote = TpmQuoteEvidence({
+            tpmsAttest: abi.encodePacked("anvil-quote-", marker),
             tpmSignature: abi.encodePacked("anvil-quote-signature-", marker),
-            pcrValues: new PcrValue[](0)
+            pcr0StartupLocality: 0xff,
+            pcrValues256: new PcrValue256[](0),
+            pcrValues384: new PcrValue384[](0)
         });
         return TpmReport({
             verificationBackendType: VerificationBackendType.Solidity,
@@ -584,8 +632,8 @@ contract SessionLifecycleAnvilTest is Script {
     }
 
     function _certifyReport(uint8 marker) private pure returns (TpmReport memory) {
-        TpmCertifyReport memory certify = TpmCertifyReport({
-            tpm2bAttest: abi.encodePacked("anvil-certify-", marker),
+        TpmCertifyEvidence memory certify = TpmCertifyEvidence({
+            tpmsAttest: abi.encodePacked("anvil-certify-", marker),
             tpmSignature: abi.encodePacked("anvil-certify-signature-", marker),
             tpmtPublic: hex"0000000000040072"
         });

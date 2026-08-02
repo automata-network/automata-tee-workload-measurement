@@ -5,7 +5,8 @@ import {
     WorkloadSpec,
     PublicIdentity,
     AccessMode,
-    PcrSpec,
+    PcrSpec256,
+    PcrSpec384,
     PcrVerifyType,
     AttributeRequirement
 } from "./types/Common.sol";
@@ -77,7 +78,6 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     mapping(bytes32 => WorkloadSpecStorage) private _workloads;
     mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageSet;
     mapping(bytes32 => bool) private _whitelist;
-    /// @dev Storage gap for future upgrades (3 existing mappings → 47-slot gap)
     uint256[47] private __gap;
 
     // ============================================================================
@@ -114,7 +114,8 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
-        _validatePcrSpecsSorted(spec.pcrs);
+        _validatePcrSpecs256Sorted(spec.workloadPcrs256);
+        _validatePcrSpecs384Sorted(spec.workloadPcrs384);
         _validateRequirements(spec.requirements);
 
         // An empty whitelist denies every base image, so isBaseImageAllowed always returns false
@@ -151,7 +152,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         _workloads[workloadId].exists = true;
         _workloads[workloadId].isRevoked = false;
         _workloads[workloadId].owner = ownerFingerprint;
-        _workloads[workloadId].workloadSpec = spec;
+        _storeWorkload(workloadId, spec);
 
         // Populate base image set
         for (uint256 i = 0; i < spec.baseImageIds.length; i++) {
@@ -207,7 +208,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         if (!_workloads[workloadId].exists) {
             revert WorkloadNotFound(workloadId);
         }
-        return _workloads[workloadId].workloadSpec;
+        return _loadWorkload(workloadId);
     }
 
     /// @inheritdoc IWorkloadRegistry
@@ -295,12 +296,12 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         }
     }
 
-    function _validatePcrSpecsSorted(PcrSpec[] calldata pcrs) private pure {
+    function _validatePcrSpecs256Sorted(PcrSpec256[] calldata pcrs) private pure {
         uint256 len = pcrs.length;
         uint256 prevIdx;
         for (uint256 i = 0; i < len; i++) {
             uint8 idx = pcrs[i].pcrIndex;
-            if (idx >= 24) {
+            if (idx > 16 && idx != 23) {
                 revert PcrIndexOutOfRange(idx);
             }
             if (i > 0 && idx <= prevIdx) {
@@ -317,6 +318,38 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             }
             prevIdx = idx;
         }
+    }
+
+    function _validatePcrSpecs384Sorted(PcrSpec384[] calldata pcrs) private pure {
+        uint256 len = pcrs.length;
+        uint256 prevIdx;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 idx = pcrs[i].pcrIndex;
+            if (idx > 16 && idx != 23) {
+                revert PcrIndexOutOfRange(idx);
+            }
+            if (i > 0 && idx <= prevIdx) {
+                revert InvalidPcrOrder(uint8(prevIdx), idx);
+            }
+            PcrVerifyType vt = pcrs[i].verifyType;
+            uint256 matchDataLength = pcrs[i].matchData.length;
+            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
+                revert InvalidStaticMatchDataLength(idx, matchDataLength);
+            }
+            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
+            {
+                revert EmptyMatchData(idx);
+            }
+            prevIdx = idx;
+        }
+    }
+
+    function _storeWorkload(bytes32 workloadId, WorkloadSpec calldata spec) private {
+        _workloads[workloadId].workloadSpec = spec;
+    }
+
+    function _loadWorkload(bytes32 workloadId) private view returns (WorkloadSpec memory spec) {
+        spec = _workloads[workloadId].workloadSpec;
     }
 
     function _validateRequirements(AttributeRequirement[] calldata requirements) private pure {

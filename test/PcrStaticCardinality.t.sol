@@ -12,7 +12,9 @@ import {
     AttributeRequirement,
     BaseImageSpec,
     MeasurementVariant,
-    PcrSpec,
+    PcrBankSelection,
+    PcrSpec256,
+    PcrSpec384,
     PcrVerifyType,
     PlatformProfile,
     PublicIdentity,
@@ -39,18 +41,23 @@ contract PcrStaticCardinalityTest is Test {
     }
 
     function testRegisterBaseImageRejectsVariantStaticWithMultipleMatchDataEntries() public {
-        PcrSpec[] memory variantPcrs = _staticPcrs(4, 2);
+        PcrSpec256[] memory variantPcrs = _staticPcrs(4, 2);
         vm.expectRevert(
             abi.encodeWithSelector(BaseImageRegistry.InvalidStaticMatchDataLength.selector, uint8(4), uint256(2))
         );
-        _registerBaseImage(new PcrSpec[](0), variantPcrs);
+        _registerBaseImage(new PcrSpec256[](0), variantPcrs);
     }
 
     function testAddPlatformVariantsRejectsStaticWithMultipleMatchDataEntries() public {
-        bytes32 baseImageId = _registerBaseImage(new PcrSpec[](0), new PcrSpec[](0));
+        bytes32 baseImageId = _registerBaseImage(new PcrSpec256[](0), new PcrSpec256[](0));
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] =
-            PlatformProfile({name: "new-profile", invariants: _staticPcrs(4, 2), attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: "new-profile",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: _staticPcrs(4, 2),
+            invariants384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](0);
 
@@ -68,7 +75,7 @@ contract PcrStaticCardinalityTest is Test {
     }
 
     function testRegistriesAcceptStaticWithExactlyOneMatchDataEntry() public {
-        _registerBaseImage(_staticPcrs(4, 1), new PcrSpec[](0));
+        _registerBaseImage(_staticPcrs(4, 1), new PcrSpec256[](0));
         _registerWorkload(_staticPcrs(23, 1));
     }
 
@@ -76,7 +83,7 @@ contract PcrStaticCardinalityTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(BaseImageRegistry.InvalidStaticMatchDataLength.selector, uint8(4), length)
         );
-        _registerBaseImage(_staticPcrs(4, length), new PcrSpec[](0));
+        _registerBaseImage(_staticPcrs(4, length), new PcrSpec256[](0));
     }
 
     function _expectWorkloadStaticLength(uint256 length) private {
@@ -86,22 +93,35 @@ contract PcrStaticCardinalityTest is Test {
         _registerWorkload(_staticPcrs(23, length));
     }
 
-    function _registerBaseImage(PcrSpec[] memory invariants, PcrSpec[] memory variantPcrs) private returns (bytes32) {
+    function _registerBaseImage(PcrSpec256[] memory invariants, PcrSpec256[] memory variantPcrs)
+        private
+        returns (bytes32)
+    {
         nextVersion++;
         BaseImageSpec memory spec =
             BaseImageSpec({name: "static-cardinality-base", version: vm.toString(nextVersion), uri: ""});
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] = PlatformProfile({name: "test-profile", invariants: invariants, attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: "test-profile",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariants256: invariants,
+            invariants384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: "test-variant", overridePcrs: variantPcrs, attributes: new Attribute[](0)});
+        variants[0][0] = MeasurementVariant({
+            name: "test-variant",
+            variantPcrs256: variantPcrs,
+            variantPcrs384: new PcrSpec384[](0),
+            attributes: new Attribute[](0)
+        });
         return baseImageRegistry.registerBaseImage(
             spec, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
         );
     }
 
-    function _registerWorkload(PcrSpec[] memory pcrs) private returns (bytes32) {
+    function _registerWorkload(PcrSpec256[] memory pcrs) private returns (bytes32) {
         nextVersion++;
         WorkloadSpec memory spec = WorkloadSpec({
             name: "static-cardinality-workload",
@@ -110,17 +130,18 @@ contract PcrStaticCardinalityTest is Test {
             baseImageMode: AccessMode.ANY,
             baseImageIds: new bytes32[](0),
             requirements: new AttributeRequirement[](0),
-            pcrs: pcrs
+            workloadPcrs256: pcrs,
+            workloadPcrs384: new PcrSpec384[](0)
         });
         return workloadRegistry.registerWorkload(spec, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
     }
 
-    function _staticPcrs(uint8 pcrIndex, uint256 length) private pure returns (PcrSpec[] memory pcrs) {
+    function _staticPcrs(uint8 pcrIndex, uint256 length) private pure returns (PcrSpec256[] memory pcrs) {
         bytes32[] memory matchData = new bytes32[](length);
         for (uint256 i = 0; i < length; i++) {
             matchData[i] = bytes32(i + 1);
         }
-        pcrs = new PcrSpec[](1);
-        pcrs[0] = PcrSpec({pcrIndex: pcrIndex, verifyType: PcrVerifyType.STATIC, matchData: matchData});
+        pcrs = new PcrSpec256[](1);
+        pcrs[0] = PcrSpec256({pcrIndex: pcrIndex, verifyType: PcrVerifyType.STATIC, matchData: matchData});
     }
 }
