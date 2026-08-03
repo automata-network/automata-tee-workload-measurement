@@ -137,15 +137,36 @@ enum AkPubCollateralType {
 ### TEE Structs
 
 ```solidity
-struct ZkProof {
-    bytes output;       // ZK circuit output
-    bytes proofBytes;   // ZK proof
+enum ZkProofType {
+    IntelTdxDcap,
+    AmdSevSnp,
+    TpmQuote,
+    AwsNitroTpm
 }
 
-struct SnpZkProof {
-    bytes output;       // VerifierJournal public output
-    bytes proofBytes;   // ZK proof
-    bytes rawReport;    // Exact 1,184-byte report bound by reportHash
+struct ProgramBoundZkProof {
+    bytes32 programIdentifier;
+    bytes output;
+    bytes proofBytes;
+}
+
+struct IntelTdxDcapZkEvidence {
+    ProgramBoundZkProof proof;
+    bytes quoteBody;
+}
+
+struct IntelTdxDcapJournalV1 {
+    uint16 quoteVersion;
+    uint16 quoteBodyType;
+    uint8 tcbStatus;
+    bytes6 fmspc;
+    bytes32 fullQuoteHash;
+    bytes32 quoteBodyHash;
+}
+
+struct AmdSevSnpZkEvidence {
+    ProgramBoundZkProof proof;
+    bytes rawReport;
 }
 
 struct TeeReport {
@@ -166,13 +187,17 @@ struct TeeVerificationResult {
     uint32 amdSevSnpReportVersion;
     uint64 amdSevSnpLaunchMitigationVector;
     uint64 amdSevSnpCurrentMitigationVector;
+    bytes32 teeReportBytesHash;
 }
 ```
 
-Intel TDX ZK evidence uses `ZkProof`. AMD SEV-SNP uses `SnpZkProof` because
-the verifier needs the full report body after checking
-`keccak256(rawReport) == VerifierJournal.reportHash`. The first two fields
-remain ABI-compatible with `ZkProof`.
+Intel TDX uses `IntelTdxDcapZkEvidence`. The proof commits to both
+`keccak256(fullRawQuote)` and `keccak256(quoteBody)`. The call supplies only
+the exact TD10 or TD15 quote body. `TeeVerifier` checks the body hash and
+returns the proof-bound full raw quote hash as `teeReportBytesHash`. AMD
+SEV-SNP uses `AmdSevSnpZkEvidence` because the verifier needs the full report
+body after checking
+`keccak256(rawReport) == AmdSevSnpVerifierJournal.reportHash`.
 
 The stable bits represent Intel TDX debug (`1 << 0`), AMD SEV-SNP debug
 (`1 << 1`), and AMD SEV-SNP `MIGRATE_MA` (`1 << 2`). Their canonical keys are
@@ -504,7 +529,9 @@ function verifyAndAttestOnChain(bytes calldata input) → (bool, bytes memory)
 function verifyAndAttestWithZKProof(
     bytes calldata output,
     ZkCoProcessorType zkCoprocessor,
-    bytes calldata proofBytes
+    bytes calldata proofBytes,
+    bytes32 programIdentifier,
+    uint32 tcbEvaluationDataNumber
 ) → (bool, bytes memory)
 ```
 

@@ -57,6 +57,11 @@ alloy::sol! {
         bytes proofBytes;
     }
 
+    struct IntelTdxDcapZkEvidence {
+        ProgramBoundZkProof proof;
+        bytes quoteBody;
+    }
+
     struct AmdSevSnpZkEvidence {
         ProgramBoundZkProof proof;
         bytes rawReport;

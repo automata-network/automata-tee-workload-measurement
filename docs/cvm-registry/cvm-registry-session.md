@@ -609,7 +609,9 @@ sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportByte
 ```
 Where:
 - `tpmSignatureHash = tpmQuoteVerificationResult.tpmSignatureHash`
-- `teeReportBytesHash = teeVerificationResult.teeReportBytesHash` from the verified TEE result
+- `teeReportBytesHash = teeVerificationResult.teeReportBytesHash` binds the
+  complete raw Intel TDX DCAP quote or complete raw AMD SEV-SNP report. Intel
+  TDX Solidity and ZK verification return the same hash for the same quote.
 
 ### Key Storage Philosophy
 Public keys (AK, TPM signing key, session key) are NEVER stored on-chain. Only their fingerprints are stored. Full keys are emitted in `AttestationKeysRevealed` event for off-chain indexing.

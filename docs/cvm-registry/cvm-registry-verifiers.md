@@ -56,15 +56,19 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 **TDX (Intel) flow**:
 1. Dispatch based on `VerificationBackendType`:
    - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
-   - ZK Succinct: resolve the exact `intel_tdx_dcap.v1` adapter through
-     `ZkVerifierRegistry`
+   - ZK Succinct: decode `IntelTdxDcapZkEvidence` and resolve the exact
+     `intel_tdx_dcap.v1` adapter through `ZkVerifierRegistry`
 2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
 3. Return the accepted status as `intelTdxTcbStatusBit = 1 << rawStatus`.
-4. Extract the quote body from DCAP output.
+4. For Solidity, extract the quote body from verified DCAP output. For ZK,
+   require the supplied quote body to have the verified TD10 or TD15 length and
+   require `keccak256(quoteBody) == journal.quoteBodyHash`.
 5. Require valid reserved attribute bits and `SEPT_VE_DISABLE`.
 6. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`.
 7. Extract `DEBUG` into `enabledTeeAttributes`.
-8. Return the quote body with `valid=true`.
+8. Return the quote body with `valid=true`. Return the complete raw quote hash
+   as `teeReportBytesHash`: `keccak256(teeReport.data)` for Solidity or
+   `journal.fullQuoteHash` for ZK.
 
 **SNP (AMD) flow**:
 1. ZK only: resolve the exact `amd_sev_snp.v1` adapter through

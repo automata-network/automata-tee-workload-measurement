@@ -24,6 +24,7 @@ import "forge-std/console.sol";
 /// Usage (after anvil --fork-url <hoodi-rpc>):
 ///   export OWNER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 ///   export DCAP_ATTESTATION_ADDR=0xaDdeC7e85c2182202b66E331f2a4A0bBB2cEEa1F
+///   export DCAP_TCB_EVALUATION_DATA_NUMBER=19
 ///   export SNP_ATTESTATION_ADDR=0x89981202BDd1d19Cb5AfaFe74c847b87982b6B9C
 ///   export TPM_ATTESTATION_ADDR=0x715e8A7B3E24C0a27dE09b6eaD7e13B2A797cf8B
 ///   export RPC_URL=http://<anvil-host>:8545

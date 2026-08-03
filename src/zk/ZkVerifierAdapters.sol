@@ -10,24 +10,66 @@ import {
     ISp1Verifier,
     ITpmQuoteZkVerifierAdapter
 } from "../interfaces/zk/IZkVerifierAdapters.sol";
-import {AmdSevSnpVerifierJournal, AwsNitroTpmJournalV1, ProgramBoundZkProof, TpmQuoteJournalV1} from "../types/Zk.sol";
+import {
+    AmdSevSnpVerifierJournal,
+    AwsNitroTpmJournalV1,
+    IntelTdxDcapJournalV1,
+    ProgramBoundZkProof,
+    TpmQuoteJournalV1
+} from "../types/Zk.sol";
 
 contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
     error DcapProofVerificationFailed(bytes output);
+    error InvalidDcapJournalOutputLength(uint256 actual, uint256 expected);
+
+    uint256 private constant INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH = 75;
 
     IDcapAttestation public immutable dcapAttestation;
     IDcapAttestation.ZkCoProcessorType public immutable zkCoProcessorType;
+    uint32 public immutable tcbEvaluationDataNumber;
 
-    constructor(IDcapAttestation dcapAttestation_, IDcapAttestation.ZkCoProcessorType zkCoProcessorType_) {
+    constructor(
+        IDcapAttestation dcapAttestation_,
+        IDcapAttestation.ZkCoProcessorType zkCoProcessorType_,
+        uint32 tcbEvaluationDataNumber_
+    ) {
         dcapAttestation = dcapAttestation_;
         zkCoProcessorType = zkCoProcessorType_;
+        tcbEvaluationDataNumber = tcbEvaluationDataNumber_;
     }
 
-    function verifyProof(ProgramBoundZkProof calldata proof) external returns (bytes memory verifiedDcapOutput) {
-        (bool success, bytes memory output) =
-            dcapAttestation.verifyAndAttestWithZKProof(proof.output, zkCoProcessorType, proof.proofBytes);
+    function verifyProof(ProgramBoundZkProof calldata proof) external returns (IntelTdxDcapJournalV1 memory journal) {
+        (bool success, bytes memory output) = dcapAttestation.verifyAndAttestWithZKProof(
+            proof.output, zkCoProcessorType, proof.proofBytes, proof.programIdentifier, tcbEvaluationDataNumber
+        );
         if (!success) revert DcapProofVerificationFailed(output);
-        return output;
+        if (output.length != INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH) {
+            revert InvalidDcapJournalOutputLength(output.length, INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH);
+        }
+
+        uint16 quoteVersion;
+        uint16 quoteBodyType;
+        uint8 tcbStatus;
+        bytes6 fmspc;
+        bytes32 fullQuoteHash;
+        bytes32 quoteBodyHash;
+        assembly ("memory-safe") {
+            let start := add(output, 0x20)
+            quoteVersion := shr(240, mload(start))
+            quoteBodyType := and(shr(224, mload(start)), 0xffff)
+            tcbStatus := byte(4, mload(start))
+            fmspc := mload(add(start, 5))
+            fullQuoteHash := mload(add(start, 11))
+            quoteBodyHash := mload(add(start, 43))
+        }
+        return IntelTdxDcapJournalV1({
+            quoteVersion: quoteVersion,
+            quoteBodyType: quoteBodyType,
+            tcbStatus: tcbStatus,
+            fmspc: fmspc,
+            fullQuoteHash: fullQuoteHash,
+            quoteBodyHash: quoteBodyHash
+        });
     }
 }
 

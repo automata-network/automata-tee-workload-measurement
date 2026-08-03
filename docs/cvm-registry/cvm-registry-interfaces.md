@@ -493,12 +493,14 @@ interface IDcapAttestation {
     function verifyAndAttestWithZKProof(
         bytes calldata output,
         ZkCoProcessorType zkCoprocessor,
-        bytes calldata proofBytes
+        bytes calldata proofBytes,
+        bytes32 programIdentifier,
+        uint32 tcbEvaluationDataNumber
     ) external payable returns (bool success, bytes memory verifiedOutput);
 }
 ```
 
-Note: `verifyAndAttestOnChain` and `verifyAndAttestWithZKProof` are both `payable` (fee-based verification). `getBp()` returns the base price in basis points.
+Note: `verifyAndAttestOnChain` and `verifyAndAttestWithZKProof` are both `payable` (fee-based verification). The ZK path passes the exact program identifier and Intel TCB evaluation data number used to create the proof. `getBp()` returns the base price in basis points.
 
 ---
 

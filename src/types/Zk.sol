@@ -18,6 +18,22 @@ struct ProgramBoundZkProof {
     bytes proofBytes;
 }
 
+/// @notice Intel TDX proof plus the exact TD10 or TD15 quote body committed by the proof.
+struct IntelTdxDcapZkEvidence {
+    ProgramBoundZkProof proof;
+    bytes quoteBody;
+}
+
+/// @notice Verified compact result produced by `intel_tdx_dcap.v1`.
+struct IntelTdxDcapJournalV1 {
+    uint16 quoteVersion;
+    uint16 quoteBodyType;
+    uint8 tcbStatus;
+    bytes6 fmspc;
+    bytes32 fullQuoteHash;
+    bytes32 quoteBodyHash;
+}
+
 /// @notice AMD SEV-SNP proof plus the exact report body committed by the proof.
 struct AmdSevSnpZkEvidence {
     ProgramBoundZkProof proof;

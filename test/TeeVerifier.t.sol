@@ -11,8 +11,8 @@ import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegis
 import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
 import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.sol";
 import {TeeReport, TEEType, VerificationBackendType, TeeVerificationResult} from "../src/types/Evidence.sol";
-import {AmdSevSnpZkEvidence, ProgramBoundZkProof, ZkProofType} from "../src/types/Zk.sol";
-import {AmdSevSnpZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
+import {AmdSevSnpZkEvidence, IntelTdxDcapZkEvidence, ProgramBoundZkProof, ZkProofType} from "../src/types/Zk.sol";
+import {AmdSevSnpZkVerifierAdapter, IntelTdxDcapZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
 import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
@@ -23,6 +23,7 @@ import {
 ///         (VerifierJournal.reportHash = keccak256(report)), including the report-binding guard.
 contract TeeVerifierSnpTest is Test {
     bytes32 internal constant SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.v1.test");
+    bytes32 internal constant TDX_PROGRAM_IDENTIFIER = keccak256("intel_tdx_dcap.v1.test");
 
     TeeVerifier internal teeVerifier;
     MockAutomataSnpAttestation internal snp;
@@ -43,6 +44,16 @@ contract TeeVerifierSnpTest is Test {
             new AmdSevSnpZkVerifierAdapter(ISnpAttestation(address(snp)), ISnpAttestation.ZkCoProcessorType.RiscZero);
         registry.setZkProgramConfig(
             ZkProofType.AmdSevSnp, VerificationBackendType.ZkRiscZero, SNP_PROGRAM_IDENTIFIER, address(adapter), true
+        );
+        IntelTdxDcapZkVerifierAdapter tdxAdapter = new IntelTdxDcapZkVerifierAdapter(
+            IDcapAttestation(address(dcap)), IDcapAttestation.ZkCoProcessorType.Succinct, 19
+        );
+        registry.setZkProgramConfig(
+            ZkProofType.IntelTdxDcap,
+            VerificationBackendType.ZkSuccinct,
+            TDX_PROGRAM_IDENTIFIER,
+            address(tdxAdapter),
+            true
         );
         teeVerifier = new TeeVerifier(IDcapAttestation(address(dcap)), IZkVerifierRegistry(address(registry)));
     }
@@ -370,6 +381,41 @@ contract TeeVerifierSnpTest is Test {
             });
     }
 
+    function _tdxQuoteBody(bytes memory quote, uint256 bodyOffset, uint256 bodyLength)
+        internal
+        pure
+        returns (bytes memory body)
+    {
+        body = new bytes(bodyLength);
+        for (uint256 i = 0; i < bodyLength; i++) {
+            body[i] = quote[bodyOffset + i];
+        }
+    }
+
+    function _tdxZkReport(bytes memory fullQuote, bytes memory quoteBody, uint16 quoteBodyType)
+        internal
+        pure
+        returns (TeeReport memory)
+    {
+        uint16 quoteVersion = uint16(uint8(fullQuote[0])) | (uint16(uint8(fullQuote[1])) << 8);
+        bytes memory compactOutput = abi.encodePacked(
+            quoteVersion, quoteBodyType, uint8(0), bytes6(0x010203040506), keccak256(fullQuote), keccak256(quoteBody)
+        );
+        IntelTdxDcapZkEvidence memory evidence = IntelTdxDcapZkEvidence({
+            proof: ProgramBoundZkProof({
+                programIdentifier: TDX_PROGRAM_IDENTIFIER,
+                output: abi.encodePacked(uint16(compactOutput.length), compactOutput),
+                proofBytes: hex""
+            }),
+            quoteBody: quoteBody
+        });
+        return TeeReport({
+            verificationBackendType: VerificationBackendType.ZkSuccinct,
+            teeType: TEEType.IntelTDX,
+            data: abi.encode(evidence)
+        });
+    }
+
     function _td10Quote() internal pure returns (bytes memory quote) {
         quote = new bytes(48 + 584);
         quote[0] = bytes1(uint8(4));
@@ -403,6 +449,59 @@ contract TeeVerifierSnpTest is Test {
         assertEq(result.amdSevSnpReportVersion, 0);
         assertEq(result.amdSevSnpLaunchMitigationVector, 0);
         assertEq(result.amdSevSnpCurrentMitigationVector, 0);
+    }
+
+    function test_tdx_solidity_and_zk_return_the_same_full_quote_hash() public {
+        bytes memory quote = _td10Quote();
+        bytes memory quoteBody = _tdxQuoteBody(quote, 48, 584);
+
+        TeeVerificationResult memory solidityResult = teeVerifier.verifyTeeReport(_tdxReport(quote));
+        TeeVerificationResult memory zkResult = teeVerifier.verifyTeeReport(_tdxZkReport(quote, quoteBody, 2));
+
+        assertEq(solidityResult.teeReportBytesHash, keccak256(quote));
+        assertEq(zkResult.teeReportBytesHash, keccak256(quote));
+        assertEq(solidityResult.teeReportBytesHash, zkResult.teeReportBytesHash);
+        assertEq(solidityResult.reportData, quoteBody);
+        assertEq(zkResult.reportData, quoteBody);
+    }
+
+    function test_tdx_td15_solidity_and_zk_return_the_same_full_quote_hash() public {
+        bytes memory quote = _td15Quote();
+        bytes memory quoteBody = _tdxQuoteBody(quote, 54, 648);
+
+        TeeVerificationResult memory solidityResult = teeVerifier.verifyTeeReport(_tdxReport(quote));
+        TeeVerificationResult memory zkResult = teeVerifier.verifyTeeReport(_tdxZkReport(quote, quoteBody, 3));
+
+        assertEq(solidityResult.teeReportBytesHash, keccak256(quote));
+        assertEq(zkResult.teeReportBytesHash, keccak256(quote));
+        assertEq(solidityResult.teeReportBytesHash, zkResult.teeReportBytesHash);
+        assertEq(solidityResult.reportData, quoteBody);
+        assertEq(zkResult.reportData, quoteBody);
+    }
+
+    function test_tdx_zk_rejects_a_different_supplied_quote_body() public {
+        bytes memory quote = _td10Quote();
+        bytes memory committedQuoteBody = _tdxQuoteBody(quote, 48, 584);
+        bytes32 committedQuoteBodyHash = keccak256(committedQuoteBody);
+        TeeReport memory report = _tdxZkReport(quote, committedQuoteBody, 2);
+        IntelTdxDcapZkEvidence memory evidence = abi.decode(report.data, (IntelTdxDcapZkEvidence));
+        evidence.quoteBody[0] = bytes1(uint8(1));
+        report.data = abi.encode(evidence);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TeeVerifier.DcapQuoteBodyHashMismatch.selector, committedQuoteBodyHash, keccak256(evidence.quoteBody)
+            )
+        );
+        teeVerifier.verifyTeeReport(report);
+    }
+
+    function test_tdx_zk_rejects_a_non_exact_quote_body_length() public {
+        bytes memory quote = _td10Quote();
+        TeeReport memory report = _tdxZkReport(quote, new bytes(583), 2);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidDcapQuoteBodyLength.selector, 583, 584));
+        teeVerifier.verifyTeeReport(report);
     }
 
     function test_tdx_rejects_invalid_reserved_attribute_bit() public {

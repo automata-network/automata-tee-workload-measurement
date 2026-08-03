@@ -10,9 +10,9 @@ use tracing::info;
 use crate::base_image_registry::BaseImageRegistry;
 use crate::stubs::SessionRegistry::{CVMSession, SessionRegistryEvents, SessionRegistryInstance};
 use crate::stubs::{
-    AmdSevSnpZkEvidence, AttestationEvidence, ProgramBoundZkProof, PublicIdentity,
-    SessionKeyRotationEvidence, SessionRenewalAuthorization, TeeReport, TpmQuoteEvidence,
-    TpmQuoteJournalV1, TpmReport, op_expires_at, sign_message,
+    AmdSevSnpZkEvidence, AttestationEvidence, IntelTdxDcapZkEvidence, ProgramBoundZkProof,
+    PublicIdentity, SessionKeyRotationEvidence, SessionRenewalAuthorization, TeeReport,
+    TpmQuoteEvidence, TpmQuoteJournalV1, TpmReport, op_expires_at, sign_message,
 };
 use crate::types::{AppRef, LifecycleSessionResponse, RegisterSessionResponse, RotateKeyResponse};
 use crate::workload_registry::WorkloadRegistry;
@@ -513,19 +513,19 @@ impl SessionRegistry {
 pub fn compute_tee_report_hash(tee_report: &TeeReport) -> Result<B256> {
     match tee_report.tee_type {
         0 => {
-            let quote_body_hash = match tee_report.verification_backend_type {
-                0 => keccak256(extract_raw_dcap_quote_body(&tee_report.data)?),
+            let full_quote_hash = match tee_report.verification_backend_type {
+                0 => keccak256(&tee_report.data),
                 1 | 2 => {
-                    let proof = ProgramBoundZkProof::abi_decode(&tee_report.data).context(
-                        "Failed to decode ProgramBoundZkProof from Intel TDX TeeReport.data",
+                    let evidence = IntelTdxDcapZkEvidence::abi_decode(&tee_report.data).context(
+                        "Failed to decode IntelTdxDcapZkEvidence from Intel TDX TeeReport.data",
                     )?;
-                    keccak256(extract_verified_dcap_quote_body(&proof.output)?)
+                    verify_and_extract_intel_tdx_full_quote_hash(&evidence)?
                 }
                 value => {
                     anyhow::bail!("Invalid VerificationBackendType value for Intel TDX: {value}")
                 }
             };
-            Ok(quote_body_hash)
+            Ok(full_quote_hash)
         }
         1 => {
             if tee_report.verification_backend_type == 0 {
@@ -544,47 +544,40 @@ pub fn compute_tee_report_hash(tee_report: &TeeReport) -> Result<B256> {
     }
 }
 
-fn extract_verified_dcap_quote_body(output: &[u8]) -> Result<&[u8]> {
+fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidence) -> Result<B256> {
+    const JOURNAL_LENGTH: usize = 277;
+    const VERIFIED_OUTPUT_LENGTH: usize = 75;
+    const FULL_QUOTE_HASH_OFFSET: usize = 13;
+    const QUOTE_BODY_HASH_OFFSET: usize = 45;
+
+    let output = evidence.proof.output.as_ref();
     anyhow::ensure!(
-        output.len() >= 11,
-        "Verified DCAP output is shorter than 11 bytes"
+        output.len() == JOURNAL_LENGTH,
+        "Intel TDX DCAP journal must be {JOURNAL_LENGTH} bytes, got {}",
+        output.len()
     );
-    let body_type = u16::from_be_bytes([output[2], output[3]]);
+    let verified_output_length = u16::from_be_bytes([output[0], output[1]]) as usize;
+    anyhow::ensure!(
+        verified_output_length == VERIFIED_OUTPUT_LENGTH,
+        "Intel TDX DCAP verified output must be {VERIFIED_OUTPUT_LENGTH} bytes, got {verified_output_length}"
+    );
+    let body_type = u16::from_be_bytes([output[4], output[5]]);
     let body_len = dcap_body_len(body_type)?;
     anyhow::ensure!(
-        output.len() >= 11 + body_len,
-        "Verified DCAP output is shorter than the declared quote body"
+        evidence.quoteBody.len() == body_len,
+        "Intel TDX quote body type {body_type} requires {body_len} bytes, got {}",
+        evidence.quoteBody.len()
     );
-    Ok(&output[11..11 + body_len])
-}
-
-fn extract_raw_dcap_quote_body(quote: &[u8]) -> Result<&[u8]> {
+    let committed_body_hash =
+        B256::from_slice(&output[QUOTE_BODY_HASH_OFFSET..QUOTE_BODY_HASH_OFFSET + 32]);
+    let supplied_body_hash = keccak256(&evidence.quoteBody);
     anyhow::ensure!(
-        quote.len() >= 48,
-        "Intel TDX DCAP quote is shorter than its 48-byte header"
+        supplied_body_hash == committed_body_hash,
+        "Intel TDX quote body hash does not match the ZK journal"
     );
-    let version = u16::from_le_bytes([quote[0], quote[1]]);
-    let (body_type, body_len, body_offset) = if version <= 4 {
-        (2, 584, 48)
-    } else {
-        anyhow::ensure!(
-            quote.len() >= 54,
-            "Intel TDX DCAP quote version 5 header is incomplete"
-        );
-        let body_type = u16::from_le_bytes([quote[48], quote[49]]);
-        let body_len = u32::from_le_bytes([quote[50], quote[51], quote[52], quote[53]]) as usize;
-        (body_type, body_len, 54)
-    };
-    let expected_len = dcap_body_len(body_type)?;
-    anyhow::ensure!(
-        body_len == expected_len,
-        "Intel TDX DCAP quote body type {body_type} requires {expected_len} bytes, got {body_len}"
-    );
-    anyhow::ensure!(
-        quote.len() >= body_offset + body_len,
-        "Intel TDX DCAP quote is shorter than its quote body"
-    );
-    Ok(&quote[body_offset..body_offset + body_len])
+    Ok(B256::from_slice(
+        &output[FULL_QUOTE_HASH_OFFSET..FULL_QUOTE_HASH_OFFSET + 32],
+    ))
 }
 
 fn dcap_body_len(body_type: u16) -> Result<usize> {
@@ -663,8 +656,8 @@ pub fn compute_new_session_id(
 mod tests {
     use super::{compute_new_session_id, compute_tee_report_hash};
     use crate::stubs::{
-        AmdSevSnpZkEvidence, ProgramBoundZkProof, TeeReport, TpmQuoteEvidence, TpmQuoteJournalV1,
-        TpmReport,
+        AmdSevSnpZkEvidence, IntelTdxDcapZkEvidence, ProgramBoundZkProof, TeeReport,
+        TpmQuoteEvidence, TpmQuoteJournalV1, TpmReport,
     };
     use alloy::primitives::{B256, Bytes, keccak256};
     use alloy::sol_types::SolValue;
@@ -694,26 +687,50 @@ mod tests {
     }
 
     #[test]
-    fn intel_tdx_zk_hashes_the_verified_quote_body() {
+    fn intel_tdx_solidity_and_zk_hash_the_same_complete_raw_quote() {
         let quote_body = vec![0x44u8; 584];
-        let mut output = vec![0u8; 11];
-        output[2..4].copy_from_slice(&2u16.to_be_bytes());
-        output.extend_from_slice(&quote_body);
-        let data: Bytes = ProgramBoundZkProof {
-            programIdentifier: B256::repeat_byte(0x55),
-            output: output.into(),
-            proofBytes: Bytes::from(vec![0x66; 64]),
+        let mut full_quote = vec![0u8; 48];
+        full_quote[0..2].copy_from_slice(&4u16.to_le_bytes());
+        full_quote.extend_from_slice(&quote_body);
+        full_quote.extend_from_slice(&[0x77; 64]);
+        let full_quote_hash = keccak256(&full_quote);
+
+        let mut output = Vec::with_capacity(277);
+        output.extend_from_slice(&75u16.to_be_bytes());
+        output.extend_from_slice(&4u16.to_be_bytes());
+        output.extend_from_slice(&2u16.to_be_bytes());
+        output.push(0);
+        output.extend_from_slice(&[0x11; 6]);
+        output.extend_from_slice(full_quote_hash.as_slice());
+        output.extend_from_slice(keccak256(&quote_body).as_slice());
+        output.extend_from_slice(&[0u8; 8 + 6 * 32]);
+        let data: Bytes = IntelTdxDcapZkEvidence {
+            proof: ProgramBoundZkProof {
+                programIdentifier: B256::repeat_byte(0x55),
+                output: output.into(),
+                proofBytes: Bytes::from(vec![0x66; 64]),
+            },
+            quoteBody: quote_body.into(),
         }
         .abi_encode()
         .into();
-        let report = TeeReport {
+        let zk_report = TeeReport {
             verification_backend_type: 2,
             tee_type: 0,
             data,
         };
+        let solidity_report = TeeReport {
+            verification_backend_type: 0,
+            tee_type: 0,
+            data: full_quote.into(),
+        };
         assert_eq!(
-            compute_tee_report_hash(&report).unwrap(),
-            keccak256(quote_body)
+            compute_tee_report_hash(&zk_report).unwrap(),
+            full_quote_hash
+        );
+        assert_eq!(
+            compute_tee_report_hash(&solidity_report).unwrap(),
+            full_quote_hash
         );
     }
 

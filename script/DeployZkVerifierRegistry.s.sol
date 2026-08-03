@@ -27,7 +27,7 @@ import "forge-std/console.sol";
 
 contract DeployZkVerifierRegistry is DeploymentConfig {
     bytes32 internal constant INTEL_TDX_DCAP_PROGRAM_IDENTIFIER =
-        0x00f92be42225bed0ce76e07219d6383a4fa3cb1c6bd5dd805492b8fe5dcdedea;
+        0x002973c41c78fbad885b2331b84bcd36df9f01d20c12efd8a969d709154f5dc5;
     bytes32 internal constant AMD_SEV_SNP_PROGRAM_IDENTIFIER =
         0x00bc5bae7f7c200ec91f866ee2f2927cc01fcf365a55f76c819648e5277d1286;
     bytes32 internal constant TPM_QUOTE_PROGRAM_IDENTIFIER =
@@ -38,6 +38,7 @@ contract DeployZkVerifierRegistry is DeploymentConfig {
     function _deployZkVerifierRegistry() internal returns (address) {
         address owner = vm.envAddress("OWNER");
         address dcapAttestationAddress = vm.envAddress("DCAP_ATTESTATION_ADDR");
+        uint32 dcapTcbEvaluationDataNumber = uint32(vm.envUint("DCAP_TCB_EVALUATION_DATA_NUMBER"));
         address snpAttestationAddress = vm.envAddress("SNP_ATTESTATION_ADDR");
         address sp1VerifierAddress = vm.envAddress("SP1_VERIFIER_ADDR");
 
@@ -52,7 +53,9 @@ contract DeployZkVerifierRegistry is DeploymentConfig {
         IntelTdxDcapZkVerifierAdapter intelAdapter = new IntelTdxDcapZkVerifierAdapter{
             salt: INTEL_TDX_DCAP_ZK_VERIFIER_ADAPTER_SALT
         }(
-            IDcapAttestation(dcapAttestationAddress), IDcapAttestation.ZkCoProcessorType.Succinct
+            IDcapAttestation(dcapAttestationAddress),
+            IDcapAttestation.ZkCoProcessorType.Succinct,
+            dcapTcbEvaluationDataNumber
         );
         AmdSevSnpZkVerifierAdapter amdAdapter = new AmdSevSnpZkVerifierAdapter{
             salt: AMD_SEV_SNP_ZK_VERIFIER_ADAPTER_SALT

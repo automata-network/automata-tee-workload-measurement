@@ -20,6 +20,8 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
     uint256 private constant V5_BODY_HEADER_SIZE = 6;
 
     uint8 public tcbStatus;
+    bytes32 public lastProgramIdentifier;
+    uint32 public lastTcbEvaluationDataNumber;
 
     function setTcbStatus(uint8 _tcbStatus) external {
         tcbStatus = _tcbStatus;
@@ -92,11 +94,15 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
         return (true, output);
     }
 
-    function verifyAndAttestWithZKProof(bytes calldata journal, ZkCoProcessorType, bytes calldata)
-        external
-        payable
-        returns (bool success, bytes memory output)
-    {
+    function verifyAndAttestWithZKProof(
+        bytes calldata journal,
+        ZkCoProcessorType,
+        bytes calldata,
+        bytes32 programIdentifier,
+        uint32 tcbEvaluationDataNumber
+    ) external payable returns (bool success, bytes memory output) {
+        lastProgramIdentifier = programIdentifier;
+        lastTcbEvaluationDataNumber = tcbEvaluationDataNumber;
         uint16 outputLength = uint16(bytes2(journal[0:2]));
         uint256 offset = 2 + outputLength;
         return (true, journal[2:offset]);

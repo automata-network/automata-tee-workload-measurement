@@ -7,7 +7,13 @@ import {VerificationResult} from "./interfaces/external/ISnpAttestation.sol";
 import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
 import {IZkVerifierRegistry} from "./interfaces/registries/IZkVerifierRegistry.sol";
 import {IAmdSevSnpZkVerifierAdapter, IIntelTdxDcapZkVerifierAdapter} from "./interfaces/zk/IZkVerifierAdapters.sol";
-import {AmdSevSnpVerifierJournal, AmdSevSnpZkEvidence, ProgramBoundZkProof, ZkProofType} from "./types/Zk.sol";
+import {
+    AmdSevSnpVerifierJournal,
+    AmdSevSnpZkEvidence,
+    IntelTdxDcapJournalV1,
+    IntelTdxDcapZkEvidence,
+    ZkProofType
+} from "./types/Zk.sol";
 import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
@@ -155,6 +161,12 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice The DCAP verifier returned a hard-rejected or unknown trusted computing base status.
     error DcapTcbStatusNotAccepted(uint8 actual);
+
+    /// @notice The supplied Intel TDX quote body length does not match its verified body type.
+    error InvalidDcapQuoteBodyLength(uint256 actual, uint256 expected);
+
+    /// @notice The supplied Intel TDX quote body does not match the body committed by the ZK proof.
+    error DcapQuoteBodyHashMismatch(bytes32 expected, bytes32 actual);
 
     /// @notice Reserved Intel TDX TD_ATTRIBUTES bits are set.
     error InvalidTdxAttributes(bytes8 actual);
@@ -501,31 +513,43 @@ contract TeeVerifier is ITeeVerifier {
     /// @param teeReport The TEE report containing Intel TDX quote data
     /// @return result Verification result with extracted reportData
     function _verifyIntelTdx(TeeReport memory teeReport) private returns (TeeVerificationResult memory result) {
-        bool success;
-        bytes memory output;
+        bytes memory quoteBody;
+        bytes32 teeReportBytesHash;
+        uint8 tcbStatus;
 
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
             // Direct on-chain verification
-            (success, output) = dcapAttestation.verifyAndAttestOnChain(teeReport.data);
+            (bool success, bytes memory output) = dcapAttestation.verifyAndAttestOnChain(teeReport.data);
+            // Surface DCAP failure with the verifier's raw output so off-chain decoders
+            // can pick out the specific reason.
+            if (!success) {
+                revert DcapVerificationFailed(output);
+            }
+            if (output.length <= DCAP_TCB_STATUS_OFFSET) {
+                revert TeeReportTooShort(output.length, DCAP_TCB_STATUS_OFFSET + 1);
+            }
+            tcbStatus = uint8(output[DCAP_TCB_STATUS_OFFSET]);
+            quoteBody = extractDcapQuoteBody(output);
+            teeReportBytesHash = keccak256(teeReport.data);
         } else {
-            ProgramBoundZkProof memory zkProof = abi.decode(teeReport.data, (ProgramBoundZkProof));
+            IntelTdxDcapZkEvidence memory zkEvidence = abi.decode(teeReport.data, (IntelTdxDcapZkEvidence));
             address adapter = zkVerifierRegistry.resolveVerifierAdapter(
-                ZkProofType.IntelTdxDcap, teeReport.verificationBackendType, zkProof.programIdentifier
+                ZkProofType.IntelTdxDcap, teeReport.verificationBackendType, zkEvidence.proof.programIdentifier
             );
-            output = IIntelTdxDcapZkVerifierAdapter(adapter).verifyProof(zkProof);
-            success = true;
+            IntelTdxDcapJournalV1 memory journal = IIntelTdxDcapZkVerifierAdapter(adapter).verifyProof(zkEvidence.proof);
+            uint256 expectedBodyLength = _dcapQuoteBodySize(journal.quoteBodyType);
+            if (zkEvidence.quoteBody.length != expectedBodyLength) {
+                revert InvalidDcapQuoteBodyLength(zkEvidence.quoteBody.length, expectedBodyLength);
+            }
+            bytes32 quoteBodyHash = keccak256(zkEvidence.quoteBody);
+            if (quoteBodyHash != journal.quoteBodyHash) {
+                revert DcapQuoteBodyHashMismatch(journal.quoteBodyHash, quoteBodyHash);
+            }
+            tcbStatus = journal.tcbStatus;
+            quoteBody = zkEvidence.quoteBody;
+            teeReportBytesHash = journal.fullQuoteHash;
         }
 
-        // Surface DCAP failure with the verifier's raw output so off-chain decoders
-        // can pick out the specific reason (was silently swallowed before).
-        if (!success) {
-            revert DcapVerificationFailed(output);
-        }
-
-        if (output.length <= DCAP_TCB_STATUS_OFFSET) {
-            revert TeeReportTooShort(output.length, DCAP_TCB_STATUS_OFFSET + 1);
-        }
-        uint8 tcbStatus = uint8(output[DCAP_TCB_STATUS_OFFSET]);
         if (
             tcbStatus > TCB_STATUS_RELAUNCH_ADVISED_CONFIGURATION_NEEDED
                 || (tcbStatus > TCB_STATUS_OUT_OF_DATE_CONFIGURATION_NEEDED && tcbStatus < TCB_STATUS_RELAUNCH_ADVISED)
@@ -534,7 +558,6 @@ contract TeeVerifier is ITeeVerifier {
         }
         uint256 tcbStatusBit = uint256(1) << tcbStatus;
 
-        bytes memory quoteBody = extractDcapQuoteBody(output);
         bool debugEnabled = _validateTdxReport(quoteBody);
         uint256 enabledTeeAttributes = debugEnabled ? TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT : 0;
 
@@ -550,8 +573,14 @@ contract TeeVerifier is ITeeVerifier {
             amdSevSnpReportVersion: 0,
             amdSevSnpLaunchMitigationVector: 0,
             amdSevSnpCurrentMitigationVector: 0,
-            teeReportBytesHash: keccak256(quoteBody)
+            teeReportBytesHash: teeReportBytesHash
         });
+    }
+
+    function _dcapQuoteBodySize(uint16 quoteBodyType) private pure returns (uint256) {
+        if (quoteBodyType == QUOTE_BODY_TYPE_TD10) return TD10_QUOTE_BODY_SIZE;
+        if (quoteBodyType == QUOTE_BODY_TYPE_TD15) return TD15_QUOTE_BODY_SIZE;
+        revert UnsupportedDcapBodyType(quoteBodyType);
     }
 
     /// @dev Verifies an AMD SEV-SNP attestation report
