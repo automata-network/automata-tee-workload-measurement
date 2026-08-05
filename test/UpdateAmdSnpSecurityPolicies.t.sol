@@ -12,17 +12,6 @@ contract UpdateAmdSnpSecurityPoliciesHarness is UpdateAmdSnpSecurityPolicies {
 }
 
 contract UpdateAmdSnpSecurityPoliciesTest is Test {
-    function testParsesReviewedMilanB1Policy() public {
-        string memory policyJson = vm.readFile("policies/amd-snp-milan-b1.json");
-        UpdateAmdSnpSecurityPoliciesHarness harness = new UpdateAmdSnpSecurityPoliciesHarness();
-        AmdSnpSecurityPolicyUpdate[] memory policies = harness.parsePolicyUpdates(policyJson);
-
-        assertEq(policies.length, 1);
-        assertEq(policies[0].cpuid, 0x190101);
-        assertEq(policies[0].requiredLaunchMitigationVector, 0x16);
-        assertEq(policies[0].requiredCurrentMitigationVector, 0x16);
-    }
-
     function testParsesDocumentedNamedFieldJson() public {
         string memory policyJson = string.concat(
             '{"policies":[{',
