@@ -1327,7 +1327,8 @@ contract SessionLifecycleTest is Test {
                     awsNitroRootCertHash: bytes32(0),
                     qualifyingData: bytes32(0),
                     documentTimestampSeconds: 0,
-                    sha384PcrSetCommitment: bytes32(0)
+                    pcrDigest: bytes32(0),
+                    verificationRequestCommitment: bytes32(0)
                 })
             )
         );
@@ -1488,8 +1489,8 @@ contract SessionLifecycleTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: _staticPcr23Policy(),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: _teeAttributes(key, profileMode)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -1547,8 +1548,8 @@ contract SessionLifecycleTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: _staticPcr23Policy(),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: attributes
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -1626,8 +1627,8 @@ contract SessionLifecycleTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: _staticPcr23Policy(),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -1683,6 +1684,11 @@ contract SessionLifecycleTest is Test {
         evidence.sessionKeySignature =
             abi.encode(abi.encodePacked("delegation-", marker), abi.encodePacked("possession-", marker));
         evidence.sessionKey = sessionKey;
+    }
+
+    function _staticPcr23Policy() private pure returns (PcrSpec256[] memory rules) {
+        rules = new PcrSpec256[](1);
+        rules[0] = PcrSpec256({pcrIndex: 23, comparison: abi.encode(uint16(0), bytes32(0))});
     }
 
     function _rotationEvidence(
@@ -1835,7 +1841,8 @@ contract SessionLifecycleTest is Test {
                     awsNitroRootCertHash: bytes32(0),
                     qualifyingData: bytes32(0),
                     documentTimestampSeconds: 0,
-                    sha384PcrSetCommitment: bytes32(0)
+                    pcrDigest: bytes32(0),
+                    verificationRequestCommitment: bytes32(0)
                 })
             )
         );

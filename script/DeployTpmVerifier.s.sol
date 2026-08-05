@@ -2,10 +2,11 @@
 pragma solidity ^0.8.27;
 
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
-import {TPM_VERIFIER_SALT} from "./utils/Salt.sol";
+import {TPM_VERIFIER_IMPL_SALT, TPM_VERIFIER_PROXY_SALT} from "./utils/Salt.sol";
 import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "forge-std/console.sol";
 
 contract DeployTpmVerifier is DeploymentConfig {
@@ -16,10 +17,21 @@ contract DeployTpmVerifier is DeploymentConfig {
         console.log("Using TPM attestation at:", tpmAttestationAddr);
         console.log("Using ZkVerifierRegistry at:", zkVerifierRegistryAddr);
 
-        TpmVerifier verifier = new TpmVerifier{salt: TPM_VERIFIER_SALT}(
+        TpmVerifier implementation = new TpmVerifier{salt: TPM_VERIFIER_IMPL_SALT}(
             ITpmAttestation(tpmAttestationAddr), IZkVerifierRegistry(zkVerifierRegistryAddr)
         );
-        console.log("TpmVerifier deployed at:", address(verifier));
+        writeToJson("TpmVerifierImpl", address(implementation));
+        console.log("TpmVerifier implementation:", address(implementation));
+
+        address initialOwner = vm.envAddress("OWNER");
+        TpmVerifier verifier = TpmVerifier(
+            address(
+                new ERC1967Proxy{salt: TPM_VERIFIER_PROXY_SALT}(
+                    address(implementation), abi.encodeCall(TpmVerifier.initialize, (initialOwner))
+                )
+            )
+        );
+        console.log("TpmVerifier proxy:", address(verifier));
         writeToJson("TpmVerifier", address(verifier));
         return address(verifier);
     }

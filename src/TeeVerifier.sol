@@ -247,7 +247,11 @@ contract TeeVerifier is ITeeVerifier {
         }
     }
 
-    function deriveGcpPcr15(TeeVerificationResult memory result) external pure returns (bytes32 pcr15) {
+    function deriveGcpPcr15ExtendValue(TeeVerificationResult memory result)
+        external
+        pure
+        returns (bytes32 extendValue)
+    {
         if (result.teeType == TEEType.IntelTDX) {
             bytes memory uuid = LibBytes.slice(result.reportData, DCAP_REPORT_DATA_START, 16);
             Bytes48 memory actualRtmr3 = LibBytes.readBytes48(result.reportData, DCAP_RTMR3_OFFSET);
@@ -255,10 +259,10 @@ contract TeeVerifier is ITeeVerifier {
             if (!LibBytes.equal(actualRtmr3, expectedRtmr3)) {
                 revert GcpTdxRtmr3Mismatch(LibBytes.toBytes(actualRtmr3), LibBytes.toBytes(expectedRtmr3));
             }
-            return sha256(abi.encodePacked(bytes32(0), bytes16(0), uuid));
+            return LibBytes.readBytes32(abi.encodePacked(bytes16(0), uuid), 0);
         }
         if (result.teeType == TEEType.AmdSevSnp) {
-            return sha256(abi.encodePacked(bytes32(0), LibBytes.readBytes32(result.reportData, SNP_REPORT_ID_OFFSET)));
+            return LibBytes.readBytes32(result.reportData, SNP_REPORT_ID_OFFSET);
         }
         revert UnsupportedGcpTeeType(result.teeType);
     }

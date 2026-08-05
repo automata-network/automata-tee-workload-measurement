@@ -13,7 +13,7 @@ interface ITeeVerifier {
     ///         verified TEE type, and report-bound security-policy fields
     function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerificationResult memory result);
 
-    function deriveGcpPcr15(TeeVerificationResult memory result) external pure returns (bytes32 pcr15);
+    function deriveGcpPcr15ExtendValue(TeeVerificationResult memory result) external pure returns (bytes32 extendValue);
 
     /// @notice Extracts the 64-byte reportData from a DCAP quote body
     /// @param quoteBody The TD10 or TD15 quote body (output of TEE verification)

@@ -21,6 +21,7 @@ import "forge-std/console.sol";
 ///      - SNP_ATTESTATION_ADDR: Automata SNP attestation contract address
 ///      - TPM_ATTESTATION_ADDR: Automata TPM attestation contract address
 ///      - OWNER: Deployer address (also used as initial owner)
+///      - AWS_NITRO_ROOT_CERT_HASH: Keccak-256 hash of trusted AWS NitroTPM root certificate DER
 ///
 /// Usage:
 ///      source .env

@@ -18,6 +18,7 @@ import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
+import {PcrComparison} from "../src/lib/PcrComparison.sol";
 import {MockSignatureVerifier} from "../test/mocks/MockSignatureVerifier.sol";
 import {
     AccessMode,
@@ -108,7 +109,7 @@ contract AnvilLifecycleTeeVerifier is ITeeVerifier {
         return "";
     }
 
-    function deriveGcpPcr15(TeeVerificationResult memory) external pure returns (bytes32) {
+    function deriveGcpPcr15ExtendValue(TeeVerificationResult memory) external pure returns (bytes32) {
         return bytes32(0);
     }
 }
@@ -142,7 +143,8 @@ contract AnvilLifecycleAkVerifier is IAkCollateralVerifier {
             awsNitroRootCertHash: bytes32(0),
             qualifyingData: bytes32(0),
             documentTimestampSeconds: 0,
-            sha384PcrSetCommitment: bytes32(0)
+            pcrDigest: bytes32(0),
+            verificationRequestCommitment: bytes32(0)
         });
     }
 }
@@ -238,6 +240,8 @@ contract AnvilExpectedRevertProbe {
 }
 
 contract SessionLifecycleAnvilTest is Script {
+    bytes32 private constant ANVIL_PCR23 = keccak256("anvil-lifecycle-pcr23");
+
     struct PolicyIds {
         bytes32 baseImageId;
         bytes32 workloadId;
@@ -300,6 +304,7 @@ contract SessionLifecycleAnvilTest is Script {
         PublicIdentity memory firstAk = _identity(ALGO_ID_ES256, 0x10);
         PublicIdentity memory firstTpm = _identity(ALGO_ID_ES256, 0x11);
         AttestationEvidence memory firstEvidence = _fullEvidence(0x12, _identity(ALGO_ID_ES256K, 0x13));
+        firstEvidence.akPub = firstAk;
         _configureAttestation(firstAk, firstTpm, 0);
         bytes32 firstSessionId = sessionRegistry.registerSession(
             firstEvidence,
@@ -344,6 +349,7 @@ contract SessionLifecycleAnvilTest is Script {
         PublicIdentity memory renewedAk = _identity(ALGO_ID_ES256, 0x30);
         PublicIdentity memory renewedTpm = _identity(ALGO_ID_ES256, 0x31);
         AttestationEvidence memory renewalEvidence = _fullEvidence(0x32, _identity(ALGO_ID_ES256K, 0x33));
+        renewalEvidence.akPub = renewedAk;
         _configureAttestation(renewedAk, renewedTpm, 2);
         bytes32 renewedSessionId = sessionRegistry.renewSession(
             rotatedSessionId,
@@ -363,13 +369,13 @@ contract SessionLifecycleAnvilTest is Script {
         require(renewedSession.akPubKeyFingerprint == LibKey.computeKeyFingerprint(renewedAk), "renewal AK unchanged");
         require(renewedSession.workloadId == newPolicy.workloadId, "renewal policy unchanged");
 
-        PublicIdentity memory recoveredAk = _identity(ALGO_ID_ES256, 0x40);
-        PublicIdentity memory recoveredTpm = _identity(ALGO_ID_ES256, 0x41);
-        AttestationEvidence memory recoveryEvidence = _fullEvidence(0x42, _identity(ALGO_ID_ES256K, 0x43));
-        _configureAttestation(recoveredAk, recoveredTpm, 3);
-        bytes32 recoveredSessionId = sessionRegistry.recoverSession(
-            firstSessionId,
-            recoveryEvidence,
+        PublicIdentity memory recoveryPredecessorAk = _identity(ALGO_ID_ES256, 0x38);
+        PublicIdentity memory recoveryPredecessorTpm = _identity(ALGO_ID_ES256, 0x39);
+        AttestationEvidence memory recoveryPredecessorEvidence = _fullEvidence(0x3a, _identity(ALGO_ID_ES256K, 0x3b));
+        recoveryPredecessorEvidence.akPub = recoveryPredecessorAk;
+        _configureAttestation(recoveryPredecessorAk, recoveryPredecessorTpm, 3);
+        bytes32 recoveryPredecessorSessionId = sessionRegistry.registerSession(
+            recoveryPredecessorEvidence,
             newPolicy.workloadId,
             newPolicy.baseImageId,
             newPolicy.platformProfileId,
@@ -378,9 +384,27 @@ contract SessionLifecycleAnvilTest is Script {
             ownerIdentity,
             hex"07"
         );
+        require(sessionRegistry.isSessionActive(recoveryPredecessorSessionId), "recovery predecessor inactive");
+
+        PublicIdentity memory recoveredAk = _identity(ALGO_ID_ES256, 0x40);
+        PublicIdentity memory recoveredTpm = _identity(ALGO_ID_ES256, 0x41);
+        AttestationEvidence memory recoveryEvidence = _fullEvidence(0x42, _identity(ALGO_ID_ES256K, 0x43));
+        recoveryEvidence.akPub = recoveredAk;
+        _configureAttestation(recoveredAk, recoveredTpm, 4);
+        bytes32 recoveredSessionId = sessionRegistry.recoverSession(
+            recoveryPredecessorSessionId,
+            recoveryEvidence,
+            newPolicy.workloadId,
+            newPolicy.baseImageId,
+            newPolicy.platformProfileId,
+            newPolicy.measurementVariantId,
+            uint64(block.timestamp + 1 hours),
+            ownerIdentity,
+            hex"08"
+        );
         require(sessionRegistry.isSessionActive(recoveredSessionId), "recovery successor inactive");
         require(
-            sessionRegistry.getNonce(LibKey.computeKeyFingerprint(ownerIdentity)) == 4, "unexpected final owner nonce"
+            sessionRegistry.getNonce(LibKey.computeKeyFingerprint(ownerIdentity)) == 5, "unexpected final owner nonce"
         );
 
         _runTeeAttributePolicyMatrix();
@@ -400,34 +424,35 @@ contract SessionLifecycleAnvilTest is Script {
 
     function _runTeeAttributePolicyMatrix() private {
         PolicyIds memory safeDefault = _registerTeePolicy("safe-default", bytes32(0), new bytes32[](0));
-        _registerWithCurrentTeeResult(safeDefault, 0x50, 4);
+        _registerWithCurrentTeeResult(safeDefault, 0x50, 5);
 
         bytes32[] memory allowDebug = new bytes32[](2);
         allowDebug[0] = bytes32(0);
         allowDebug[1] = TEE_ATTRIBUTE_TRUE;
         PolicyIds memory debugAllowed = _registerTeePolicy("debug-allowed", TEE_ATTRIBUTE_TRUE, allowDebug);
         teeVerifier.configure(true, TEEType.IntelTDX, TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT, 0);
-        _registerWithCurrentTeeResult(debugAllowed, 0x51, 5);
+        _registerWithCurrentTeeResult(debugAllowed, 0x51, 6);
 
         bytes32[] memory falseOnly = new bytes32[](1);
         falseOnly[0] = bytes32(0);
         PolicyIds memory workloadVeto = _registerTeePolicy("workload-veto", TEE_ATTRIBUTE_TRUE, falseOnly);
-        _expectRegisterRevert(workloadVeto, 0x52, 6, AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector);
+        _expectRegisterRevert(workloadVeto, 0x52, 7, AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector);
 
         PolicyIds memory baseMismatch = _registerTeePolicy("base-mismatch", bytes32(0), allowDebug);
         _expectRegisterRevert(
-            baseMismatch, 0x53, 6, AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector
+            baseMismatch, 0x53, 7, AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector
         );
 
         teeVerifier.configure(true, TEEType.IntelTDX, 0, 1);
         _expectRegisterRevert(
-            safeDefault, 0x54, 6, AnvilLifecycleTeeVerifier.TdxMigrationServiceTdNotSupported.selector
+            safeDefault, 0x54, 7, AnvilLifecycleTeeVerifier.TdxMigrationServiceTdNotSupported.selector
         );
 
         teeVerifier.configure(true, TEEType.AmdSevSnp, 0, 2);
         AttestationEvidence memory snpEvidence = _fullEvidence(0x55, _identity(ALGO_ID_ES256K, 0x56));
         snpEvidence.teeReport.teeType = TEEType.AmdSevSnp;
-        _configureAttestation(_identity(ALGO_ID_ES256, 0x57), _identity(ALGO_ID_ES256, 0x58), 6);
+        snpEvidence.akPub = _identity(ALGO_ID_ES256, 0x57);
+        _configureAttestation(snpEvidence.akPub, _identity(ALGO_ID_ES256, 0x58), 7);
         _expectEvidenceRegisterRevert(
             snpEvidence, safeDefault, AnvilLifecycleTeeVerifier.SnpMigrationAgentNotSupported.selector
         );
@@ -436,9 +461,12 @@ contract SessionLifecycleAnvilTest is Script {
     }
 
     function _registerWithCurrentTeeResult(PolicyIds memory policy, uint8 marker, uint256 nonce) private {
-        _configureAttestation(_identity(ALGO_ID_ES256, marker + 1), _identity(ALGO_ID_ES256, marker + 2), nonce);
+        PublicIdentity memory akPub = _identity(ALGO_ID_ES256, marker + 1);
+        _configureAttestation(akPub, _identity(ALGO_ID_ES256, marker + 2), nonce);
+        AttestationEvidence memory evidence = _fullEvidence(marker, _identity(ALGO_ID_ES256K, marker + 3));
+        evidence.akPub = akPub;
         bytes32 sessionId = sessionRegistry.registerSession(
-            _fullEvidence(marker, _identity(ALGO_ID_ES256K, marker + 3)),
+            evidence,
             policy.workloadId,
             policy.baseImageId,
             policy.platformProfileId,
@@ -453,10 +481,11 @@ contract SessionLifecycleAnvilTest is Script {
     function _expectRegisterRevert(PolicyIds memory policy, uint8 marker, uint256 nonce, bytes4 expectedSelector)
         private
     {
-        _configureAttestation(_identity(ALGO_ID_ES256, marker + 1), _identity(ALGO_ID_ES256, marker + 2), nonce);
-        _expectEvidenceRegisterRevert(
-            _fullEvidence(marker, _identity(ALGO_ID_ES256K, marker + 3)), policy, expectedSelector
-        );
+        PublicIdentity memory akPub = _identity(ALGO_ID_ES256, marker + 1);
+        _configureAttestation(akPub, _identity(ALGO_ID_ES256, marker + 2), nonce);
+        AttestationEvidence memory evidence = _fullEvidence(marker, _identity(ALGO_ID_ES256K, marker + 3));
+        evidence.akPub = akPub;
+        _expectEvidenceRegisterRevert(evidence, policy, expectedSelector);
     }
 
     function _expectEvidenceRegisterRevert(
@@ -496,8 +525,8 @@ contract SessionLifecycleAnvilTest is Script {
         profiles[0] = PlatformProfile({
             name: "anvil-tdx",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: _invariantPcrs256(),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: attributes
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -548,8 +577,8 @@ contract SessionLifecycleAnvilTest is Script {
         profiles[0] = PlatformProfile({
             name: "anvil-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: _invariantPcrs256(),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -617,11 +646,32 @@ contract SessionLifecycleAnvilTest is Script {
     }
 
     function _quoteReport(uint8 marker) private pure returns (TpmReport memory) {
+        PcrValue256[] memory values256 = new PcrValue256[](1);
+        values256[0] = PcrValue256({pcrIndex: 23, value: ANVIL_PCR23, eventLogHashes: new bytes32[](0)});
+        bytes32 pcrDigest = sha256(abi.encodePacked(ANVIL_PCR23));
+        bytes memory tpmsAttest = abi.encodePacked(
+            bytes4(uint32(0xff544347)),
+            bytes2(uint16(0x8018)),
+            bytes2(0),
+            bytes2(uint16(32)),
+            bytes32(0),
+            bytes8(0),
+            bytes4(0),
+            bytes4(0),
+            bytes1(0),
+            bytes8(0),
+            bytes4(uint32(1)),
+            bytes2(uint16(0x000b)),
+            bytes1(uint8(3)),
+            bytes3(0x000080),
+            bytes2(uint16(32)),
+            pcrDigest
+        );
         TpmQuoteEvidence memory quote = TpmQuoteEvidence({
-            tpmsAttest: abi.encodePacked("anvil-quote-", marker),
+            tpmsAttest: tpmsAttest,
             tpmSignature: abi.encodePacked("anvil-quote-signature-", marker),
             pcr0StartupLocality: 0xff,
-            pcrValues256: new PcrValue256[](0),
+            pcrValues256: values256,
             pcrValues384: new PcrValue384[](0)
         });
         return TpmReport({
@@ -649,5 +699,10 @@ contract SessionLifecycleAnvilTest is Script {
         key[0] = 0x04;
         key[64] = bytes1(marker);
         return PublicIdentity({typeId: typeId, key: key});
+    }
+
+    function _invariantPcrs256() private pure returns (PcrSpec256[] memory rules) {
+        rules = new PcrSpec256[](1);
+        rules[0] = PcrSpec256({pcrIndex: 23, comparison: PcrComparison.encodeStatic256(ANVIL_PCR23)});
     }
 }

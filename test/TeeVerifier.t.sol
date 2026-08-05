@@ -13,6 +13,8 @@ import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.s
 import {TeeReport, TEEType, VerificationBackendType, TeeVerificationResult} from "../src/types/Evidence.sol";
 import {AmdSevSnpZkEvidence, IntelTdxDcapZkEvidence, ProgramBoundZkProof, ZkProofType} from "../src/types/Zk.sol";
 import {AmdSevSnpZkVerifierAdapter, IntelTdxDcapZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
+import {Bytes48, LibBytes} from "../src/lib/LibBytes.sol";
+import {Sha2Ext} from "../src/lib/Sha2Ext.sol";
 import {
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
@@ -134,6 +136,36 @@ contract TeeVerifierSnpTest is Test {
         assertEq(res.amdSevSnpCurrentMitigationVector, 0);
         // _verifyAmdSevSnp returns the full bound report as reportData.
         assertEq(res.reportData, report);
+    }
+
+    function test_gcp_snp_pcr15_extend_value_is_exact_report_id() public {
+        bytes memory report = _report();
+        bytes32 reportId = bytes32(uint256(0x1234));
+        for (uint256 i; i < 32; ++i) {
+            report[0x140 + i] = reportId[i];
+        }
+        TeeVerificationResult memory result = _verifySnp(report);
+
+        assertEq(teeVerifier.deriveGcpPcr15ExtendValue(result), reportId);
+    }
+
+    function test_gcp_tdx_pcr15_extend_value_is_zero_padded_uuid() public view {
+        bytes memory quoteBody = new bytes(584);
+        bytes16 uuid = 0x00112233445566778899aabbccddeeff;
+        for (uint256 i; i < 16; ++i) {
+            quoteBody[520 + i] = uuid[i];
+        }
+        Bytes48 memory rtmr3 = Sha2Ext.sha384(abi.encodePacked(new bytes(48), new bytes(32), uuid));
+        bytes memory encodedRtmr3 = LibBytes.toBytes(rtmr3);
+        for (uint256 i; i < 48; ++i) {
+            quoteBody[472 + i] = encodedRtmr3[i];
+        }
+        TeeVerificationResult memory result;
+        result.valid = true;
+        result.teeType = TEEType.IntelTDX;
+        result.reportData = quoteBody;
+
+        assertEq(teeVerifier.deriveGcpPcr15ExtendValue(result), bytes32(uint256(uint128(uuid))));
     }
 
     function test_snp_revert_on_reportHash_mismatch() public {

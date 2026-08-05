@@ -327,7 +327,8 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
             awsNitroRootCertHash: bytes32(0),
             qualifyingData: bytes32(0),
             documentTimestampSeconds: 0,
-            sha384PcrSetCommitment: bytes32(0)
+            pcrDigest: bytes32(0),
+            verificationRequestCommitment: bytes32(0)
         });
     }
 
@@ -672,7 +673,8 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
             awsNitroRootCertHash: bytes32(0),
             qualifyingData: bytes32(0),
             documentTimestampSeconds: 0,
-            sha384PcrSetCommitment: bytes32(0)
+            pcrDigest: bytes32(0),
+            verificationRequestCommitment: bytes32(0)
         });
     }
 
@@ -693,7 +695,8 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
             awsNitroRootCertHash: journal.awsNitroRootCertHash,
             qualifyingData: journal.qualifyingData,
             documentTimestampSeconds: journal.documentTimestampSeconds,
-            sha384PcrSetCommitment: journal.sha384PcrSetCommitment
+            pcrDigest: journal.pcrDigest,
+            verificationRequestCommitment: journal.verificationRequestCommitment
         });
     }
 }

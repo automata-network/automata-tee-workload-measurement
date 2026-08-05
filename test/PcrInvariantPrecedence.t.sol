@@ -18,6 +18,7 @@ import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/inte
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
+import {PcrComparison} from "../src/lib/PcrComparison.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -30,7 +31,6 @@ import {
     PcrBankSelection,
     PcrSpec256,
     PcrSpec384,
-    PcrVerifyType,
     PlatformProfile,
     PublicIdentity,
     WorkloadSpec
@@ -119,8 +119,8 @@ contract PcrInvariantPrecedenceTest is Test {
         // Profile pins PCR4 as an invariant; the initial variant pins only PCR10 (disjoint).
         baseImageId = baseImageRegistry.registerBaseImage(
             BaseImageSpec({name: "invariant-base", version: "v1", uri: ""}),
-            _profiles(_pcr(4, PcrVerifyType.STATIC, GOLDEN_PCR4)),
-            _variants(_pcr(10, PcrVerifyType.STATIC, keccak256("pcr10"))),
+            _profiles(_pcr(4, GOLDEN_PCR4)),
+            _variants(_pcr(10, keccak256("pcr10"))),
             uint64(block.timestamp + 1 hours),
             imageOwner,
             hex"01"
@@ -157,9 +157,12 @@ contract PcrInvariantPrecedenceTest is Test {
         );
         baseImageRegistry.addPlatformVariants(
             baseImageId,
-            _profiles(_pcr(4, PcrVerifyType.STATIC, GOLDEN_PCR4)),
+            _profiles(_pcr(4, GOLDEN_PCR4)),
             _variantsNamed(
-                "rogue", PcrSpec256({pcrIndex: 4, verifyType: PcrVerifyType.DYNAMIC_SUBSET, matchData: anyEvent})
+                "rogue",
+                PcrSpec256({
+                    pcrIndex: 4, comparison: PcrComparison.encodeDynamic256(PcrComparison.DYNAMIC_SUBSET, anyEvent)
+                })
             ),
             uint64(block.timestamp + 1 hours),
             imageOwner,
@@ -175,8 +178,8 @@ contract PcrInvariantPrecedenceTest is Test {
         profilesWithoutInvariant[0] = PlatformProfile({
             name: "profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: new PcrSpec256[](0),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
 
@@ -184,7 +187,7 @@ contract PcrInvariantPrecedenceTest is Test {
         baseImageRegistry.addPlatformVariants(
             baseImageId,
             profilesWithoutInvariant,
-            _variantsNamed("rogue", _pcr(4, PcrVerifyType.STATIC, ROGUE_PCR4)[0]),
+            _variantsNamed("rogue", _pcr(4, ROGUE_PCR4)[0]),
             uint64(block.timestamp + 1 hours),
             imageOwner,
             hex"01"
@@ -198,8 +201,8 @@ contract PcrInvariantPrecedenceTest is Test {
         );
         baseImageRegistry.registerBaseImage(
             BaseImageSpec({name: "invariant-base", version: "v2", uri: ""}),
-            _profiles(_pcr(4, PcrVerifyType.STATIC, GOLDEN_PCR4)),
-            _variants(_pcr(4, PcrVerifyType.STATIC, ROGUE_PCR4)),
+            _profiles(_pcr(4, GOLDEN_PCR4)),
+            _variants(_pcr(4, ROGUE_PCR4)),
             uint64(block.timestamp + 1 hours),
             imageOwner,
             hex"01"
@@ -214,8 +217,8 @@ contract PcrInvariantPrecedenceTest is Test {
         profiles[0] = PlatformProfile({
             name: "second-profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: _pcr(7, PcrVerifyType.STATIC, GOLDEN_PCR4),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: _pcr(7, GOLDEN_PCR4),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
         bytes32 newProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, "second-profile"));
@@ -226,7 +229,7 @@ contract PcrInvariantPrecedenceTest is Test {
         baseImageRegistry.addPlatformVariants(
             baseImageId,
             profiles,
-            _variantsNamed("new-profile-variant", _pcr(7, PcrVerifyType.STATIC, ROGUE_PCR4)[0]),
+            _variantsNamed("new-profile-variant", _pcr(7, ROGUE_PCR4)[0]),
             uint64(block.timestamp + 1 hours),
             imageOwner,
             hex"01"
@@ -237,8 +240,8 @@ contract PcrInvariantPrecedenceTest is Test {
     function test_addPlatformVariants_accepts_disjoint_variant() public {
         baseImageRegistry.addPlatformVariants(
             baseImageId,
-            _profiles(_pcr(4, PcrVerifyType.STATIC, GOLDEN_PCR4)),
-            _variantsNamed("disjoint", _pcr(11, PcrVerifyType.STATIC, keccak256("pcr11"))[0]),
+            _profiles(_pcr(4, GOLDEN_PCR4)),
+            _variantsNamed("disjoint", _pcr(11, keccak256("pcr11"))[0]),
             uint64(block.timestamp + 1 hours),
             imageOwner,
             hex"01"
@@ -254,15 +257,9 @@ contract PcrInvariantPrecedenceTest is Test {
         return keccak256(abi.encode(keccak256("CVM_BASEIMAGE_V1"), "invariant-base", "v2"));
     }
 
-    function _pcr(uint8 index, PcrVerifyType verifyType, bytes32 value)
-        private
-        pure
-        returns (PcrSpec256[] memory specs)
-    {
-        bytes32[] memory matchData = new bytes32[](1);
-        matchData[0] = value;
+    function _pcr(uint8 index, bytes32 value) private pure returns (PcrSpec256[] memory specs) {
         specs = new PcrSpec256[](1);
-        specs[0] = PcrSpec256({pcrIndex: index, verifyType: verifyType, matchData: matchData});
+        specs[0] = PcrSpec256({pcrIndex: index, comparison: PcrComparison.encodeStatic256(value)});
     }
 
     function _pcrSpecs(PcrSpec256 memory spec) private pure returns (PcrSpec256[] memory specs) {
@@ -275,8 +272,8 @@ contract PcrInvariantPrecedenceTest is Test {
         profiles[0] = PlatformProfile({
             name: "profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: invariants,
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: invariants,
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
     }

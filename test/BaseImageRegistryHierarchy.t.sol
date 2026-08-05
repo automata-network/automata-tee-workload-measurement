@@ -74,8 +74,8 @@ contract BaseImageRegistryHierarchyTest is Test {
         profiles[0] = PlatformProfile({
             name: profileName,
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: new PcrSpec256[](0),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
 
@@ -122,15 +122,15 @@ contract BaseImageRegistryHierarchyTest is Test {
         profiles[0] = PlatformProfile({
             name: "gcp-tdx",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: new PcrSpec256[](0),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
         profiles[1] = PlatformProfile({
             name: "gcp-snp",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: new PcrSpec256[](0),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: new PcrSpec256[](0),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
 

@@ -1,4 +1,5 @@
 pub mod base_image_registry;
+pub mod pcr_comparison;
 pub mod relay;
 pub mod session_registry;
 pub mod stubs;

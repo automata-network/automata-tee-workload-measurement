@@ -41,12 +41,12 @@ string public constant TEE_VERIFIER_VERSION = "2.0.0";
 
 ### Functions
 
-#### `deriveGcpPcr15`
+#### `deriveGcpPcr15ExtendValue`
 ```solidity
-function deriveGcpPcr15(TeeVerificationResult memory result) external pure returns (bytes32 pcr15)
+function deriveGcpPcr15ExtendValue(TeeVerificationResult memory result) external pure returns (bytes32 extendValue)
 ```
-- Intel TDX: validates RTMR3, then derives SHA-256 PCR15 from the verified UUID.
-- AMD SEV-SNP: derives SHA-256 PCR15 from the verified `REPORT_ID`.
+- Intel TDX: validates RTMR3, then returns `bytes16(0) || UUID`.
+- AMD SEV-SNP: returns the verified `REPORT_ID`.
 
 #### `verifyTeeReport`
 ```solidity
@@ -243,11 +243,15 @@ function verify(
 ## TpmVerifier
 
 **File**: `src/bases/TpmVerifier.sol`
-**Inheritance**: `TpmBase`
+**Inheritance**: `TpmBase`, `OwnableUpgradeable`, `UUPSUpgradeable`
 **Role**: Separately deployed TPM Quote and Certify verifier
 
-The constructor receives `ITpmAttestation` and `IZkVerifierRegistry`.
-`SessionRegistry` holds an immutable `TpmVerifier` reference.
+The implementation constructor receives immutable `ITpmAttestation` and
+`IZkVerifierRegistry` references. `TpmVerifier` runs behind an `ERC1967Proxy`.
+The proxy initializer sets the owner, and only the owner can authorize an
+implementation upgrade. `SessionRegistry` holds the proxy address as its
+immutable `TpmVerifier` reference and passes opaque PCR `comparison` bytes
+without decoding them.
 
 ### Constants
 
@@ -270,8 +274,7 @@ function verifyTpmQuote(
     TpmReport memory tpmReport,
     PublicIdentity memory akPub,
     bytes32 expectedQualifyingData,
-    ResolvedPcrPolicy memory policy,
-    ProviderPcrRequirements memory providerRequirements
+    TpmVerificationRequest memory request
 ) public returns (TpmQuoteVerificationResult memory result)
 ```
 
@@ -280,12 +283,11 @@ function verifyTpmQuote(
    resolve the exact `tpm_quote.v1` adapter for
    `VerificationBackendType.ZkSuccinct`.
 3. Require the Attestation Key fingerprint and `qualifyingData`.
-4. Require the SHA-256 and SHA-384 policy commitments.
-5. Require the provider PCR-binding commitments.
-6. Require each selected bank to return the needed PCR-set commitment.
-7. The Solidity path verifies the signed Quote selection and `pcrDigest`, then
+4. Require the proof's `verificationRequestCommitment` to equal the exact
+   current request.
+5. The Solidity path verifies the signed Quote selection and `pcrDigest`, then
    evaluates static and dynamic SHA-256 policy plus static SHA-384 policy.
-   Dynamic SHA-384 policy requires `tpm_quote.v1`.
+   Every non-`STATIC` SHA-384 rule requires `tpm_quote.v1`.
 
 #### `verifyTpmCertify`
 ```solidity
@@ -315,9 +317,7 @@ function verifyTpmCertify(
 | `TpmQuoteBackendDoesNotSatisfyPolicy()` | A raw Solidity Quote cannot evaluate the selected policy |
 | `TpmQuoteExtraDataMismatch()` | Nonce binding check failed |
 | `TpmQuoteLibraryFailed()` | TPM attestation library returned error |
-| `PcrPolicyCommitmentMismatch()` | The proof returned a different registry-policy commitment |
-| `PcrBindingCommitmentMismatch()` | The proof returned different provider-binding requirements |
-| `PcrSetCommitmentMissing()` | A required bank has no authenticated PCR-set commitment |
+| `VerificationRequestCommitmentMismatch()` | The proof returned a different exact verification request commitment |
 | `TpmaObjectForbiddenBitsSet()` | Certified key has forbidden attributes |
 | `TpmtPublicTooShort()` | tpmtPublic data too short to extract attributes |
 
@@ -391,10 +391,10 @@ AWS provides a `ProgramBoundZkProof` for `aws_nitrotpm.v1`.
 `AkCollateralVerifier` resolves the exact proof type, backend, and program
 identifier through `ZkVerifierRegistry`. The selected adapter verifies the
 proof and returns the Attestation Key fingerprint, exact AMD SEV-SNP report
-hash, trusted-root hash, qualifying data, document timestamp, and native
-SHA-384 PCR-set commitment. `SessionRegistry._verifyProviderEvidence` checks
-those commitments against the common TEE result, current nonce, trusted-root
-configuration, freshness window, and TPM Quote result.
+hash, trusted-root hash, qualifying data, document timestamp, `pcrDigest`, and
+`verificationRequestCommitment`. `SessionRegistry` checks those values against
+the common TEE result, current nonce, trusted-root configuration, freshness
+window, and TPM Quote result.
 
 ### Errors
 

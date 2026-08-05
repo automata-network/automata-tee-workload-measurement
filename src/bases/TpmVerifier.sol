@@ -3,19 +3,7 @@ pragma solidity ^0.8.27;
 
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {
-    PcrBankSelection,
-    PcrBinding256,
-    PcrBinding384,
-    PcrSetEntry256,
-    PcrSetEntry384,
-    PcrSpec256,
-    PcrSpec384,
-    PcrVerifyType,
-    ProviderPcrRequirements,
-    PublicIdentity,
-    ResolvedPcrPolicy
-} from "../types/Common.sol";
+import {PcrSpec256, PcrSpec384, PublicIdentity, TpmVerificationRequest} from "../types/Common.sol";
 import {
     PcrValue256,
     PcrValue384,
@@ -25,32 +13,23 @@ import {
     TpmReportType,
     VerificationBackendType
 } from "../types/Evidence.sol";
-import {
-    PCR_BINDING_SHA256_COMMITMENT_DOMAIN,
-    PCR_BINDING_SHA384_COMMITMENT_DOMAIN,
-    PCR_POLICY_SHA256_COMMITMENT_DOMAIN,
-    PCR_POLICY_SHA384_COMMITMENT_DOMAIN,
-    PCR_SET_SHA256_COMMITMENT_DOMAIN,
-    PCR_SET_SHA384_COMMITMENT_DOMAIN
-} from "../types/Constants.sol";
+import {TPM_VERIFICATION_REQUEST_COMMITMENT_DOMAIN} from "../types/Constants.sol";
 import {ProgramBoundZkProof, TpmQuoteJournalV1, ZkProofType} from "../types/Zk.sol";
 import {IZkVerifierRegistry} from "../interfaces/registries/IZkVerifierRegistry.sol";
 import {ITpmQuoteZkVerifierAdapter} from "../interfaces/zk/IZkVerifierAdapters.sol";
 import {Bytes48, LibBytes} from "../lib/LibBytes.sol";
+import {PcrComparison} from "../lib/PcrComparison.sol";
 import {LibKey} from "../lib/LibKey.sol";
-import {Sha2Ext} from "../lib/Sha2Ext.sol";
 import {TpmBase} from "./TpmBase.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 struct TpmQuoteVerificationResult {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     bytes32 tpmSignatureHash;
-    bytes32 sha256PolicyCommitment;
-    bytes32 sha384PolicyCommitment;
-    bytes32 sha256PcrBindingCommitment;
-    bytes32 sha384PcrBindingCommitment;
-    bytes32 sha256PcrSetCommitment;
-    bytes32 sha384PcrSetCommitment;
+    bytes32 pcrDigest;
+    bytes32 verificationRequestCommitment;
 }
 
 struct TpmCertifyVerificationResult {
@@ -67,7 +46,7 @@ struct QuoteSelection {
     bytes32 pcrDigest;
 }
 
-contract TpmVerifier is TpmBase {
+contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
     uint32 internal constant TPMA_OBJECT_REQUIRED_SET = 0x40072;
     uint32 internal constant TPMA_OBJECT_REQUIRED_CLEAR = 0xFFFBFB8D;
 
@@ -77,6 +56,8 @@ contract TpmVerifier is TpmBase {
     uint8 private constant NO_STARTUP_LOCALITY = 0xFF;
 
     IZkVerifierRegistry public immutable zkVerifierRegistry;
+
+    uint256[50] private __gap;
 
     error UnexpectedTpmReportType(TpmReportType actual, TpmReportType expected);
     error TpmReportBackendNotConfigured(TpmReportType tpmReportType, VerificationBackendType verificationBackendType);
@@ -95,49 +76,57 @@ contract TpmVerifier is TpmBase {
     error PcrEvidenceIndexMismatch(uint16 algorithm, uint256 position, uint8 actual, uint8 expected);
     error PcrDigestSizeMismatch(uint16 actual);
     error PcrDigestMismatch(bytes32 measured, bytes32 expected);
-    error PcrEvaluationTargetNotSelected(uint16 algorithm, uint8 pcrIndex);
+    error PcrSelectionMismatch(uint16 algorithm, uint32 actualMask, uint32 expectedMask);
     error PcrValueNotFound(uint16 algorithm, uint8 pcrIndex);
     error InvalidPcrRule(uint16 algorithm, uint8 pcrIndex);
-    error DynamicSha384PolicyRequiresZk(uint8 pcrIndex, PcrVerifyType verifyType);
+    error InvalidPcrComparisonType(uint16 algorithm, uint8 pcrIndex, uint256 encodedType);
+    error UnsupportedPcrComparison(uint16 algorithm, uint8 pcrIndex, uint16 comparisonType);
+    error NonCanonicalPcrComparison(uint16 algorithm, uint8 pcrIndex);
+    error DynamicSha384PolicyRequiresZk(uint8 pcrIndex, uint16 comparisonType);
     error InvalidPcr0StartupLocality(uint8 locality);
     error PcrReplayMismatch256(uint8 pcrIndex, bytes32 measured, bytes32 replayed);
     error PcrStaticMismatch256(uint8 pcrIndex, bytes32 measured, bytes32 expected);
     error PcrStaticMismatch384(uint8 pcrIndex, Bytes48 measured, Bytes48 expected);
-    error PcrEventLogEmpty(uint16 algorithm, uint8 pcrIndex, PcrVerifyType verifyType);
+    error PcrEventLogEmpty(uint16 algorithm, uint8 pcrIndex, uint16 comparisonType);
     error PcrSubsetLandmarkMissing(uint16 algorithm, uint8 pcrIndex, uint256 landmarkIndex);
     error PcrSubsequenceLandmarkMissing(uint16 algorithm, uint8 pcrIndex, uint256 matched, uint256 required);
-    error PcrRequirementsNotSorted(uint16 algorithm, uint8 previousIndex, uint8 currentIndex);
-    error PcrRequirementOverlap(uint16 algorithm, uint8 pcrIndex);
-    error PcrBindingMismatch256(uint8 pcrIndex, bytes32 measured, bytes32 expected);
-    error PcrBindingMismatch384(uint8 pcrIndex, Bytes48 measured, Bytes48 expected);
+    error PcrEventCountMismatch(uint16 algorithm, uint8 pcrIndex, uint256 actual, uint16 expected);
+    error PcrCheckedEventsEmpty(uint16 algorithm, uint8 pcrIndex);
+    error PcrCheckedEventIndexOutOfRange(uint16 algorithm, uint8 pcrIndex, uint16 eventIndex, uint16 eventCount);
+    error PcrCheckedEventIndexesNotSorted(uint16 algorithm, uint8 pcrIndex, uint16 previous, uint16 current);
+    error PcrAllowedValuesEmpty(uint16 algorithm, uint8 pcrIndex, uint16 eventIndex);
+    error PcrAllowedValuesNotSorted(uint16 algorithm, uint8 pcrIndex, uint16 eventIndex, uint256 position);
+    error PcrIndexedEventSetMismatch(uint16 algorithm, uint8 pcrIndex, uint16 eventIndex);
     error AttestationKeyFingerprintMismatch(bytes32 measured, bytes32 expected);
     error QualifyingDataMismatch(bytes32 measured, bytes32 expected);
-    error PcrPolicyCommitmentMismatch(uint16 algorithm, bytes32 measured, bytes32 expected);
-    error PcrBindingCommitmentMismatch(uint16 algorithm, bytes32 measured, bytes32 expected);
-    error PcrSetCommitmentMissing(uint16 algorithm);
-    error UnexpectedPcrSetCommitment(uint16 algorithm, bytes32 measured);
+    error VerificationRequestCommitmentMismatch(bytes32 measured, bytes32 expected);
     error TpmQuoteBackendDoesNotSatisfyPolicy(VerificationBackendType backend);
     error TpmaObjectForbiddenBitsSet(uint32 actualAttrs, uint32 forbiddenBitsSet);
     error TpmtPublicTooShort(uint256 length);
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(ITpmAttestation tpmAttestation_, IZkVerifierRegistry zkVerifierRegistry_) TpmBase(tpmAttestation_) {
         zkVerifierRegistry = zkVerifierRegistry_;
+        _disableInitializers();
+    }
+
+    function initialize(address initialOwner) external initializer {
+        __Ownable_init(initialOwner);
     }
 
     function verifyTpmQuote(
         TpmReport memory tpmReport,
         PublicIdentity memory akPub,
         bytes32 expectedQualifyingData,
-        ResolvedPcrPolicy memory policy,
-        ProviderPcrRequirements memory providerRequirements
+        TpmVerificationRequest memory request
     ) public returns (TpmQuoteVerificationResult memory result) {
         if (tpmReport.tpmReportType != TpmReportType.TpmQuote) {
             revert UnexpectedTpmReportType(tpmReport.tpmReportType, TpmReportType.TpmQuote);
         }
-        _requireQuoteBackendForPolicy(tpmReport.verificationBackendType, policy);
+        _requireQuoteBackendForRequest(tpmReport.verificationBackendType, request);
 
         if (tpmReport.verificationBackendType == VerificationBackendType.Solidity) {
-            result = _verifyRawTpmQuote(tpmReport.data, akPub, expectedQualifyingData, policy, providerRequirements);
+            result = _verifyRawTpmQuote(tpmReport.data, akPub, expectedQualifyingData, request);
         } else if (tpmReport.verificationBackendType == VerificationBackendType.ZkSuccinct) {
             ProgramBoundZkProof memory proof = abi.decode(tpmReport.data, (ProgramBoundZkProof));
             address adapter = zkVerifierRegistry.resolveVerifierAdapter(
@@ -148,19 +137,13 @@ contract TpmVerifier is TpmBase {
                 akPubFingerprint: journal.akPubFingerprint,
                 qualifyingData: journal.qualifyingData,
                 tpmSignatureHash: journal.tpmSignatureHash,
-                sha256PolicyCommitment: journal.sha256PolicyCommitment,
-                sha384PolicyCommitment: journal.sha384PolicyCommitment,
-                sha256PcrBindingCommitment: journal.sha256PcrBindingCommitment,
-                sha384PcrBindingCommitment: journal.sha384PcrBindingCommitment,
-                sha256PcrSetCommitment: journal.sha256PcrSetCommitment,
-                sha384PcrSetCommitment: journal.sha384PcrSetCommitment
+                pcrDigest: journal.pcrDigest,
+                verificationRequestCommitment: journal.verificationRequestCommitment
             });
         } else {
             revert TpmReportBackendNotConfigured(tpmReport.tpmReportType, tpmReport.verificationBackendType);
         }
-        _verifyCommonQuoteResult(
-            result, LibKey.computeKeyFingerprint(akPub), expectedQualifyingData, policy, providerRequirements
-        );
+        _verifyCommonQuoteResult(result, LibKey.computeKeyFingerprint(akPub), expectedQualifyingData, request);
     }
 
     function verifyTpmCertify(TpmReport memory tpmReport, PublicIdentity memory akPub)
@@ -196,8 +179,7 @@ contract TpmVerifier is TpmBase {
         bytes memory encodedEvidence,
         PublicIdentity memory akPub,
         bytes32 expectedQualifyingData,
-        ResolvedPcrPolicy memory policy,
-        ProviderPcrRequirements memory providerRequirements
+        TpmVerificationRequest memory request
     ) private returns (TpmQuoteVerificationResult memory result) {
         TpmQuoteEvidence memory evidence = abi.decode(encodedEvidence, (TpmQuoteEvidence));
         CertPubkey memory akCertPubkey = LibKey.publicIdentityToCertPubkey(akPub);
@@ -214,78 +196,32 @@ contract TpmVerifier is TpmBase {
         _validateStartupLocality(evidence.pcr0StartupLocality);
         _validateEvidenceAndDigest(evidence, selection);
 
-        (uint32 targetMask256, uint32 targetMask384) = _evaluationTargetMasks(policy, providerRequirements);
-        _requireTargetsSelected(selection, targetMask256, targetMask384);
-        _evaluateSelectedPolicy(evidence, policy);
-        _evaluateProviderBindings(evidence, providerRequirements);
+        (uint32 targetMask256, uint32 targetMask384) = _evaluationTargetMasks(request);
+        _requireExactSelection(selection, targetMask256, targetMask384);
+        _evaluateRequest(evidence, request);
 
         result = TpmQuoteVerificationResult({
             akPubFingerprint: LibKey.computeKeyFingerprint(akPub),
             qualifyingData: qualifyingData,
             tpmSignatureHash: keccak256(evidence.tpmSignature),
-            sha256PolicyCommitment: computeSha256PolicyCommitment(policy),
-            sha384PolicyCommitment: computeSha384PolicyCommitment(policy),
-            sha256PcrBindingCommitment: computeSha256PcrBindingCommitment(providerRequirements),
-            sha384PcrBindingCommitment: computeSha384PcrBindingCommitment(providerRequirements),
-            sha256PcrSetCommitment: _sha256PcrSetCommitment(evidence.pcrValues256, targetMask256),
-            sha384PcrSetCommitment: _sha384PcrSetCommitment(evidence.pcrValues384, targetMask384)
+            pcrDigest: selection.pcrDigest,
+            verificationRequestCommitment: computeVerificationRequestCommitment(request)
         });
     }
 
-    function computeSha256PolicyCommitment(ResolvedPcrPolicy memory policy) public pure returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                PCR_POLICY_SHA256_COMMITMENT_DOMAIN,
-                policy.baseImageId,
-                policy.platformProfileId,
-                policy.measurementVariantId,
-                policy.workloadId,
-                policy.pcrBankSelection,
-                policy.invariants256,
-                policy.variantPcrs256,
-                policy.workloadPcrs256
-            )
-        );
-    }
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
-    function computeSha384PolicyCommitment(ResolvedPcrPolicy memory policy) public pure returns (bytes32) {
+    function computeVerificationRequestCommitment(TpmVerificationRequest memory request) public pure returns (bytes32) {
         return keccak256(
             abi.encode(
-                PCR_POLICY_SHA384_COMMITMENT_DOMAIN,
-                policy.baseImageId,
-                policy.platformProfileId,
-                policy.measurementVariantId,
-                policy.workloadId,
-                policy.pcrBankSelection,
-                policy.invariants384,
-                policy.variantPcrs384,
-                policy.workloadPcrs384
-            )
-        );
-    }
-
-    function computeSha256PcrBindingCommitment(ProviderPcrRequirements memory requirements)
-        public
-        pure
-        returns (bytes32)
-    {
-        _validateRequirements256(requirements.pcrBindings256, requirements.pcrJoinIndexes256);
-        return keccak256(
-            abi.encode(
-                PCR_BINDING_SHA256_COMMITMENT_DOMAIN, requirements.pcrBindings256, requirements.pcrJoinIndexes256
-            )
-        );
-    }
-
-    function computeSha384PcrBindingCommitment(ProviderPcrRequirements memory requirements)
-        public
-        pure
-        returns (bytes32)
-    {
-        _validateRequirements384(requirements.pcrBindings384, requirements.pcrJoinIndexes384);
-        return keccak256(
-            abi.encode(
-                PCR_BINDING_SHA384_COMMITMENT_DOMAIN, requirements.pcrBindings384, requirements.pcrJoinIndexes384
+                TPM_VERIFICATION_REQUEST_COMMITMENT_DOMAIN,
+                request.workloadId,
+                request.baseImageId,
+                request.platformProfileId,
+                request.measurementVariantId,
+                request.pcrBankSelection,
+                request.pcrs256,
+                request.pcrs384
             )
         );
     }
@@ -294,8 +230,7 @@ contract TpmVerifier is TpmBase {
         TpmQuoteVerificationResult memory result,
         bytes32 akPubFingerprint,
         bytes32 expectedQualifyingData,
-        ResolvedPcrPolicy memory policy,
-        ProviderPcrRequirements memory requirements
+        TpmVerificationRequest memory request
     ) private pure {
         if (result.akPubFingerprint != akPubFingerprint) {
             revert AttestationKeyFingerprintMismatch(result.akPubFingerprint, akPubFingerprint);
@@ -303,71 +238,29 @@ contract TpmVerifier is TpmBase {
         if (result.qualifyingData != expectedQualifyingData) {
             revert QualifyingDataMismatch(result.qualifyingData, expectedQualifyingData);
         }
-        bytes32 expected256Policy = computeSha256PolicyCommitment(policy);
-        bytes32 expected384Policy = computeSha384PolicyCommitment(policy);
-        if (result.sha256PolicyCommitment != expected256Policy) {
-            revert PcrPolicyCommitmentMismatch(0x000B, result.sha256PolicyCommitment, expected256Policy);
+        bytes32 expectedCommitment = computeVerificationRequestCommitment(request);
+        if (result.verificationRequestCommitment != expectedCommitment) {
+            revert VerificationRequestCommitmentMismatch(result.verificationRequestCommitment, expectedCommitment);
         }
-        if (result.sha384PolicyCommitment != expected384Policy) {
-            revert PcrPolicyCommitmentMismatch(0x000C, result.sha384PolicyCommitment, expected384Policy);
-        }
-        bytes32 expected256Binding = computeSha256PcrBindingCommitment(requirements);
-        bytes32 expected384Binding = computeSha384PcrBindingCommitment(requirements);
-        if (result.sha256PcrBindingCommitment != expected256Binding) {
-            revert PcrBindingCommitmentMismatch(0x000B, result.sha256PcrBindingCommitment, expected256Binding);
-        }
-        if (result.sha384PcrBindingCommitment != expected384Binding) {
-            revert PcrBindingCommitmentMismatch(0x000C, result.sha384PcrBindingCommitment, expected384Binding);
-        }
-
-        (bool hasTargets256, bool hasTargets384) = _hasEvaluationTargets(policy, requirements);
-        _requirePcrSetCommitmentState(0x000B, result.sha256PcrSetCommitment, hasTargets256);
-        _requirePcrSetCommitmentState(0x000C, result.sha384PcrSetCommitment, hasTargets384);
     }
 
-    function _requireQuoteBackendForPolicy(VerificationBackendType backend, ResolvedPcrPolicy memory policy)
+    function _requireQuoteBackendForRequest(VerificationBackendType backend, TpmVerificationRequest memory request)
         private
         pure
     {
-        if (backend == VerificationBackendType.Solidity && _hasDynamicSha384Policy(policy)) {
+        if (backend == VerificationBackendType.Solidity && _hasZkOnlySha384Rule(request)) {
             revert TpmQuoteBackendDoesNotSatisfyPolicy(backend);
         }
     }
 
-    function _hasDynamicSha384Policy(ResolvedPcrPolicy memory policy) private pure returns (bool) {
-        if (policy.pcrBankSelection == PcrBankSelection.Sha256) return false;
-        for (uint256 i; i < policy.invariants384.length; ++i) {
-            if (uint8(policy.invariants384[i].verifyType) != 0) return true;
-        }
-        for (uint256 i; i < policy.variantPcrs384.length; ++i) {
-            if (uint8(policy.variantPcrs384[i].verifyType) != 0) return true;
-        }
-        for (uint256 i; i < policy.workloadPcrs384.length; ++i) {
-            if (uint8(policy.workloadPcrs384[i].verifyType) != 0) return true;
+    function _hasZkOnlySha384Rule(TpmVerificationRequest memory request) private pure returns (bool) {
+        for (uint256 i; i < request.pcrs384.length; ++i) {
+            if (
+                _comparisonType(TPM_ALG_SHA384, request.pcrs384[i].pcrIndex, request.pcrs384[i].comparison)
+                    != PcrComparison.STATIC
+            ) return true;
         }
         return false;
-    }
-
-    function _hasEvaluationTargets(ResolvedPcrPolicy memory policy, ProviderPcrRequirements memory requirements)
-        private
-        pure
-        returns (bool hasTargets256, bool hasTargets384)
-    {
-        hasTargets256 = requirements.pcrBindings256.length != 0 || requirements.pcrJoinIndexes256.length != 0;
-        hasTargets384 = requirements.pcrBindings384.length != 0 || requirements.pcrJoinIndexes384.length != 0;
-        if (policy.pcrBankSelection != PcrBankSelection.Sha384) {
-            hasTargets256 = hasTargets256 || policy.invariants256.length != 0 || policy.variantPcrs256.length != 0
-                || policy.workloadPcrs256.length != 0;
-        }
-        if (policy.pcrBankSelection != PcrBankSelection.Sha256) {
-            hasTargets384 = hasTargets384 || policy.invariants384.length != 0 || policy.variantPcrs384.length != 0
-                || policy.workloadPcrs384.length != 0;
-        }
-    }
-
-    function _requirePcrSetCommitmentState(uint16 algorithm, bytes32 commitment, bool hasTargets) private pure {
-        if (hasTargets && commitment == bytes32(0)) revert PcrSetCommitmentMissing(algorithm);
-        if (!hasTargets && commitment != bytes32(0)) revert UnexpectedPcrSetCommitment(algorithm, commitment);
     }
 
     function _parseQuoteSelection(bytes memory quote) private pure returns (QuoteSelection memory selection) {
@@ -453,56 +346,27 @@ contract TpmVerifier is TpmBase {
         if (selection.pcrDigest != expectedDigest) revert PcrDigestMismatch(selection.pcrDigest, expectedDigest);
     }
 
-    function _evaluationTargetMasks(ResolvedPcrPolicy memory policy, ProviderPcrRequirements memory requirements)
+    function _evaluationTargetMasks(TpmVerificationRequest memory request)
         private
         pure
         returns (uint32 mask256, uint32 mask384)
     {
-        if (policy.pcrBankSelection != PcrBankSelection.Sha384) {
-            mask256 = _addRuleIndexes256(mask256, policy.invariants256);
-            mask256 = _addRuleIndexes256(mask256, policy.variantPcrs256);
-            mask256 = _addRuleIndexes256(mask256, policy.workloadPcrs256);
-        }
-        if (policy.pcrBankSelection != PcrBankSelection.Sha256) {
-            mask384 = _addRuleIndexes384(mask384, policy.invariants384);
-            mask384 = _addRuleIndexes384(mask384, policy.variantPcrs384);
-            mask384 = _addRuleIndexes384(mask384, policy.workloadPcrs384);
-        }
+        mask256 = _addRuleIndexes256(mask256, request.pcrs256);
+        mask384 = _addRuleIndexes384(mask384, request.pcrs384);
+    }
 
-        _validateRequirements256(requirements.pcrBindings256, requirements.pcrJoinIndexes256);
-        _validateRequirements384(requirements.pcrBindings384, requirements.pcrJoinIndexes384);
-        for (uint256 i; i < requirements.pcrBindings256.length; ++i) {
-            mask256 |= uint32(1) << requirements.pcrBindings256[i].pcrIndex;
+    function _requireExactSelection(QuoteSelection memory selection, uint32 mask256, uint32 mask384) private pure {
+        if (selection.sha256Mask != mask256 || selection.sha256Present != (mask256 != 0)) {
+            revert PcrSelectionMismatch(TPM_ALG_SHA256, selection.sha256Mask, mask256);
         }
-        for (uint256 i; i < requirements.pcrJoinIndexes256.length; ++i) {
-            mask256 |= uint32(1) << requirements.pcrJoinIndexes256[i];
-        }
-        for (uint256 i; i < requirements.pcrBindings384.length; ++i) {
-            mask384 |= uint32(1) << requirements.pcrBindings384[i].pcrIndex;
-        }
-        for (uint256 i; i < requirements.pcrJoinIndexes384.length; ++i) {
-            mask384 |= uint32(1) << requirements.pcrJoinIndexes384[i];
+        if (selection.sha384Mask != mask384 || selection.sha384Present != (mask384 != 0)) {
+            revert PcrSelectionMismatch(TPM_ALG_SHA384, selection.sha384Mask, mask384);
         }
     }
 
-    function _requireTargetsSelected(QuoteSelection memory selection, uint32 mask256, uint32 mask384) private pure {
-        uint32 missing256 = mask256 & ~selection.sha256Mask;
-        uint32 missing384 = mask384 & ~selection.sha384Mask;
-        if (missing256 != 0) revert PcrEvaluationTargetNotSelected(TPM_ALG_SHA256, _firstSetIndex(missing256));
-        if (missing384 != 0) revert PcrEvaluationTargetNotSelected(TPM_ALG_SHA384, _firstSetIndex(missing384));
-    }
-
-    function _evaluateSelectedPolicy(TpmQuoteEvidence memory evidence, ResolvedPcrPolicy memory policy) private pure {
-        if (policy.pcrBankSelection != PcrBankSelection.Sha384) {
-            _evaluateRules256(evidence.pcrValues256, policy.invariants256, evidence.pcr0StartupLocality);
-            _evaluateRules256(evidence.pcrValues256, policy.variantPcrs256, evidence.pcr0StartupLocality);
-            _evaluateRules256(evidence.pcrValues256, policy.workloadPcrs256, evidence.pcr0StartupLocality);
-        }
-        if (policy.pcrBankSelection != PcrBankSelection.Sha256) {
-            _evaluateRules384(evidence.pcrValues384, policy.invariants384);
-            _evaluateRules384(evidence.pcrValues384, policy.variantPcrs384);
-            _evaluateRules384(evidence.pcrValues384, policy.workloadPcrs384);
-        }
+    function _evaluateRequest(TpmQuoteEvidence memory evidence, TpmVerificationRequest memory request) private pure {
+        _evaluateRules256(evidence.pcrValues256, request.pcrs256, evidence.pcr0StartupLocality);
+        _evaluateRules384(evidence.pcrValues384, request.pcrs384);
     }
 
     function _evaluateRules256(PcrValue256[] memory values, PcrSpec256[] memory rules, uint8 locality) private pure {
@@ -514,15 +378,26 @@ contract TpmVerifier is TpmBase {
     }
 
     function _evaluateSinglePcr256(PcrSpec256 memory rule, PcrValue256 memory measured, uint8 locality) internal pure {
-        if (rule.verifyType == PcrVerifyType.STATIC) {
-            if (rule.matchData.length != 1) revert InvalidPcrRule(TPM_ALG_SHA256, rule.pcrIndex);
-            if (measured.value != rule.matchData[0]) {
-                revert PcrStaticMismatch256(rule.pcrIndex, measured.value, rule.matchData[0]);
-            }
+        uint16 comparisonType = _comparisonType(TPM_ALG_SHA256, rule.pcrIndex, rule.comparison);
+        if (comparisonType == PcrComparison.STATIC) {
+            (uint16 decodedType, bytes32 expected) = abi.decode(rule.comparison, (uint16, bytes32));
+            _requireCanonicalComparison(
+                TPM_ALG_SHA256, rule.pcrIndex, rule.comparison, abi.encode(decodedType, expected)
+            );
+            if (measured.value != expected) revert PcrStaticMismatch256(rule.pcrIndex, measured.value, expected);
+            return;
+        }
+        if (comparisonType == PcrComparison.EXTEND_FROM_ZERO) {
+            (uint16 decodedType, bytes32 extendValue) = abi.decode(rule.comparison, (uint16, bytes32));
+            _requireCanonicalComparison(
+                TPM_ALG_SHA256, rule.pcrIndex, rule.comparison, abi.encode(decodedType, extendValue)
+            );
+            bytes32 expected = sha256(abi.encodePacked(bytes32(0), extendValue));
+            if (measured.value != expected) revert PcrStaticMismatch256(rule.pcrIndex, measured.value, expected);
             return;
         }
         if (measured.eventLogHashes.length == 0) {
-            revert PcrEventLogEmpty(TPM_ALG_SHA256, rule.pcrIndex, rule.verifyType);
+            revert PcrEventLogEmpty(TPM_ALG_SHA256, rule.pcrIndex, comparisonType);
         }
         bytes32 replayed =
             rule.pcrIndex == 0 && locality != NO_STARTUP_LOCALITY ? bytes32(uint256(locality)) : bytes32(0);
@@ -530,132 +405,131 @@ contract TpmVerifier is TpmBase {
             replayed = sha256(abi.encodePacked(replayed, measured.eventLogHashes[j]));
         }
         if (replayed != measured.value) revert PcrReplayMismatch256(rule.pcrIndex, measured.value, replayed);
-        _evaluateLandmarks256(rule, measured.eventLogHashes);
+        _evaluateDynamicComparison256(rule, comparisonType, measured.eventLogHashes);
     }
 
-    function _evaluateLandmarks256(PcrSpec256 memory rule, bytes32[] memory events) private pure {
-        if (rule.matchData.length == 0) revert InvalidPcrRule(TPM_ALG_SHA256, rule.pcrIndex);
-        if (rule.verifyType == PcrVerifyType.DYNAMIC_SUBSET) {
-            for (uint256 i; i < rule.matchData.length; ++i) {
+    function _evaluateDynamicComparison256(PcrSpec256 memory rule, uint16 comparisonType, bytes32[] memory events)
+        private
+        pure
+    {
+        if (comparisonType == PcrComparison.DYNAMIC_SUBSET) {
+            (uint16 decodedType, bytes32[] memory landmarks) = abi.decode(rule.comparison, (uint16, bytes32[]));
+            _requireCanonicalComparison(
+                TPM_ALG_SHA256, rule.pcrIndex, rule.comparison, abi.encode(decodedType, landmarks)
+            );
+            if (landmarks.length == 0) revert InvalidPcrRule(TPM_ALG_SHA256, rule.pcrIndex);
+            for (uint256 i; i < landmarks.length; ++i) {
                 bool found;
                 for (uint256 j; j < events.length; ++j) {
-                    if (rule.matchData[i] == events[j]) {
+                    if (landmarks[i] == events[j]) {
                         found = true;
                         break;
                     }
                 }
                 if (!found) revert PcrSubsetLandmarkMissing(TPM_ALG_SHA256, rule.pcrIndex, i);
             }
-        } else if (rule.verifyType == PcrVerifyType.DYNAMIC_SUBSEQUENCE) {
+        } else if (comparisonType == PcrComparison.DYNAMIC_SUBSEQUENCE) {
+            (uint16 decodedType, bytes32[] memory landmarks) = abi.decode(rule.comparison, (uint16, bytes32[]));
+            _requireCanonicalComparison(
+                TPM_ALG_SHA256, rule.pcrIndex, rule.comparison, abi.encode(decodedType, landmarks)
+            );
+            if (landmarks.length == 0) revert InvalidPcrRule(TPM_ALG_SHA256, rule.pcrIndex);
             uint256 matched;
-            for (uint256 i; i < events.length && matched < rule.matchData.length; ++i) {
-                if (events[i] == rule.matchData[matched]) ++matched;
+            for (uint256 i; i < events.length && matched < landmarks.length; ++i) {
+                if (events[i] == landmarks[matched]) ++matched;
             }
-            if (matched != rule.matchData.length) {
-                revert PcrSubsequenceLandmarkMissing(TPM_ALG_SHA256, rule.pcrIndex, matched, rule.matchData.length);
+            if (matched != landmarks.length) {
+                revert PcrSubsequenceLandmarkMissing(TPM_ALG_SHA256, rule.pcrIndex, matched, landmarks.length);
             }
+        } else if (comparisonType == PcrComparison.DYNAMIC_INDEXED_EVENT_SETS) {
+            (uint16 decodedType, PcrComparison.IndexedEventSets256 memory indexedRule) =
+                abi.decode(rule.comparison, (uint16, PcrComparison.IndexedEventSets256));
+            _requireCanonicalComparison(
+                TPM_ALG_SHA256, rule.pcrIndex, rule.comparison, abi.encode(decodedType, indexedRule)
+            );
+            _evaluateIndexedEventSets256(rule.pcrIndex, events, indexedRule);
         } else {
-            revert InvalidPcrRule(TPM_ALG_SHA256, rule.pcrIndex);
+            revert UnsupportedPcrComparison(TPM_ALG_SHA256, rule.pcrIndex, comparisonType);
         }
     }
 
     function _evaluateRules384(PcrValue384[] memory values, PcrSpec384[] memory rules) private pure {
         for (uint256 i; i < rules.length; ++i) {
             PcrSpec384 memory rule = rules[i];
-            if (rule.verifyType != PcrVerifyType.STATIC) {
-                revert DynamicSha384PolicyRequiresZk(rule.pcrIndex, rule.verifyType);
+            uint16 comparisonType = _comparisonType(TPM_ALG_SHA384, rule.pcrIndex, rule.comparison);
+            if (comparisonType != PcrComparison.STATIC) {
+                revert DynamicSha384PolicyRequiresZk(rule.pcrIndex, comparisonType);
             }
-            if (rule.matchData.length != 1) revert InvalidPcrRule(TPM_ALG_SHA384, rule.pcrIndex);
+            (uint16 decodedType, Bytes48 memory expected) = abi.decode(rule.comparison, (uint16, Bytes48));
+            _requireCanonicalComparison(
+                TPM_ALG_SHA384, rule.pcrIndex, rule.comparison, abi.encode(decodedType, expected)
+            );
             PcrValue384 memory measured = _findValue384(values, rule.pcrIndex);
-            if (!LibBytes.equal(measured.value, rule.matchData[0])) {
-                revert PcrStaticMismatch384(rule.pcrIndex, measured.value, rule.matchData[0]);
+            if (!LibBytes.equal(measured.value, expected)) {
+                revert PcrStaticMismatch384(rule.pcrIndex, measured.value, expected);
             }
         }
     }
 
-    function _evaluateProviderBindings(TpmQuoteEvidence memory evidence, ProviderPcrRequirements memory requirements)
+    function _evaluateIndexedEventSets256(
+        uint8 pcrIndex,
+        bytes32[] memory events,
+        PcrComparison.IndexedEventSets256 memory rule
+    ) private pure {
+        if (events.length != rule.expectedEventCount) {
+            revert PcrEventCountMismatch(TPM_ALG_SHA256, pcrIndex, events.length, rule.expectedEventCount);
+        }
+        if (rule.checkedEvents.length == 0) revert PcrCheckedEventsEmpty(TPM_ALG_SHA256, pcrIndex);
+
+        uint16 previousIndex;
+        for (uint256 i; i < rule.checkedEvents.length; ++i) {
+            PcrComparison.IndexedEventSet256 memory checked = rule.checkedEvents[i];
+            if (checked.eventIndex >= rule.expectedEventCount) {
+                revert PcrCheckedEventIndexOutOfRange(
+                    TPM_ALG_SHA256, pcrIndex, checked.eventIndex, rule.expectedEventCount
+                );
+            }
+            if (i != 0 && checked.eventIndex <= previousIndex) {
+                revert PcrCheckedEventIndexesNotSorted(TPM_ALG_SHA256, pcrIndex, previousIndex, checked.eventIndex);
+            }
+            if (checked.allowedValues.length == 0) {
+                revert PcrAllowedValuesEmpty(TPM_ALG_SHA256, pcrIndex, checked.eventIndex);
+            }
+
+            bool matched;
+            for (uint256 j; j < checked.allowedValues.length; ++j) {
+                if (j != 0 && uint256(checked.allowedValues[j]) <= uint256(checked.allowedValues[j - 1])) {
+                    revert PcrAllowedValuesNotSorted(TPM_ALG_SHA256, pcrIndex, checked.eventIndex, j);
+                }
+                if (events[checked.eventIndex] == checked.allowedValues[j]) matched = true;
+            }
+            if (!matched) revert PcrIndexedEventSetMismatch(TPM_ALG_SHA256, pcrIndex, checked.eventIndex);
+            previousIndex = checked.eventIndex;
+        }
+    }
+
+    function _comparisonType(uint16 algorithm, uint8 pcrIndex, bytes memory comparison)
         private
         pure
+        returns (uint16 comparisonType)
     {
-        for (uint256 i; i < requirements.pcrBindings256.length; ++i) {
-            PcrBinding256 memory binding = requirements.pcrBindings256[i];
-            bytes32 measured = _findValue256(evidence.pcrValues256, binding.pcrIndex).value;
-            if (measured != binding.expectedValue) {
-                revert PcrBindingMismatch256(binding.pcrIndex, measured, binding.expectedValue);
-            }
+        if (comparison.length < 32) revert InvalidPcrRule(algorithm, pcrIndex);
+        uint256 encodedType;
+        assembly ("memory-safe") {
+            encodedType := mload(add(comparison, 0x20))
         }
-        for (uint256 i; i < requirements.pcrBindings384.length; ++i) {
-            PcrBinding384 memory binding = requirements.pcrBindings384[i];
-            Bytes48 memory measured = _findValue384(evidence.pcrValues384, binding.pcrIndex).value;
-            if (!LibBytes.equal(measured, binding.expectedValue)) {
-                revert PcrBindingMismatch384(binding.pcrIndex, measured, binding.expectedValue);
-            }
-        }
+        if (encodedType > type(uint16).max) revert InvalidPcrComparisonType(algorithm, pcrIndex, encodedType);
+        comparisonType = uint16(encodedType);
     }
 
-    function _sha256PcrSetCommitment(PcrValue256[] memory values, uint32 targetMask) private pure returns (bytes32) {
-        if (targetMask == 0) return bytes32(0);
-        PcrSetEntry256[] memory entries = new PcrSetEntry256[](_populationCount(targetMask));
-        uint256 position;
-        for (uint8 index; index < 24; ++index) {
-            if ((targetMask & (uint32(1) << index)) != 0) {
-                entries[position] = PcrSetEntry256({pcrIndex: index, value: _findValue256(values, index).value});
-                ++position;
-            }
-        }
-        return keccak256(abi.encode(PCR_SET_SHA256_COMMITMENT_DOMAIN, entries));
-    }
-
-    function _sha384PcrSetCommitment(PcrValue384[] memory values, uint32 targetMask) private pure returns (bytes32) {
-        if (targetMask == 0) return bytes32(0);
-        PcrSetEntry384[] memory entries = new PcrSetEntry384[](_populationCount(targetMask));
-        uint256 position;
-        for (uint8 index; index < 24; ++index) {
-            if ((targetMask & (uint32(1) << index)) != 0) {
-                entries[position] = PcrSetEntry384({pcrIndex: index, value: _findValue384(values, index).value});
-                ++position;
-            }
-        }
-        return keccak256(abi.encode(PCR_SET_SHA384_COMMITMENT_DOMAIN, entries));
-    }
-
-    function _validateRequirements256(PcrBinding256[] memory bindings, uint8[] memory joins) private pure {
-        uint32 bindingMask;
-        for (uint256 i; i < bindings.length; ++i) {
-            uint8 index = bindings[i].pcrIndex;
-            _requireSupportedIndex(TPM_ALG_SHA256, index);
-            if (i != 0 && index <= bindings[i - 1].pcrIndex) {
-                revert PcrRequirementsNotSorted(TPM_ALG_SHA256, bindings[i - 1].pcrIndex, index);
-            }
-            bindingMask |= uint32(1) << index;
-        }
-        for (uint256 i; i < joins.length; ++i) {
-            uint8 index = joins[i];
-            _requireSupportedIndex(TPM_ALG_SHA256, index);
-            if (i != 0 && index <= joins[i - 1]) {
-                revert PcrRequirementsNotSorted(TPM_ALG_SHA256, joins[i - 1], index);
-            }
-            if ((bindingMask & (uint32(1) << index)) != 0) revert PcrRequirementOverlap(TPM_ALG_SHA256, index);
-        }
-    }
-
-    function _validateRequirements384(PcrBinding384[] memory bindings, uint8[] memory joins) private pure {
-        uint32 bindingMask;
-        for (uint256 i; i < bindings.length; ++i) {
-            uint8 index = bindings[i].pcrIndex;
-            _requireSupportedIndex(TPM_ALG_SHA384, index);
-            if (i != 0 && index <= bindings[i - 1].pcrIndex) {
-                revert PcrRequirementsNotSorted(TPM_ALG_SHA384, bindings[i - 1].pcrIndex, index);
-            }
-            bindingMask |= uint32(1) << index;
-        }
-        for (uint256 i; i < joins.length; ++i) {
-            uint8 index = joins[i];
-            _requireSupportedIndex(TPM_ALG_SHA384, index);
-            if (i != 0 && index <= joins[i - 1]) {
-                revert PcrRequirementsNotSorted(TPM_ALG_SHA384, joins[i - 1], index);
-            }
-            if ((bindingMask & (uint32(1) << index)) != 0) revert PcrRequirementOverlap(TPM_ALG_SHA384, index);
+    function _requireCanonicalComparison(
+        uint16 algorithm,
+        uint8 pcrIndex,
+        bytes memory supplied,
+        bytes memory canonical
+    ) private pure {
+        if (supplied.length != canonical.length || keccak256(supplied) != keccak256(canonical)) {
+            revert NonCanonicalPcrComparison(algorithm, pcrIndex);
         }
     }
 
@@ -702,13 +576,6 @@ contract TpmVerifier is TpmBase {
     function _populationCount(uint32 mask) private pure returns (uint256 count) {
         while (mask != 0) {
             count += mask & 1;
-            mask >>= 1;
-        }
-    }
-
-    function _firstSetIndex(uint32 mask) private pure returns (uint8 index) {
-        while ((mask & 1) == 0) {
-            ++index;
             mask >>= 1;
         }
     }

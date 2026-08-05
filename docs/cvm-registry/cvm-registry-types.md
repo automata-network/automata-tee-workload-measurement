@@ -7,12 +7,6 @@ Core data structures shared across all registries.
 ### Enums
 
 ```solidity
-enum PcrVerifyType {
-    STATIC,               // Exact match: actual == expected
-    DYNAMIC_SUBSET,       // matchData must occur in events (unordered)
-    DYNAMIC_SUBSEQUENCE   // matchData must appear as subsequence in events (ordered)
-}
-
 enum AccessMode {
     ANY,        // All base images allowed
     BLACKLIST,  // Listed base images blocked
@@ -28,10 +22,14 @@ struct PublicIdentity {
     bytes key;       // Raw public key bytes (format depends on typeId)
 }
 
-struct PcrSpec {
-    uint8 pcrIndex;              // PCR register index (0-23)
-    PcrVerifyType verifyType;    // How to evaluate this PCR
-    bytes32[] matchData;         // Expected values (interpretation depends on verifyType)
+struct PcrSpec256 {
+    uint8 pcrIndex;
+    bytes comparison;
+}
+
+struct PcrSpec384 {
+    uint8 pcrIndex;
+    bytes comparison;
 }
 
 struct Attribute {
@@ -44,6 +42,10 @@ struct AttributeRequirement {
     bytes32[] allowedValues;  // Accepted values (empty = any value, just require key exists)
 }
 ```
+
+`comparison` is one opaque canonical ABI blob. Its first field is a `uint16`
+comparison type. `TpmVerifier` owns all type-specific decoding. Registries only
+reject an empty `comparison`.
 
 ### BaseImageRegistry Structs
 
@@ -307,12 +309,8 @@ struct TpmQuoteVerificationResult {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     bytes32 tpmSignatureHash;
-    bytes32 sha256PolicyCommitment;
-    bytes32 sha384PolicyCommitment;
-    bytes32 sha256PcrBindingCommitment;
-    bytes32 sha384PcrBindingCommitment;
-    bytes32 sha256PcrSetCommitment;
-    bytes32 sha384PcrSetCommitment;
+    bytes32 pcrDigest;
+    bytes32 verificationRequestCommitment;
 }
 
 struct TpmCertifyVerificationResult {
@@ -333,7 +331,8 @@ struct AkCollateralVerificationResult {
     bytes32 awsNitroRootCertHash;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 sha384PcrSetCommitment;
+    bytes32 pcrDigest;
+    bytes32 verificationRequestCommitment;
 }
 ```
 

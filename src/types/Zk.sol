@@ -61,12 +61,8 @@ struct TpmQuoteJournalV1 {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     bytes32 tpmSignatureHash;
-    bytes32 sha256PolicyCommitment;
-    bytes32 sha384PolicyCommitment;
-    bytes32 sha256PcrBindingCommitment;
-    bytes32 sha384PcrBindingCommitment;
-    bytes32 sha256PcrSetCommitment;
-    bytes32 sha384PcrSetCommitment;
+    bytes32 pcrDigest;
+    bytes32 verificationRequestCommitment;
 }
 
 /// @notice Public result produced by `aws_nitrotpm.v1`.
@@ -76,5 +72,6 @@ struct AwsNitroTpmJournalV1 {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 sha384PcrSetCommitment;
+    bytes32 pcrDigest;
+    bytes32 verificationRequestCommitment;
 }

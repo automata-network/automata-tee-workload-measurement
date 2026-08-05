@@ -16,12 +16,12 @@ import {
     CVMSession,
     MeasurementVariant,
     PcrBankSelection,
-    PcrBinding256,
-    PcrBinding384,
+    PcrSpec256,
+    PcrSpec384,
     PlatformProfile,
-    ProviderPcrRequirements,
     PublicIdentity,
     ResolvedPcrPolicy,
+    TpmVerificationRequest,
     WorkloadSpec
 } from "./types/Common.sol";
 import {
@@ -45,7 +45,9 @@ import {
     SESSION_ROTATE_KEY_MSG
 } from "./types/Constants.sol";
 import {LibBytes} from "./lib/LibBytes.sol";
+import {Bytes48} from "./lib/LibBytes.sol";
 import {LibKey} from "./lib/LibKey.sol";
+import {PcrComparison} from "./lib/PcrComparison.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
@@ -112,7 +114,8 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
     error ZeroAwsNitroRootCertificateHash();
     error AttestationKeyFingerprintMismatch(bytes32 measured, bytes32 expected);
     error QualifyingDataMismatch(bytes32 measured, bytes32 expected);
-    error AwsSha384PcrSetCommitmentMismatch(bytes32 quoteCommitment, bytes32 documentCommitment);
+    error AwsPcrDigestMismatch(bytes32 quoteDigest, bytes32 nitroDigest);
+    error AwsVerificationRequestCommitmentMismatch(bytes32 quoteCommitment, bytes32 nitroCommitment);
 
     constructor(
         ITeeVerifier teeVerifier_,
@@ -388,6 +391,11 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         ResolvedPcrPolicy policy;
     }
 
+    struct GeneratedProviderPcrRules {
+        PcrSpec256[] pcrs256;
+        PcrSpec384[] pcrs384;
+    }
+
     struct SessionParams {
         bytes32 sessionId;
         bytes32 ownerFingerprint;
@@ -472,21 +480,24 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
             revert AttestationKeyFingerprintMismatch(collateralResult.akPubFingerprint, akPubFingerprint);
         }
 
-        ProviderPcrRequirements memory providerRequirements = _verifyProviderEvidence(
+        GeneratedProviderPcrRules memory providerRules = _verifyProviderEvidence(
             evidence.akPubCollateral.akPubCollateralType,
             teeResult,
             collateralResult,
             policyContext,
             expectedQualifyingData
         );
-        TpmQuoteVerificationResult memory quoteResult = tpmVerifier.verifyTpmQuote(
-            evidence.tpmQuoteReport, evidence.akPub, expectedQualifyingData, policyContext.policy, providerRequirements
-        );
+        TpmVerificationRequest memory request = _buildTpmVerificationRequest(policyContext.policy, providerRules);
+        TpmQuoteVerificationResult memory quoteResult =
+            tpmVerifier.verifyTpmQuote(evidence.tpmQuoteReport, evidence.akPub, expectedQualifyingData, request);
         if (evidence.akPubCollateral.akPubCollateralType == AkPubCollateralType.AwsNitroTpmProof) {
-            if (quoteResult.sha384PcrSetCommitment != collateralResult.sha384PcrSetCommitment) {
-                revert AwsSha384PcrSetCommitmentMismatch(
-                    quoteResult.sha384PcrSetCommitment, collateralResult.sha384PcrSetCommitment
+            if (quoteResult.verificationRequestCommitment != collateralResult.verificationRequestCommitment) {
+                revert AwsVerificationRequestCommitmentMismatch(
+                    quoteResult.verificationRequestCommitment, collateralResult.verificationRequestCommitment
                 );
+            }
+            if (quoteResult.pcrDigest != collateralResult.pcrDigest) {
+                revert AwsPcrDigestMismatch(quoteResult.pcrDigest, collateralResult.pcrDigest);
             }
         }
 
@@ -532,32 +543,28 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         AkCollateralVerificationResult memory collateralResult,
         PolicyContext memory policyContext,
         bytes32 expectedQualifyingData
-    ) private view returns (ProviderPcrRequirements memory requirements) {
+    ) private view returns (GeneratedProviderPcrRules memory rules) {
+        rules.pcrs256 = new PcrSpec256[](0);
+        rules.pcrs384 = new PcrSpec384[](0);
         if (collateralType == AkPubCollateralType.AzureMaaJwt) {
             if (collateralResult.teeType != teeResult.teeType) {
                 revert AzureMaaTeeTypeMismatch(teeResult.teeType, collateralResult.teeType);
             }
             _verifyAzureBinding(teeResult, collateralResult.bindingHash);
-            return _emptyProviderRequirements();
+            return rules;
         }
         if (collateralType == AkPubCollateralType.GcpCertChain) {
             if (policyContext.policy.pcrBankSelection == PcrBankSelection.Sha384) {
                 revert GcpSha256PolicyBankRequired(policyContext.policy.pcrBankSelection);
             }
-            bytes32 expectedPcr15 = teeVerifier.deriveGcpPcr15(teeResult);
-            requirements.pcrBindings256 = new PcrBinding256[](1);
-            requirements.pcrBindings256[0] =
-                PcrBinding256({pcrIndex: PROVIDER_BINDING_PCR_INDEX, expectedValue: expectedPcr15});
-            requirements.pcrJoinIndexes256 = new uint8[](0);
-            requirements.pcrBindings384 = new PcrBinding384[](0);
-            requirements.pcrJoinIndexes384 = new uint8[](0);
-            return requirements;
+            bytes32 extendValue = teeVerifier.deriveGcpPcr15ExtendValue(teeResult);
+            return _gcpProviderPcrRules(extendValue);
         }
 
         if (policyContext.policy.pcrBankSelection == PcrBankSelection.Sha256) {
             revert AwsSha384PolicyBankRequired();
         }
-        if (policyContext.policy.invariants384.length + policyContext.policy.variantPcrs384.length == 0) {
+        if (policyContext.policy.invariantPcrs384.length + policyContext.policy.variantPcrs384.length == 0) {
             revert AwsSha384BaseImagePolicyRequired();
         }
         if (teeResult.teeType != TEEType.AmdSevSnp || collateralResult.teeType != TEEType.AmdSevSnp) {
@@ -574,18 +581,34 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         }
         _verifyAwsDocumentFreshness(collateralResult.documentTimestampSeconds);
 
-        requirements.pcrJoinIndexes384 = new uint8[](1);
-        requirements.pcrJoinIndexes384[0] = PROVIDER_BINDING_PCR_INDEX;
-        requirements.pcrBindings384 = new PcrBinding384[](0);
-        requirements.pcrJoinIndexes256 = new uint8[](0);
-        if (policyContext.policy.pcrBankSelection == PcrBankSelection.Sha256AndSha384) {
-            requirements.pcrBindings256 = new PcrBinding256[](1);
-            bytes32 reportId = LibBytes.readBytes32(teeResult.reportData, SNP_REPORT_ID_OFFSET);
-            requirements.pcrBindings256[0] = PcrBinding256({
-                pcrIndex: PROVIDER_BINDING_PCR_INDEX, expectedValue: sha256(abi.encodePacked(bytes32(0), reportId))
+        bytes32 reportId = LibBytes.readBytes32(teeResult.reportData, SNP_REPORT_ID_OFFSET);
+        return _awsProviderPcrRules(reportId, policyContext.policy.pcrBankSelection);
+    }
+
+    function _gcpProviderPcrRules(bytes32 extendValue) internal pure returns (GeneratedProviderPcrRules memory rules) {
+        rules.pcrs256 = new PcrSpec256[](1);
+        rules.pcrs256[0] = PcrSpec256({
+            pcrIndex: PROVIDER_BINDING_PCR_INDEX, comparison: PcrComparison.encodeExtendFromZero256(extendValue)
+        });
+        rules.pcrs384 = new PcrSpec384[](0);
+    }
+
+    function _awsProviderPcrRules(bytes32 reportId, PcrBankSelection bankSelection)
+        internal
+        pure
+        returns (GeneratedProviderPcrRules memory rules)
+    {
+        rules.pcrs256 = new PcrSpec256[](0);
+        Bytes48 memory extendValue384 = LibBytes.toBytes48(abi.encodePacked(bytes16(0), reportId));
+        rules.pcrs384 = new PcrSpec384[](1);
+        rules.pcrs384[0] = PcrSpec384({
+            pcrIndex: PROVIDER_BINDING_PCR_INDEX, comparison: PcrComparison.encodeExtendFromZero384(extendValue384)
+        });
+        if (bankSelection == PcrBankSelection.Sha256AndSha384) {
+            rules.pcrs256 = new PcrSpec256[](1);
+            rules.pcrs256[0] = PcrSpec256({
+                pcrIndex: PROVIDER_BINDING_PCR_INDEX, comparison: PcrComparison.encodeExtendFromZero256(reportId)
             });
-        } else {
-            requirements.pcrBindings256 = new PcrBinding256[](0);
         }
     }
 
@@ -603,11 +626,11 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         PolicyContext memory policyContext = _lookupPolicy(
             context.workloadId, context.baseImageId, context.platformProfileId, context.measurementVariantId
         );
-        ProviderPcrRequirements memory requirements = _emptyProviderRequirements();
+        TpmVerificationRequest memory request =
+            _buildTpmVerificationRequest(policyContext.policy, _emptyGeneratedProviderPcrRules());
         bytes32 expectedQualifyingData = _expectedQualifyingData(context.ownerFingerprint);
-        TpmQuoteVerificationResult memory quoteResult = tpmVerifier.verifyTpmQuote(
-            evidence.tpmQuoteReport, evidence.akPub, expectedQualifyingData, policyContext.policy, requirements
-        );
+        TpmQuoteVerificationResult memory quoteResult =
+            tpmVerifier.verifyTpmQuote(evidence.tpmQuoteReport, evidence.akPub, expectedQualifyingData, request);
         _advanceOwnerNonce(context.ownerFingerprint);
 
         TpmCertifyVerificationResult memory certifyResult =
@@ -665,10 +688,10 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
             platformProfileId: platformProfileId,
             measurementVariantId: variantId,
             pcrBankSelection: platformProfile.pcrBankSelection,
-            invariants256: platformProfile.invariants256,
+            invariantPcrs256: platformProfile.invariantPcrs256,
             variantPcrs256: variant.variantPcrs256,
             workloadPcrs256: workloadSpec.workloadPcrs256,
-            invariants384: platformProfile.invariants384,
+            invariantPcrs384: platformProfile.invariantPcrs384,
             variantPcrs384: variant.variantPcrs384,
             workloadPcrs384: workloadSpec.workloadPcrs384
         });
@@ -676,6 +699,69 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
             PolicyContext({
                 platformProfile: platformProfile, variant: variant, workloadSpec: workloadSpec, policy: policy
             });
+    }
+
+    function _buildTpmVerificationRequest(
+        ResolvedPcrPolicy memory policy,
+        GeneratedProviderPcrRules memory providerRules
+    ) internal pure returns (TpmVerificationRequest memory request) {
+        request.workloadId = policy.workloadId;
+        request.baseImageId = policy.baseImageId;
+        request.platformProfileId = policy.platformProfileId;
+        request.measurementVariantId = policy.measurementVariantId;
+        request.pcrBankSelection = policy.pcrBankSelection;
+        request.pcrs256 = _mergePcrRules256(policy, providerRules.pcrs256);
+        request.pcrs384 = _mergePcrRules384(policy, providerRules.pcrs384);
+    }
+
+    function _mergePcrRules256(ResolvedPcrPolicy memory policy, PcrSpec256[] memory providerRules)
+        internal
+        pure
+        returns (PcrSpec256[] memory rules)
+    {
+        if (policy.pcrBankSelection == PcrBankSelection.Sha384) return new PcrSpec256[](0);
+        rules = new PcrSpec256[](
+            policy.invariantPcrs256.length + policy.variantPcrs256.length + policy.workloadPcrs256.length
+                + providerRules.length
+        );
+        uint256 position;
+        for (uint256 i; i < policy.invariantPcrs256.length; ++i) {
+            rules[position++] = policy.invariantPcrs256[i];
+        }
+        for (uint256 i; i < policy.variantPcrs256.length; ++i) {
+            rules[position++] = policy.variantPcrs256[i];
+        }
+        for (uint256 i; i < policy.workloadPcrs256.length; ++i) {
+            rules[position++] = policy.workloadPcrs256[i];
+        }
+        for (uint256 i; i < providerRules.length; ++i) {
+            rules[position++] = providerRules[i];
+        }
+    }
+
+    function _mergePcrRules384(ResolvedPcrPolicy memory policy, PcrSpec384[] memory providerRules)
+        internal
+        pure
+        returns (PcrSpec384[] memory rules)
+    {
+        if (policy.pcrBankSelection == PcrBankSelection.Sha256) return new PcrSpec384[](0);
+        rules = new PcrSpec384[](
+            policy.invariantPcrs384.length + policy.variantPcrs384.length + policy.workloadPcrs384.length
+                + providerRules.length
+        );
+        uint256 position;
+        for (uint256 i; i < policy.invariantPcrs384.length; ++i) {
+            rules[position++] = policy.invariantPcrs384[i];
+        }
+        for (uint256 i; i < policy.variantPcrs384.length; ++i) {
+            rules[position++] = policy.variantPcrs384[i];
+        }
+        for (uint256 i; i < policy.workloadPcrs384.length; ++i) {
+            rules[position++] = policy.workloadPcrs384[i];
+        }
+        for (uint256 i; i < providerRules.length; ++i) {
+            rules[position++] = providerRules[i];
+        }
     }
 
     function _verifyAzureBinding(TeeVerificationResult memory teeResult, bytes32 bindingHash) private pure {
@@ -706,11 +792,9 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         }
     }
 
-    function _emptyProviderRequirements() private pure returns (ProviderPcrRequirements memory requirements) {
-        requirements.pcrBindings256 = new PcrBinding256[](0);
-        requirements.pcrJoinIndexes256 = new uint8[](0);
-        requirements.pcrBindings384 = new PcrBinding384[](0);
-        requirements.pcrJoinIndexes384 = new uint8[](0);
+    function _emptyGeneratedProviderPcrRules() private pure returns (GeneratedProviderPcrRules memory rules) {
+        rules.pcrs256 = new PcrSpec256[](0);
+        rules.pcrs384 = new PcrSpec384[](0);
     }
 
     function _expectedQualifyingData(bytes32 ownerFingerprint) private view returns (bytes32) {

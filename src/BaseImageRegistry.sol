@@ -9,7 +9,6 @@ import {
     PcrSpec256,
     PcrSpec384,
     PcrBankSelection,
-    PcrVerifyType,
     Attribute
 } from "./types/Common.sol";
 import {
@@ -77,8 +76,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     ///         prevIndex sits at i-1 and thisIndex at i in the input array.
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
-    error EmptyMatchData(uint8 pcrIndex);
-    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
+    error EmptyPcrComparison(uint8 pcrIndex);
     error DuplicateAttributeKey(bytes32 key);
     error InvalidTeeAttributeValue(bytes32 key, bytes32 actualValue);
     /// @notice A measurement variant pins a PCR index that its platform profile already declares
@@ -154,8 +152,8 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Validate PCR ordering for profiles and variants
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
-            _validatePcrSpecs256Sorted(profile.invariants256);
-            _validatePcrSpecs384Sorted(profile.invariants384);
+            _validatePcrSpecs256Sorted(profile.invariantPcrs256);
+            _validatePcrSpecs384Sorted(profile.invariantPcrs384);
             _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
@@ -228,8 +226,8 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
 
             // Validate and store measurement variants
-            uint256 invariantMask256 = _pcrIndexMask256(profile.invariants256);
-            uint256 invariantMask384 = _pcrIndexMask384(profile.invariants384);
+            uint256 invariantMask256 = _pcrIndexMask256(profile.invariantPcrs256);
+            uint256 invariantMask384 = _pcrIndexMask384(profile.invariantPcrs384);
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
@@ -340,8 +338,8 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Validate PCR ordering and attribute uniqueness for all profiles and variants
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
-            _validatePcrSpecs256Sorted(profile.invariants256);
-            _validatePcrSpecs384Sorted(profile.invariants384);
+            _validatePcrSpecs256Sorted(profile.invariantPcrs256);
+            _validatePcrSpecs384Sorted(profile.invariantPcrs384);
             _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
@@ -398,9 +396,9 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             // Append measurement variants for this profile. Overlap is checked against the
             // stored invariants after exact submitted-metadata validation.
             uint256 invariantMask256 =
-                _storedPcrIndexMask256(_platformProfiles[platformProfileId].platformProfile.invariants256);
+                _storedPcrIndexMask256(_platformProfiles[platformProfileId].platformProfile.invariantPcrs256);
             uint256 invariantMask384 =
-                _storedPcrIndexMask384(_platformProfiles[platformProfileId].platformProfile.invariants384);
+                _storedPcrIndexMask384(_platformProfiles[platformProfileId].platformProfile.invariantPcrs384);
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
@@ -596,16 +594,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             if (i > 0 && idx <= prevIdx) {
                 revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
-            PcrVerifyType vt = pcrs[i].verifyType;
-            uint256 matchDataLength = pcrs[i].matchData.length;
-            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
-                revert InvalidStaticMatchDataLength(idx, matchDataLength);
-            }
-            // A dynamic policy with no required landmark would accept trivially.
-            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
-            {
-                revert EmptyMatchData(idx);
-            }
+            if (pcrs[i].comparison.length == 0) revert EmptyPcrComparison(idx);
             prevIdx = idx;
         }
     }
@@ -621,15 +610,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             if (i > 0 && idx <= prevIdx) {
                 revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
-            PcrVerifyType vt = pcrs[i].verifyType;
-            uint256 matchDataLength = pcrs[i].matchData.length;
-            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
-                revert InvalidStaticMatchDataLength(idx, matchDataLength);
-            }
-            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
-            {
-                revert EmptyMatchData(idx);
-            }
+            if (pcrs[i].comparison.length == 0) revert EmptyPcrComparison(idx);
             prevIdx = idx;
         }
     }
@@ -768,8 +749,8 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         PlatformProfile memory stored = _loadPlatformProfile(platformProfileId);
         return keccak256(bytes(stored.name)) == keccak256(bytes(supplied.name))
             && stored.pcrBankSelection == supplied.pcrBankSelection
-            && keccak256(abi.encode(stored.invariants256)) == keccak256(abi.encode(supplied.invariants256))
-            && keccak256(abi.encode(stored.invariants384)) == keccak256(abi.encode(supplied.invariants384))
+            && keccak256(abi.encode(stored.invariantPcrs256)) == keccak256(abi.encode(supplied.invariantPcrs256))
+            && keccak256(abi.encode(stored.invariantPcrs384)) == keccak256(abi.encode(supplied.invariantPcrs384))
             && keccak256(abi.encode(stored.attributes)) == keccak256(abi.encode(supplied.attributes));
     }
 

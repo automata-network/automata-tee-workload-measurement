@@ -78,8 +78,13 @@ contract DeploySessionRegistry is DeploymentConfig {
 
     function deploySessionRegistryProxy(address impl) public virtual {
         vm.startBroadcast(vm.envAddress("OWNER"));
-        _deploySessionRegistryProxy(impl);
+        address proxy = _deploySessionRegistryProxy(impl);
+        bytes32 awsNitroRootCertHash = vm.envBytes32("AWS_NITRO_ROOT_CERT_HASH");
+        SessionRegistry(proxy).setAwsNitroRootCertificateTrust(awsNitroRootCertHash, true);
         vm.stopBroadcast();
+
+        console.log("Trusted AWS NitroTPM root certificate Keccak-256 hash:");
+        console.logBytes32(awsNitroRootCertHash);
     }
 
     function upgradeSessionRegistry(address impl, bytes memory data) public virtual {

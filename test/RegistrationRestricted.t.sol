@@ -74,8 +74,8 @@ contract RegistrationRestrictedTest is Test {
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
         profiles[0].name = "azure-snp";
         profiles[0].pcrBankSelection = PcrBankSelection.Sha256;
-        profiles[0].invariants256 = new PcrSpec256[](0);
-        profiles[0].invariants384 = new PcrSpec384[](0);
+        profiles[0].invariantPcrs256 = new PcrSpec256[](0);
+        profiles[0].invariantPcrs384 = new PcrSpec384[](0);
         profiles[0].attributes = new Attribute[](0);
 
         MeasurementVariant[][] memory noVariants = new MeasurementVariant[][](1);

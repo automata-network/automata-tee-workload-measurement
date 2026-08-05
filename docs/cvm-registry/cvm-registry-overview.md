@@ -159,7 +159,8 @@ MaaKeyRegistry
               consumed by AkCollateralVerifier when verifying AzureMaaJwt collateral
 
 TpmVerifier
-  ├── inherits: TpmBase
+  ├── inherits: TpmBase, OwnableUpgradeable, UUPSUpgradeable
+  ├── deployed behind: ERC1967Proxy
   ├── immutable ref: IZkVerifierRegistry
   └── verifies raw Solidity TPM Quotes, `tpm_quote.v1` proofs, and TPM Certify evidence
 
@@ -181,8 +182,12 @@ TpmBase (abstract)
 | Mode | Semantics |
 |---|---|
 | `STATIC` | Exact match: `actual == expected` |
-| `DYNAMIC_SUBSET` | Every `matchData` hash must appear in the PCR events (order irrelevant; extra events permitted) |
-| `DYNAMIC_SUBSEQUENCE` | `matchData` values must appear as subsequence in PCR events (order matters) |
+| `DYNAMIC_SUBSET` | Every required landmark must appear in the PCR events; order does not matter |
+| `DYNAMIC_SUBSEQUENCE` | Required landmarks must appear as an ordered subsequence |
+| `DYNAMIC_INDEXED_EVENT_SETS` | Exact event count plus checked event indexes with allowed digest sets |
+
+Each rule contains `pcrIndex` and one opaque `comparison` blob. `TpmVerifier`
+alone decodes the comparison type.
 
 ## ID Derivation Scheme
 

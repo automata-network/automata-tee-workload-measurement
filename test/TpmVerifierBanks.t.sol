@@ -8,19 +8,14 @@ import {TpmQuoteVerificationResult, TpmVerifier} from "../src/bases/TpmVerifier.
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {Bytes48} from "../src/lib/LibBytes.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
+import {PcrComparison} from "../src/lib/PcrComparison.sol";
 import {MockTpmAttestation} from "./mocks/MockTpmAttestation.sol";
 import {
     PcrBankSelection,
-    PcrBinding256,
-    PcrBinding384,
-    PcrSetEntry256,
-    PcrSetEntry384,
     PcrSpec256,
     PcrSpec384,
-    PcrVerifyType,
-    ProviderPcrRequirements,
     PublicIdentity,
-    ResolvedPcrPolicy
+    TpmVerificationRequest
 } from "../src/types/Common.sol";
 import {
     PcrValue256,
@@ -30,11 +25,7 @@ import {
     TpmReportType,
     VerificationBackendType
 } from "../src/types/Evidence.sol";
-import {
-    ALGO_ID_ES256,
-    PCR_SET_SHA256_COMMITMENT_DOMAIN,
-    PCR_SET_SHA384_COMMITMENT_DOMAIN
-} from "../src/types/Constants.sol";
+import {ALGO_ID_ES256} from "../src/types/Constants.sol";
 
 contract TpmVerifierBanksHarness is TpmVerifier {
     constructor(ITpmAttestation attestation) TpmVerifier(attestation, IZkVerifierRegistry(address(0))) {}
@@ -43,18 +34,13 @@ contract TpmVerifierBanksHarness is TpmVerifier {
         TpmReport memory report,
         PublicIdentity memory akPub,
         bytes32 qualifyingData,
-        ResolvedPcrPolicy memory policy,
-        ProviderPcrRequirements memory requirements
+        TpmVerificationRequest memory request
     ) external returns (TpmQuoteVerificationResult memory) {
-        return verifyTpmQuote(report, akPub, qualifyingData, policy, requirements);
+        return verifyTpmQuote(report, akPub, qualifyingData, request);
     }
 
-    function policyCommitments(ResolvedPcrPolicy memory policy) external pure returns (bytes32, bytes32) {
-        return (computeSha256PolicyCommitment(policy), computeSha384PolicyCommitment(policy));
-    }
-
-    function bindingCommitments(ProviderPcrRequirements memory requirements) external pure returns (bytes32, bytes32) {
-        return (computeSha256PcrBindingCommitment(requirements), computeSha384PcrBindingCommitment(requirements));
+    function requestCommitment(TpmVerificationRequest memory request) external pure returns (bytes32) {
+        return computeVerificationRequestCommitment(request);
     }
 }
 
@@ -72,53 +58,160 @@ contract TpmVerifierBanksTest is Test {
         sha384Pcr15 = Bytes48({first: keccak256("sha384-pcr15-first"), second: bytes16(keccak256("second"))});
     }
 
-    function testRawQuoteEvaluatesSha256AndSha384AndReturnsAllCommitments() public {
+    function testRawQuoteEvaluatesSha256AndSha384AndReturnsSignedPcrDigest() public {
         bytes memory signature = hex"010203040506";
-        TpmReport memory report = _mixedBankReport(signature, false, PcrVerifyType.STATIC);
-        ResolvedPcrPolicy memory policy = _policy(PcrVerifyType.STATIC);
-        ProviderPcrRequirements memory requirements = _emptyRequirements();
-
-        TpmQuoteVerificationResult memory result = verifier.verify(report, akPub, QUALIFYING_DATA, policy, requirements);
-        (bytes32 expectedPolicy256, bytes32 expectedPolicy384) = verifier.policyCommitments(policy);
-        (bytes32 expectedBinding256, bytes32 expectedBinding384) = verifier.bindingCommitments(requirements);
-
-        PcrSetEntry256[] memory entries256 = new PcrSetEntry256[](1);
-        entries256[0] = PcrSetEntry256({pcrIndex: 15, value: SHA256_PCR15});
-        PcrSetEntry384[] memory entries384 = new PcrSetEntry384[](1);
-        entries384[0] = PcrSetEntry384({pcrIndex: 15, value: sha384Pcr15});
+        TpmReport memory report = _mixedBankReport(signature, false, PcrComparison.STATIC);
+        TpmVerificationRequest memory request = _request(PcrComparison.STATIC);
+        TpmQuoteVerificationResult memory result = verifier.verify(report, akPub, QUALIFYING_DATA, request);
 
         assertEq(result.akPubFingerprint, LibKey.computeKeyFingerprint(akPub));
         assertEq(result.qualifyingData, QUALIFYING_DATA);
         assertEq(result.tpmSignatureHash, keccak256(signature));
-        assertEq(result.sha256PolicyCommitment, expectedPolicy256);
-        assertEq(result.sha384PolicyCommitment, expectedPolicy384);
-        assertEq(result.sha256PcrBindingCommitment, expectedBinding256);
-        assertEq(result.sha384PcrBindingCommitment, expectedBinding384);
-        assertEq(result.sha256PcrSetCommitment, keccak256(abi.encode(PCR_SET_SHA256_COMMITMENT_DOMAIN, entries256)));
-        assertEq(result.sha384PcrSetCommitment, keccak256(abi.encode(PCR_SET_SHA384_COMMITMENT_DOMAIN, entries384)));
+        assertEq(result.pcrDigest, sha256(abi.encodePacked(SHA256_PCR15, sha384Pcr15.first, sha384Pcr15.second)));
+        assertEq(result.verificationRequestCommitment, verifier.requestCommitment(request));
     }
 
     function testRawQuoteRejectsSha384BeforeSha256() public {
-        TpmReport memory report = _mixedBankReport(hex"01", true, PcrVerifyType.STATIC);
+        TpmReport memory report = _mixedBankReport(hex"01", true, PcrComparison.STATIC);
         vm.expectRevert(TpmVerifier.InvalidPcrBankOrder.selector);
-        verifier.verify(report, akPub, QUALIFYING_DATA, _policy(PcrVerifyType.STATIC), _emptyRequirements());
+        verifier.verify(report, akPub, QUALIFYING_DATA, _request(PcrComparison.STATIC));
     }
 
     function testRawQuoteRejectsDynamicSha384Policy() public {
-        TpmReport memory report = _mixedBankReport(hex"01", false, PcrVerifyType.DYNAMIC_SUBSEQUENCE);
+        TpmReport memory report = _mixedBankReport(hex"01", false, PcrComparison.DYNAMIC_SUBSEQUENCE);
         vm.expectPartialRevert(TpmVerifier.TpmQuoteBackendDoesNotSatisfyPolicy.selector);
-        verifier.verify(
-            report, akPub, QUALIFYING_DATA, _policy(PcrVerifyType.DYNAMIC_SUBSEQUENCE), _emptyRequirements()
+        verifier.verify(report, akPub, QUALIFYING_DATA, _request(PcrComparison.DYNAMIC_SUBSEQUENCE));
+    }
+
+    function testExtendFromZeroAndPublishedPcr15RulesBothPassAgainstOneQuotedValue() public {
+        bytes32 extendValue = bytes32(uint256(0x1234));
+        bytes32 measuredPcr15 = sha256(abi.encodePacked(bytes32(0), extendValue));
+        TpmVerificationRequest memory request = _duplicatePcr15Request(measuredPcr15, extendValue);
+
+        TpmQuoteVerificationResult memory result =
+            verifier.verify(_sha256OnlyReport(measuredPcr15), akPub, QUALIFYING_DATA, request);
+        assertEq(result.pcrDigest, sha256(abi.encodePacked(measuredPcr15)));
+        assertEq(request.pcrs256.length, 2);
+        assertEq(request.pcrs256[0].pcrIndex, 15);
+        assertEq(request.pcrs256[1].pcrIndex, 15);
+
+        request.pcrs256[0].comparison = PcrComparison.encodeStatic256(bytes32(uint256(0xdead)));
+        TpmReport memory report = _sha256OnlyReport(measuredPcr15);
+        vm.expectPartialRevert(TpmVerifier.PcrStaticMismatch256.selector);
+        verifier.verify(report, akPub, QUALIFYING_DATA, request);
+
+        request = _duplicatePcr15Request(measuredPcr15, bytes32(uint256(0x1235)));
+        report = _sha256OnlyReport(measuredPcr15);
+        vm.expectPartialRevert(TpmVerifier.PcrStaticMismatch256.selector);
+        verifier.verify(report, akPub, QUALIFYING_DATA, request);
+    }
+
+    function testMissingQuotedPcr15FailsExactSelection() public {
+        bytes32 measuredPcr15 = sha256(abi.encodePacked(bytes32(0), bytes32(uint256(0x1234))));
+        TpmVerificationRequest memory request = _duplicatePcr15Request(measuredPcr15, bytes32(uint256(0x1234)));
+        request.pcrs256[0].pcrIndex = 7;
+        request.pcrs256[1].pcrIndex = 7;
+        TpmReport memory report = _sha256OnlyReport(measuredPcr15);
+        vm.expectPartialRevert(TpmVerifier.PcrSelectionMismatch.selector);
+        verifier.verify(report, akPub, QUALIFYING_DATA, request);
+    }
+
+    function testVerificationRequestCommitmentMatchesRustAndPortalVector() public view {
+        PcrSpec256[] memory rules256 = new PcrSpec256[](2);
+        rules256[0] = PcrSpec256({
+            pcrIndex: 1, comparison: PcrComparison.encodeStatic256(bytes32(uint256(type(uint256).max) / 0xff * 0x11))
+        });
+        rules256[1] = PcrSpec256({
+            pcrIndex: 15,
+            comparison: PcrComparison.encodeExtendFromZero256(bytes32(uint256(type(uint256).max) / 0xff * 0x22))
+        });
+        PcrSpec384[] memory rules384 = new PcrSpec384[](1);
+        rules384[0] = PcrSpec384({
+            pcrIndex: 15,
+            comparison: PcrComparison.encodeExtendFromZero384(
+                Bytes48({
+                    first: bytes32(uint256(type(uint256).max) / 0xff * 0x33),
+                    second: bytes16(uint128(type(uint128).max) / 0xff * 0x33)
+                })
+            )
+        });
+        TpmVerificationRequest memory request = TpmVerificationRequest({
+            workloadId: bytes32(uint256(type(uint256).max) / 0xff * 0x01),
+            baseImageId: bytes32(uint256(type(uint256).max) / 0xff * 0x02),
+            platformProfileId: bytes32(uint256(type(uint256).max) / 0xff * 0x03),
+            measurementVariantId: bytes32(uint256(type(uint256).max) / 0xff * 0x04),
+            pcrBankSelection: PcrBankSelection.Sha256AndSha384,
+            pcrs256: rules256,
+            pcrs384: rules384
+        });
+
+        assertEq(
+            verifier.requestCommitment(request), 0xc60feb45c97a8f69fbd1275315e2a2111daa1e1690089b315e0f5fe670b4a6ce
         );
     }
 
-    function _mixedBankReport(bytes memory signature, bool reverseBanks, PcrVerifyType sha384VerifyType)
+    function _sha256OnlyReport(bytes32 measuredPcr15) private view returns (TpmReport memory) {
+        PcrValue256[] memory values256 = new PcrValue256[](1);
+        values256[0] = PcrValue256({pcrIndex: 15, value: measuredPcr15, eventLogHashes: new bytes32[](0)});
+        bytes32 pcrDigest = sha256(abi.encodePacked(measuredPcr15));
+        bytes memory tpmsAttest = abi.encodePacked(
+            bytes4(uint32(0xff544347)),
+            bytes2(uint16(0x8018)),
+            bytes2(0),
+            bytes2(uint16(32)),
+            QUALIFYING_DATA,
+            bytes8(0),
+            bytes4(0),
+            bytes4(0),
+            bytes1(0),
+            bytes8(0),
+            bytes4(uint32(1)),
+            bytes2(uint16(0x000b)),
+            bytes1(uint8(3)),
+            bytes3(0x008000),
+            bytes2(uint16(32)),
+            pcrDigest
+        );
+        TpmQuoteEvidence memory evidence = TpmQuoteEvidence({
+            tpmsAttest: tpmsAttest,
+            tpmSignature: hex"01",
+            pcr0StartupLocality: 0xff,
+            pcrValues256: values256,
+            pcrValues384: new PcrValue384[](0)
+        });
+        return TpmReport({
+            verificationBackendType: VerificationBackendType.Solidity,
+            tpmReportType: TpmReportType.TpmQuote,
+            data: abi.encode(evidence)
+        });
+    }
+
+    function _duplicatePcr15Request(bytes32 measuredPcr15, bytes32 extendValue)
+        private
+        pure
+        returns (TpmVerificationRequest memory request)
+    {
+        PcrSpec256[] memory rules = new PcrSpec256[](2);
+        rules[0] = PcrSpec256({pcrIndex: 15, comparison: PcrComparison.encodeStatic256(measuredPcr15)});
+        rules[1] = PcrSpec256({pcrIndex: 15, comparison: PcrComparison.encodeExtendFromZero256(extendValue)});
+        return TpmVerificationRequest({
+            workloadId: bytes32(uint256(1)),
+            baseImageId: bytes32(uint256(2)),
+            platformProfileId: bytes32(uint256(3)),
+            measurementVariantId: bytes32(uint256(4)),
+            pcrBankSelection: PcrBankSelection.Sha256,
+            pcrs256: rules,
+            pcrs384: new PcrSpec384[](0)
+        });
+    }
+
+    function _mixedBankReport(bytes memory signature, bool reverseBanks, uint16 sha384ComparisonType)
         private
         view
         returns (TpmReport memory)
     {
         bytes32[] memory sha256Events = new bytes32[](0);
-        Bytes48[] memory sha384Events = new Bytes48[](sha384VerifyType == PcrVerifyType.STATIC ? 0 : 1);
+        Bytes48[] memory sha384Events = new Bytes48[](sha384ComparisonType == PcrComparison.STATIC ? 0 : 1);
         if (sha384Events.length == 1) sha384Events[0] = sha384Pcr15;
 
         PcrValue256[] memory values256 = new PcrValue256[](1);
@@ -162,37 +255,27 @@ contract TpmVerifierBanksTest is Test {
         });
     }
 
-    function _policy(PcrVerifyType sha384VerifyType) private view returns (ResolvedPcrPolicy memory policy) {
-        bytes32[] memory match256 = new bytes32[](1);
-        match256[0] = SHA256_PCR15;
+    function _request(uint16 sha384ComparisonType) private view returns (TpmVerificationRequest memory request) {
         PcrSpec256[] memory rules256 = new PcrSpec256[](1);
-        rules256[0] = PcrSpec256({pcrIndex: 15, verifyType: PcrVerifyType.STATIC, matchData: match256});
+        rules256[0] = PcrSpec256({pcrIndex: 15, comparison: PcrComparison.encodeStatic256(SHA256_PCR15)});
 
         Bytes48[] memory match384 = new Bytes48[](1);
         match384[0] = sha384Pcr15;
         PcrSpec384[] memory rules384 = new PcrSpec384[](1);
-        rules384[0] = PcrSpec384({pcrIndex: 15, verifyType: sha384VerifyType, matchData: match384});
-        return ResolvedPcrPolicy({
+        rules384[0] = PcrSpec384({
+            pcrIndex: 15,
+            comparison: sha384ComparisonType == PcrComparison.STATIC
+                ? PcrComparison.encodeStatic384(sha384Pcr15)
+                : PcrComparison.encodeDynamic384(sha384ComparisonType, match384)
+        });
+        return TpmVerificationRequest({
             workloadId: bytes32(uint256(1)),
             baseImageId: bytes32(uint256(2)),
             platformProfileId: bytes32(uint256(3)),
             measurementVariantId: bytes32(uint256(4)),
             pcrBankSelection: PcrBankSelection.Sha256AndSha384,
-            invariants256: rules256,
-            variantPcrs256: new PcrSpec256[](0),
-            workloadPcrs256: new PcrSpec256[](0),
-            invariants384: rules384,
-            variantPcrs384: new PcrSpec384[](0),
-            workloadPcrs384: new PcrSpec384[](0)
-        });
-    }
-
-    function _emptyRequirements() private pure returns (ProviderPcrRequirements memory requirements) {
-        return ProviderPcrRequirements({
-            pcrBindings256: new PcrBinding256[](0),
-            pcrJoinIndexes256: new uint8[](0),
-            pcrBindings384: new PcrBinding384[](0),
-            pcrJoinIndexes384: new uint8[](0)
+            pcrs256: rules256,
+            pcrs384: rules384
         });
     }
 }

@@ -1,21 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {Bytes48} from "../lib/LibBytes.sol";
-
 // ============================================================================
 // Verification & Access Control
 // ============================================================================
-
-/// @notice PCR verification strategy for attestation measurement validation
-enum PcrVerifyType {
-    /// @dev Exact match: PCR final value must equal matchData[0]
-    STATIC,
-    /// @dev Required subset: matchData must occur in PCR events (any order)
-    DYNAMIC_SUBSET,
-    /// @dev Event subsequence: PCR events must contain matchData as an ordered subsequence
-    DYNAMIC_SUBSEQUENCE
-}
 
 /// @notice Access control mode for workload base image policies
 enum AccessMode {
@@ -43,23 +31,17 @@ struct PublicIdentity {
 struct PcrSpec256 {
     /// @dev PCR index (0-23 per TPM 2.0 specification)
     uint8 pcrIndex;
-    /// @dev Verification strategy: STATIC (exact match), DYNAMIC_SUBSET (required unordered landmarks), DYNAMIC_SUBSEQUENCE (ordered landmarks)
-    PcrVerifyType verifyType;
-    /// @dev Match data interpretation depends on verifyType:
-    ///      - STATIC: exactly one entry, matchData[0] = expected PCR final value
-    ///      - DYNAMIC_SUBSET: matchData = set of required event hashes. Every matchData entry must
-    ///        occur in the non-empty reported event log in any order; additional events are
-    ///        permitted. Empty logs are rejected because no cumulative-hash verification occurs.
-    ///      - DYNAMIC_SUBSEQUENCE: matchData = required event sequence (must appear in order in
-    ///        a non-empty event log; empty event log is rejected for the same reason).
-    bytes32[] matchData;
+    /// @dev Canonical ABI encoding selected and interpreted only by the TPM verifier.
+    ///      The first ABI word is the uint16 comparison type. Remaining words use the
+    ///      exact type-specific encoding defined by the canonical PCR policy specification.
+    bytes comparison;
 }
 
 /// @notice SHA-384 PCR policy rule. Digest bytes use normal byte order.
 struct PcrSpec384 {
     uint8 pcrIndex;
-    PcrVerifyType verifyType;
-    Bytes48[] matchData;
+    /// @dev Canonical ABI encoding selected and interpreted only by the TPM verifier.
+    bytes comparison;
 }
 
 /// @notice PCR policy bank or banks evaluated for one platform profile.
@@ -103,9 +85,9 @@ struct PlatformProfile {
     /// @dev Policy bank or banks evaluated for this platform.
     PcrBankSelection pcrBankSelection;
     /// @dev SHA-256 PCRs constant across all machine types in this platform.
-    PcrSpec256[] invariants256;
+    PcrSpec256[] invariantPcrs256;
     /// @dev SHA-384 PCRs constant across all machine types in this platform.
-    PcrSpec384[] invariants384;
+    PcrSpec384[] invariantPcrs384;
     /// @dev Platform-wide attributes (e.g., "cloud": "Azure", "tee": "IntelTDX")
     Attribute[] attributes;
 }
@@ -166,39 +148,26 @@ struct ResolvedPcrPolicy {
     bytes32 platformProfileId;
     bytes32 measurementVariantId;
     PcrBankSelection pcrBankSelection;
-    PcrSpec256[] invariants256;
+    PcrSpec256[] invariantPcrs256;
     PcrSpec256[] variantPcrs256;
     PcrSpec256[] workloadPcrs256;
-    PcrSpec384[] invariants384;
+    PcrSpec384[] invariantPcrs384;
     PcrSpec384[] variantPcrs384;
     PcrSpec384[] workloadPcrs384;
 }
 
-struct PcrBinding256 {
-    uint8 pcrIndex;
-    bytes32 expectedValue;
-}
-
-struct PcrBinding384 {
-    uint8 pcrIndex;
-    Bytes48 expectedValue;
-}
-
-struct ProviderPcrRequirements {
-    PcrBinding256[] pcrBindings256;
-    uint8[] pcrJoinIndexes256;
-    PcrBinding384[] pcrBindings384;
-    uint8[] pcrJoinIndexes384;
-}
-
-struct PcrSetEntry256 {
-    uint8 pcrIndex;
-    bytes32 value;
-}
-
-struct PcrSetEntry384 {
-    uint8 pcrIndex;
-    Bytes48 value;
+/// @notice Exact PCR rules evaluated for one TPM Quote verification.
+/// @dev SessionRegistry constructs this request in memory. The rule arrays use
+///      canonical source order: invariant, variant, workload, then provider.
+///      Duplicate PCR indexes are allowed. Every rule is evaluated.
+struct TpmVerificationRequest {
+    bytes32 workloadId;
+    bytes32 baseImageId;
+    bytes32 platformProfileId;
+    bytes32 measurementVariantId;
+    PcrBankSelection pcrBankSelection;
+    PcrSpec256[] pcrs256;
+    PcrSpec384[] pcrs384;
 }
 
 // ============================================================================

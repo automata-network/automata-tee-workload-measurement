@@ -88,10 +88,24 @@ emit an event.
 implementation and proxy. `script/DeployProd.s.sol` includes the same step in
 a fresh complete deployment.
 
+Every fresh `SessionRegistry` deployment also requires
+`AWS_NITRO_ROOT_CERT_HASH`. The value is the Keccak-256 hash of the exact
+trusted AWS NitroTPM root certificate DER. The deployment records that trust
+before it reports success.
+
 `script/UpdateAmdSnpSecurityPolicies.s.sol` reads the proxy address from
 `AMD_SNP_SECURITY_POLICY_REGISTRY` and a JSON `policies` array from
 `AMD_SNP_SECURITY_POLICY_FILE`. It stores the Keccak-256 hash of the exact file
 text as `sourceDigest`.
+
+`policies/amd-snp-milan-b1.json` is the reviewed fresh-deployment policy for
+CPUID `0x190101`. Its launch and current mitigation-vector masks are `0x16`,
+which requires bits 1, 2, and 4. An attestation report with vectors `0x0f`
+fails this policy because it does not contain bit 4.
+
+The mask follows AMD-SB-3020 bit 1, AMD-SB-3016 bit 2, and AMD-SB-3030 and
+AMD-SB-3034 bit 4 for Milan. Those bulletins are available from AMD's Product
+Security index at `https://www.amd.com/en/resources/product-security.html`.
 
 ## Session evaluation
 

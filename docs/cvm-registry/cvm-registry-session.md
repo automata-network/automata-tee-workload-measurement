@@ -12,8 +12,10 @@ OwnableUpgradeable
 UUPSUpgradeable
 ```
 
-TPM Quote and Certify verification uses an immutable, separately deployed
-`TpmVerifier`. Attestation Key collateral verification uses an immutable,
+TPM Quote and Certify verification uses an immutable address that points to the
+`TpmVerifier` proxy. The proxy implementation is upgradeable without changing
+`SessionRegistry`. `SessionRegistry` passes opaque PCR `comparison` bytes
+unchanged. Attestation Key collateral verification uses an immutable,
 separately deployed `IAkCollateralVerifier`. This split keeps the
 `SessionRegistry` runtime below the EIP-170 bytecode limit.
 
@@ -221,10 +223,10 @@ Actions:
   - Verify Azure MAA JWT, GCP certificate-chain, or AwsNitroTpmProof collateral
   - Require the verified collateral fingerprint to match evidence.akPub
   - Azure: match the MAA binding hash and TEE type to the verified report
-  - GCP: derive SHA-256 PCR15 from the verified TDX UUID or SNP REPORT_ID
+  - GCP: generate an in-memory SHA-256 PCR15 `EXTEND_FROM_ZERO` rule from the verified TDX UUID or SNP REPORT_ID
   - AWS: require AMD SEV-SNP, the raw-report hash, trusted Nitro root,
-    qualifyingData, document freshness, and a SHA-384 PCR15 Quote/document join
-Output: ProviderPcrRequirements
+    qualifyingData, document freshness, and generate the required SHA-384 and optional SHA-256 PCR15 rules
+Output: complete in-memory TpmVerificationRequest
 ```
 
 ### Step 4: TPM Quote Verification (`TpmVerifier.verifyTpmQuote`)
@@ -233,10 +235,10 @@ Input: evidence.tpmQuoteReport, akPub, ownerFingerprint
 Actions:
   - Compute nonce = _ownerNonces[ownerFingerprint]
   - Compute expectedQualifyingData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, nonce))
-  - Call tpmVerifier.verifyTpmQuote(tpmQuoteReport, akPub, expectedQualifyingData, resolvedPolicy, providerRequirements)
+  - Call tpmVerifier.verifyTpmQuote(tpmQuoteReport, akPub, expectedQualifyingData, verificationRequest)
   - The verifier reverts with a specific TpmVerifier error on failure
   - Write the nonce increment immediately; it persists only if the transaction succeeds
-  - For AWS, match the Quote and NitroTPM document SHA-384 PCR-set commitments
+  - For AWS, match the Quote and NitroTPM `verificationRequestCommitment` values and `pcrDigest` values
 Output: TpmQuoteVerificationResult
 ```
 
@@ -542,13 +544,17 @@ function verifySessionSignature(
 | `AzureTeeReportDataMismatch(bytes32 actualBindingHash, bytes32 expectedBindingHash, bytes32 actualPadding)` | Verified Azure TEE report does not contain the MAA-signed HCL binding followed by 32 zero bytes |
 | `GcpTdxRtmr3Mismatch(bytes actualRtmr3, bytes expectedRtmr3)` | GCP TDX RTMR3 binding mismatch |
 | `SessionKeyDelegationFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint)` | Delegation signature invalid |
-| `InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength)` | A `STATIC` PCR spec does not contain exactly one expected value |
-| `PCRStaticMismatch(uint8 pcrIndex, bytes32 measured, bytes32 expected)` | Static PCR mismatch |
-| `PCREventLogEmpty(uint8 pcrIndex, PcrVerifyType verifyType)` | Dynamic PCR supplied no events |
-| `PCRSubsetLandmarkMissing(uint8 pcrIndex, uint256 matchIdx, bytes32 matchHash)` | Required dynamic-subset landmark absent from the observed event log |
-| `PCRSubsequenceLandmarkMissing(uint8 pcrIndex, uint256 matchedCount, uint256 expectedCount)` | Dynamic-subsequence landmark missing |
-| `GcpPcr15Mismatch(bytes32 measured, bytes32 expected)` | PCR15 does not match the GCP TEE binding |
-| `PCRNotFound(uint8 pcrIndex)` | Required PCR not in quote |
+| `InvalidPcrComparisonType(uint16 algorithm, uint8 pcrIndex, uint256 encodedType)` | The comparison type word does not fit `uint16` |
+| `UnsupportedPcrComparison(uint16 algorithm, uint8 pcrIndex, uint16 comparisonType)` | `TpmVerifier` does not support the comparison type |
+| `NonCanonicalPcrComparison(uint16 algorithm, uint8 pcrIndex)` | Decode and re-encode did not reproduce the exact comparison bytes |
+| `PcrStaticMismatch256(uint8 pcrIndex, bytes32 measured, bytes32 expected)` | SHA-256 static PCR mismatch |
+| `PcrStaticMismatch384(uint8 pcrIndex, Bytes48 measured, Bytes48 expected)` | SHA-384 static PCR mismatch |
+| `PcrEventLogEmpty(uint16 algorithm, uint8 pcrIndex, uint16 comparisonType)` | A dynamic comparison supplied no events |
+| `PcrSubsetLandmarkMissing(uint16 algorithm, uint8 pcrIndex, uint256 landmarkIndex)` | Required unordered landmark is absent |
+| `PcrSubsequenceLandmarkMissing(uint16 algorithm, uint8 pcrIndex, uint256 matched, uint256 required)` | Required ordered landmark is absent |
+| `PcrEventCountMismatch(uint16 algorithm, uint8 pcrIndex, uint256 actual, uint16 expected)` | Indexed comparison event count mismatch |
+| `PcrIndexedEventSetMismatch(uint16 algorithm, uint8 pcrIndex, uint16 eventIndex)` | A checked event does not match its allowed set |
+| `PcrValueNotFound(uint16 algorithm, uint8 pcrIndex)` | Required PCR is absent from the quote |
 | `AttributeNotFound(bytes32 key)` | Required attribute missing |
 | `AttributeValueNotAllowed(bytes32 key, bytes32 actualValue)` | Ordinary attribute value not in allowed set |
 | `TeeVerificationFailed()` | A verifier implementation returned `valid=false` |

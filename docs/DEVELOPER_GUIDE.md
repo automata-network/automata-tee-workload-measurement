@@ -60,8 +60,9 @@ SessionRegistry
 └── UUPSUpgradeable
 ```
 
-`SessionRegistry` calls separately deployed `TpmVerifier` and
-`IAkCollateralVerifier` contracts. Its other immutable references are
+`SessionRegistry` calls the immutable `TpmVerifier` proxy address and a
+separately deployed `IAkCollateralVerifier`. The `TpmVerifier` implementation
+is upgradeable. Its other immutable references are
 `ITeeVerifier`, `ISignatureVerifier`, `IBaseImageRegistry`,
 `IWorkloadRegistry`, and `IAmdSnpSecurityPolicyRegistry`.
 
@@ -264,9 +265,9 @@ The **central orchestrator** that ties everything together. It verifies attestat
 
 ### Dependencies (Immutable)
 
-The SessionRegistry holds immutable references to:
+The SessionRegistry holds immutable addresses for:
 - `ITeeVerifier` — TEE attestation verification
-- `TpmVerifier` — TPM Quote, TPM Certify, PCR policy, and proof verification
+- `TpmVerifier` proxy — TPM Quote, TPM Certify, PCR policy, and proof verification
 - `ISignatureVerifier` — Cryptographic signature verification
 - `IAkCollateralVerifier` — Azure MAA JWT, GCP Attestation Key collateral, and AWS NitroTPM proof verification
 - `IBaseImageRegistry` — Platform policy lookup
@@ -414,8 +415,8 @@ Verifies the Attestation Key (AK) and its binding to the TEE instance:
   `sha256(hclVarData) || bytes32(0)`. `SessionRegistry` then requires the
   independently verified TDX or SNP report's `REPORT_DATA` to contain the same
   value.
-- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. `TeeVerifier.deriveGcpPcr15` returns `sha256(bytes32(0) || bytes16(0) || UUID)` for `PcrBinding256.expectedValue`. The 16-byte UUID is left-padded with zeros to fill each bank's register width (no intermediate hash).
-- **GCP (SNP)**: AK from X.509 chain. Binding via `report_id` at SNP report offset `0x140`. `TeeVerifier.deriveGcpPcr15` returns `sha256(bytes32(0) || report_id)` for `PcrBinding256.expectedValue`.
+- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. `TeeVerifier.deriveGcpPcr15ExtendValue` returns `bytes16(0) || UUID`. `SessionRegistry` encodes that value in an in-memory SHA-256 PCR15 `EXTEND_FROM_ZERO` rule.
+- **GCP (SNP)**: AK from X.509 chain. Binding uses `REPORT_ID` at SNP report offset `0x140`. `TeeVerifier.deriveGcpPcr15ExtendValue` returns that exact 32-byte value. `SessionRegistry` encodes it in an in-memory SHA-256 PCR15 `EXTEND_FROM_ZERO` rule.
 
 ### Step 4: TPM Quote Verification
 
@@ -502,33 +503,32 @@ Active CVMSession
 
 ---
 
-## PCR Verification Types
+## PCR Comparison Types
 
-Three strategies for matching measured PCR values against policy specifications:
+Four comparison types are encoded inside one opaque `comparison` blob:
 
 ### STATIC — Exact Value Match
 
-```
-`matchData` must contain exactly one entry, and `matchData[0]` must exactly equal the PCR final value
-```
+The encoded expected value must exactly equal the PCR final value.
 
 Use for deterministic measurements that never change (e.g., firmware hash, bootloader hash). The PCR value is computed as a sequential hash chain of events, producing a single final value that must match exactly.
 
 ### DYNAMIC_SUBSET — Required Unordered Landmarks
 
-```
-All matchData hashes must occur in the measured PCR events (any order)
-```
-
-Use for configurations with required landmarks whose order is not stable. Extra measured events are permitted, but every required `matchData` hash must occur at least once.
+Use for configurations with required landmarks whose order is not stable. Extra measured events are permitted, but every required landmark must occur at least once.
 
 ### DYNAMIC_SUBSEQUENCE — Ordered Event Sequence
 
-```
-matchData must appear as an ordered subsequence within the measured event hashes
-```
-
 Use for boot sequences where event order matters but additional events may be interspersed. The required events must appear in the correct order, though other events can appear between them.
+
+### DYNAMIC_INDEXED_EVENT_SETS — Checked Event Positions
+
+Require the exact event count. Each listed event index must match one digest in
+its sorted allowed set. Unlisted indexes are skipped. The complete event log is
+still replayed to the quoted PCR value.
+
+The canonical blob encoding is
+`abi.encode(uint16 comparisonType, comparison-specific fields...)`.
 
 ---
 
@@ -617,13 +617,17 @@ struct PublicIdentity {
 }
 ```
 
-### PcrSpec
+### PCR Specifications
 
 ```solidity
-struct PcrSpec {
-    uint8 pcrIndex;           // PCR index (0-23)
-    PcrVerifyType verifyType; // STATIC, DYNAMIC_SUBSET, or DYNAMIC_SUBSEQUENCE
-    bytes32[] matchData;      // Interpretation depends on verifyType
+struct PcrSpec256 {
+    uint8 pcrIndex;
+    bytes comparison;
+}
+
+struct PcrSpec384 {
+    uint8 pcrIndex;
+    bytes comparison;
 }
 ```
 

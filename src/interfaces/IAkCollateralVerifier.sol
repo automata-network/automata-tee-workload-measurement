@@ -12,7 +12,8 @@ struct AkCollateralVerificationResult {
     bytes32 awsNitroRootCertHash;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 sha384PcrSetCommitment;
+    bytes32 pcrDigest;
+    bytes32 verificationRequestCommitment;
 }
 
 interface IAkCollateralVerifier {

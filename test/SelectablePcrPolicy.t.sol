@@ -15,6 +15,7 @@ import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {Bytes48} from "../src/lib/LibBytes.sol";
+import {PcrComparison} from "../src/lib/PcrComparison.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
 import {
@@ -26,7 +27,6 @@ import {
     PcrBankSelection,
     PcrSpec256,
     PcrSpec384,
-    PcrVerifyType,
     PlatformProfile,
     PublicIdentity,
     ResolvedPcrPolicy,
@@ -89,17 +89,17 @@ contract SelectablePcrPolicyTest is Test {
     }
 
     function testGetPcrPolicyReturnsBothBanksAndExactHierarchyIdentifiers() public {
-        PcrSpec256[] memory invariants256 = new PcrSpec256[](1);
-        invariants256[0] = _pcr256(0, bytes32(uint256(0x100)));
-        PcrSpec384[] memory invariants384 = new PcrSpec384[](1);
-        invariants384[0] = _pcr384(0, _bytes48(0x200, 0x201));
+        PcrSpec256[] memory invariantPcrs256 = new PcrSpec256[](1);
+        invariantPcrs256[0] = _pcr256(0, bytes32(uint256(0x100)));
+        PcrSpec384[] memory invariantPcrs384 = new PcrSpec384[](1);
+        invariantPcrs384[0] = _pcr384(0, _bytes48(0x200, 0x201));
 
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
         profiles[0] = PlatformProfile({
             name: "aws-nitrotpm",
             pcrBankSelection: PcrBankSelection.Sha256AndSha384,
-            invariants256: invariants256,
-            invariants384: invariants384,
+            invariantPcrs256: invariantPcrs256,
+            invariantPcrs384: invariantPcrs384,
             attributes: new Attribute[](0)
         });
 
@@ -154,24 +154,20 @@ contract SelectablePcrPolicyTest is Test {
         assertEq(policy.platformProfileId, platformProfileId);
         assertEq(policy.measurementVariantId, measurementVariantId);
         assertEq(uint8(policy.pcrBankSelection), uint8(PcrBankSelection.Sha256AndSha384));
-        assertEq(policy.invariants256[0].matchData[0], bytes32(uint256(0x100)));
-        assertEq(policy.variantPcrs256[0].matchData[0], bytes32(uint256(0x300)));
-        assertEq(policy.workloadPcrs256[0].matchData[0], bytes32(uint256(0x500)));
-        assertEq(policy.invariants384[0].matchData[0].first, bytes32(uint256(0x200)));
-        assertEq(policy.variantPcrs384[0].matchData[0].first, bytes32(uint256(0x400)));
-        assertEq(policy.workloadPcrs384[0].matchData[0].first, bytes32(uint256(0x600)));
+        assertEq(policy.invariantPcrs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x100))));
+        assertEq(policy.variantPcrs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x300))));
+        assertEq(policy.workloadPcrs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x500))));
+        assertEq(policy.invariantPcrs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x200, 0x201)));
+        assertEq(policy.variantPcrs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x400, 0x401)));
+        assertEq(policy.workloadPcrs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x600, 0x601)));
     }
 
     function _pcr256(uint8 index, bytes32 value) private pure returns (PcrSpec256 memory rule) {
-        bytes32[] memory matchData = new bytes32[](1);
-        matchData[0] = value;
-        return PcrSpec256({pcrIndex: index, verifyType: PcrVerifyType.STATIC, matchData: matchData});
+        return PcrSpec256({pcrIndex: index, comparison: PcrComparison.encodeStatic256(value)});
     }
 
     function _pcr384(uint8 index, Bytes48 memory value) private pure returns (PcrSpec384 memory rule) {
-        Bytes48[] memory matchData = new Bytes48[](1);
-        matchData[0] = value;
-        return PcrSpec384({pcrIndex: index, verifyType: PcrVerifyType.STATIC, matchData: matchData});
+        return PcrSpec384({pcrIndex: index, comparison: PcrComparison.encodeStatic384(value)});
     }
 
     function _bytes48(uint256 first, uint128 second) private pure returns (Bytes48 memory) {

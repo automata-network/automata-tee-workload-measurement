@@ -137,8 +137,9 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 
 **PCR Verification Types:**
 - `STATIC` - Exact PCR value match (fixed measurement)
-- `DYNAMIC_SUBSET` - required `matchData` hashes must occur in PCR events (any order; extra events permitted)
+- `DYNAMIC_SUBSET` - required landmarks must occur in PCR events (any order; extra events permitted)
 - `DYNAMIC_SUBSEQUENCE` - PCR events must contain required sequence (ordered)
+- `DYNAMIC_INDEXED_EVENT_SETS` - exact event count plus checked indexes with allowed digest sets
 
 ### Contract Inheritance Hierarchy
 
@@ -175,8 +176,7 @@ SessionRegistry
 
 **PcrSpec** - PCR measurement policy:
 - `pcrIndex` - PCR slot (0-23)
-- `verifyType` - Verification strategy (STATIC, DYNAMIC_SUBSET, DYNAMIC_SUBSEQUENCE)
-- `matchData` - Expected values or event hashes
+- `comparison` - Opaque canonical ABI comparison bytes decoded only by `TpmVerifier`
 
 **CVMSession** - Registered CVM identity:
 - `sessionKeyFingerprint` - Current operational key

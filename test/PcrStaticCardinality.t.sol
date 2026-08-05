@@ -15,13 +15,12 @@ import {
     PcrBankSelection,
     PcrSpec256,
     PcrSpec384,
-    PcrVerifyType,
     PlatformProfile,
     PublicIdentity,
     WorkloadSpec
 } from "../src/types/Common.sol";
 
-contract PcrStaticCardinalityTest is Test {
+contract PcrOpaqueComparisonRegistrationTest is Test {
     BaseImageRegistry private baseImageRegistry;
     WorkloadRegistry private workloadRegistry;
     PublicIdentity private ownerIdentity;
@@ -35,62 +34,45 @@ contract PcrStaticCardinalityTest is Test {
         ownerIdentity = PublicIdentity({typeId: 1, key: hex"01020304"});
     }
 
-    function testRegisterBaseImageRejectsStaticWithZeroOrMultipleMatchDataEntries() public {
-        _expectBaseImageStaticLength(0);
-        _expectBaseImageStaticLength(2);
+    function testRegisterBaseImageRejectsEmptyComparison() public {
+        vm.expectRevert(abi.encodeWithSelector(BaseImageRegistry.EmptyPcrComparison.selector, uint8(4)));
+        _registerBaseImage(_pcrs(4, hex""), new PcrSpec256[](0));
     }
 
-    function testRegisterBaseImageRejectsVariantStaticWithMultipleMatchDataEntries() public {
-        PcrSpec256[] memory variantPcrs = _staticPcrs(4, 2);
-        vm.expectRevert(
-            abi.encodeWithSelector(BaseImageRegistry.InvalidStaticMatchDataLength.selector, uint8(4), uint256(2))
-        );
+    function testRegisterBaseImageRejectsEmptyVariantComparison() public {
+        PcrSpec256[] memory variantPcrs = _pcrs(4, hex"");
+        vm.expectRevert(abi.encodeWithSelector(BaseImageRegistry.EmptyPcrComparison.selector, uint8(4)));
         _registerBaseImage(new PcrSpec256[](0), variantPcrs);
     }
 
-    function testAddPlatformVariantsRejectsStaticWithMultipleMatchDataEntries() public {
+    function testAddPlatformVariantsRejectsEmptyComparison() public {
         bytes32 baseImageId = _registerBaseImage(new PcrSpec256[](0), new PcrSpec256[](0));
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
         profiles[0] = PlatformProfile({
             name: "new-profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: _staticPcrs(4, 2),
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: _pcrs(4, hex""),
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](0);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(BaseImageRegistry.InvalidStaticMatchDataLength.selector, uint8(4), uint256(2))
-        );
+        vm.expectRevert(abi.encodeWithSelector(BaseImageRegistry.EmptyPcrComparison.selector, uint8(4)));
         baseImageRegistry.addPlatformVariants(
             baseImageId, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
         );
     }
 
-    function testRegisterWorkloadRejectsStaticWithZeroOrMultipleMatchDataEntries() public {
-        _expectWorkloadStaticLength(0);
-        _expectWorkloadStaticLength(2);
+    function testRegisterWorkloadRejectsEmptyComparison() public {
+        vm.expectRevert(abi.encodeWithSelector(WorkloadRegistry.EmptyPcrComparison.selector, uint8(23)));
+        _registerWorkload(_pcrs(23, hex""));
     }
 
-    function testRegistriesAcceptStaticWithExactlyOneMatchDataEntry() public {
-        _registerBaseImage(_staticPcrs(4, 1), new PcrSpec256[](0));
-        _registerWorkload(_staticPcrs(23, 1));
-    }
-
-    function _expectBaseImageStaticLength(uint256 length) private {
-        vm.expectRevert(
-            abi.encodeWithSelector(BaseImageRegistry.InvalidStaticMatchDataLength.selector, uint8(4), length)
-        );
-        _registerBaseImage(_staticPcrs(4, length), new PcrSpec256[](0));
-    }
-
-    function _expectWorkloadStaticLength(uint256 length) private {
-        vm.expectRevert(
-            abi.encodeWithSelector(WorkloadRegistry.InvalidStaticMatchDataLength.selector, uint8(23), length)
-        );
-        _registerWorkload(_staticPcrs(23, length));
+    function testRegistriesPassNonEmptyComparisonWithoutDecodingIt() public {
+        bytes memory opaqueComparison = hex"deadbeef";
+        _registerBaseImage(_pcrs(4, opaqueComparison), new PcrSpec256[](0));
+        _registerWorkload(_pcrs(23, opaqueComparison));
     }
 
     function _registerBaseImage(PcrSpec256[] memory invariants, PcrSpec256[] memory variantPcrs)
@@ -104,8 +86,8 @@ contract PcrStaticCardinalityTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariants256: invariants,
-            invariants384: new PcrSpec384[](0),
+            invariantPcrs256: invariants,
+            invariantPcrs384: new PcrSpec384[](0),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -136,12 +118,8 @@ contract PcrStaticCardinalityTest is Test {
         return workloadRegistry.registerWorkload(spec, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
     }
 
-    function _staticPcrs(uint8 pcrIndex, uint256 length) private pure returns (PcrSpec256[] memory pcrs) {
-        bytes32[] memory matchData = new bytes32[](length);
-        for (uint256 i = 0; i < length; i++) {
-            matchData[i] = bytes32(i + 1);
-        }
+    function _pcrs(uint8 pcrIndex, bytes memory comparison) private pure returns (PcrSpec256[] memory pcrs) {
         pcrs = new PcrSpec256[](1);
-        pcrs[0] = PcrSpec256({pcrIndex: pcrIndex, verifyType: PcrVerifyType.STATIC, matchData: matchData});
+        pcrs[0] = PcrSpec256({pcrIndex: pcrIndex, comparison: comparison});
     }
 }

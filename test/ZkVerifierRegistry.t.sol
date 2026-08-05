@@ -156,12 +156,8 @@ contract DirectSp1ZkVerifierAdapterTest is Test {
             akPubFingerprint: bytes32(uint256(1)),
             qualifyingData: bytes32(uint256(2)),
             tpmSignatureHash: bytes32(uint256(3)),
-            sha256PolicyCommitment: bytes32(uint256(4)),
-            sha384PolicyCommitment: bytes32(uint256(5)),
-            sha256PcrBindingCommitment: bytes32(uint256(6)),
-            sha384PcrBindingCommitment: bytes32(uint256(7)),
-            sha256PcrSetCommitment: bytes32(uint256(8)),
-            sha384PcrSetCommitment: bytes32(uint256(9))
+            pcrDigest: bytes32(uint256(4)),
+            verificationRequestCommitment: bytes32(uint256(5))
         });
         bytes memory output = abi.encode(expected);
         verifier.expect(PROGRAM_IDENTIFIER, output, PROOF);
@@ -177,7 +173,8 @@ contract DirectSp1ZkVerifierAdapterTest is Test {
             akPubFingerprint: bytes32(uint256(3)),
             qualifyingData: bytes32(uint256(4)),
             documentTimestampSeconds: 5,
-            sha384PcrSetCommitment: bytes32(uint256(6))
+            pcrDigest: bytes32(uint256(6)),
+            verificationRequestCommitment: bytes32(uint256(7))
         });
         bytes memory output = abi.encode(expected);
         verifier.expect(PROGRAM_IDENTIFIER, output, PROOF);

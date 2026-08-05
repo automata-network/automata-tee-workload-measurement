@@ -359,7 +359,8 @@ struct AkCollateralVerificationResult {
     bytes32 awsNitroRootCertHash;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 sha384PcrSetCommitment;
+    bytes32 pcrDigest;
+    bytes32 verificationRequestCommitment;
 }
 
 function validateAkPub(AkPubCollateralType collateralType, PublicIdentity calldata akPub)
@@ -374,8 +375,8 @@ For Azure, `teeType` is authenticated by the MAA JWT's
 `sha256(hclVarData)`. For GCP, `teeType` is ignored and `bindingHash` is zero
 because `SessionRegistry` applies the TEE-to-vTPM PCR15 binding.
 For AWS, `amdSevSnpReportHash`, `awsNitroRootCertHash`, `qualifyingData`,
-`documentTimestampSeconds`, and `sha384PcrSetCommitment` come from the verified
-`aws_nitrotpm.v1` journal.
+`documentTimestampSeconds`, `pcrDigest`, and `verificationRequestCommitment`
+come from the verified `aws_nitrotpm.v1` journal.
 
 ---
 
@@ -469,7 +470,7 @@ NatDoc: "Foundation of the owner-auth model - allows TEE-managed keys (RSA, ECDS
 ```solidity
 interface ITeeVerifier {
     function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerificationResult memory result);
-    function deriveGcpPcr15(TeeVerificationResult memory result) external pure returns (bytes32 pcr15);
+    function deriveGcpPcr15ExtendValue(TeeVerificationResult memory result) external pure returns (bytes32 extendValue);
     function extractDcapReportData(bytes memory quoteBody) external pure returns (bytes memory reportData);
     function extractSnpReportData(bytes memory rawReport) external pure returns (bytes memory reportData);
 }

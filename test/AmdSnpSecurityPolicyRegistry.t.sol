@@ -317,6 +317,41 @@ contract AmdSnpSecurityPolicyRegistryTest is Test {
         registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
     }
 
+    function testReviewedMilanPolicyRejectsPreviousAwsMitigationVectors() public {
+        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](1);
+        updates[0] = _activeUpdate(MILAN_CPUID, 1);
+        updates[0].requiredLaunchMitigationVector = 0x16;
+        updates[0].requiredCurrentMitigationVector = 0x16;
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, SOURCE_DIGEST);
+
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.amdSevSnpCpuid = MILAN_CPUID;
+        inputs.amdSevSnpReportVersion = 5;
+        inputs.amdSevSnpLaunchMitigationVector = 0x0f;
+        inputs.amdSevSnpCurrentMitigationVector = 0x0f;
+        Attribute[] memory attributes = new Attribute[](0);
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](0);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.SnpLaunchMitigationVectorMissing.selector, uint64(0x16), uint64(0x0f)
+            )
+        );
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+
+        inputs.amdSevSnpLaunchMitigationVector = 0x16;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AmdSnpSecurityPolicyRegistry.SnpCurrentMitigationVectorMissing.selector, uint64(0x16), uint64(0x0f)
+            )
+        );
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+
+        inputs.amdSevSnpCurrentMitigationVector = 0x16;
+        registry.verifyTeePolicy(inputs, attributes, attributes, requirements);
+    }
+
     function testZeroMitigationMasksAcceptVersionThreeReport() public {
         _register(GENOA_CPUID);
         VerifiedTeePolicyInputs memory inputs = _validInputs();

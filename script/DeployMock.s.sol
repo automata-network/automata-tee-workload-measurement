@@ -118,8 +118,15 @@ contract DeployMock is Script, DeploymentConfig {
         );
         console.log("AkCollateralVerifier deployed at:", address(d.akCollateralVerifier));
 
-        d.tpmVerifier = new TpmVerifier(
+        TpmVerifier tpmVerifierImplementation = new TpmVerifier(
             ITpmAttestation(address(d.tpmAttestation)), IZkVerifierRegistry(address(d.zkVerifierRegistry))
+        );
+        d.tpmVerifier = TpmVerifier(
+            address(
+                new ERC1967Proxy(
+                    address(tpmVerifierImplementation), abi.encodeCall(TpmVerifier.initialize, (vm.envAddress("OWNER")))
+                )
+            )
         );
         console.log("TpmVerifier deployed at:", address(d.tpmVerifier));
 
