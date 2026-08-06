@@ -13,6 +13,7 @@ import {
     BaseImageSpec,
     MeasurementVariant,
     PcrBankSelection,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     PlatformProfile,
@@ -237,16 +238,14 @@ contract TeeAttributeRegistryTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: new PcrSpec256[](0),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "test-variant",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: _attributes(TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_TRUE)
         });
 
@@ -391,16 +390,14 @@ contract TeeAttributeRegistryTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: new PcrSpec256[](0),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: profileAttributes
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "test-variant",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: variantAttributes
         });
         return baseImageRegistry.registerBaseImage(
@@ -417,8 +414,7 @@ contract TeeAttributeRegistryTest is Test {
             baseImageMode: AccessMode.ANY,
             baseImageIds: new bytes32[](0),
             requirements: requirements,
-            workloadPcrs256: new PcrSpec256[](0),
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         return workloadRegistry.registerWorkload(spec, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
     }
@@ -435,16 +431,14 @@ contract TeeAttributeRegistryTest is Test {
         profiles[0] = PlatformProfile({
             name: profileName,
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: new PcrSpec256[](0),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: profileAttributes
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: variantName,
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: variantAttributes
         });
         baseImageRegistry.addPlatformVariants(

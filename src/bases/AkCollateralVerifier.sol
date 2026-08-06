@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey, LibX509} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
 import {AkPubCollateral, AkPubCollateralType, TEEType, VerificationBackendType} from "../types/Evidence.sol";
-import {PublicIdentity} from "../types/Common.sol";
+import {PcrCommitment, PublicIdentity} from "../types/Common.sol";
 import {AwsNitroTpmJournalV1, ProgramBoundZkProof, ZkProofType} from "../types/Zk.sol";
 import {ALGO_ID_ES256, ALGO_ID_RS256} from "../types/Constants.sol";
 import {ISignatureVerifier} from "../interfaces/ISignatureVerifier.sol";
@@ -327,8 +327,7 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
             awsNitroRootCertHash: bytes32(0),
             qualifyingData: bytes32(0),
             documentTimestampSeconds: 0,
-            pcrDigest: bytes32(0),
-            verificationRequestCommitment: bytes32(0)
+            pcrCommitment: PcrCommitment({pcrSelect: bytes32(0), pcrDigest: bytes32(0)})
         });
     }
 
@@ -673,8 +672,7 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
             awsNitroRootCertHash: bytes32(0),
             qualifyingData: bytes32(0),
             documentTimestampSeconds: 0,
-            pcrDigest: bytes32(0),
-            verificationRequestCommitment: bytes32(0)
+            pcrCommitment: PcrCommitment({pcrSelect: bytes32(0), pcrDigest: bytes32(0)})
         });
     }
 
@@ -695,8 +693,7 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
             awsNitroRootCertHash: journal.awsNitroRootCertHash,
             qualifyingData: journal.qualifyingData,
             documentTimestampSeconds: journal.documentTimestampSeconds,
-            pcrDigest: journal.pcrDigest,
-            verificationRequestCommitment: journal.verificationRequestCommitment
+            pcrCommitment: journal.pcrCommitment
         });
     }
 }

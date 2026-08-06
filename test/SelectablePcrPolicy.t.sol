@@ -25,6 +25,7 @@ import {
     BaseImageSpec,
     MeasurementVariant,
     PcrBankSelection,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     PlatformProfile,
@@ -98,8 +99,7 @@ contract SelectablePcrPolicyTest is Test {
         profiles[0] = PlatformProfile({
             name: "aws-nitrotpm",
             pcrBankSelection: PcrBankSelection.Sha256AndSha384,
-            invariantPcrs256: invariantPcrs256,
-            invariantPcrs384: invariantPcrs384,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: invariantPcrs256, pcrSpecs384: invariantPcrs384}),
             attributes: new Attribute[](0)
         });
 
@@ -111,8 +111,7 @@ contract SelectablePcrPolicyTest is Test {
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "m7i.large",
-            variantPcrs256: variantPcrs256,
-            variantPcrs384: variantPcrs384,
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: variantPcrs256, pcrSpecs384: variantPcrs384}),
             attributes: new Attribute[](0)
         });
 
@@ -139,8 +138,7 @@ contract SelectablePcrPolicyTest is Test {
                 baseImageMode: AccessMode.ANY,
                 baseImageIds: new bytes32[](0),
                 requirements: new AttributeRequirement[](0),
-                workloadPcrs256: workloadPcrs256,
-                workloadPcrs384: workloadPcrs384
+                workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: workloadPcrs256, pcrSpecs384: workloadPcrs384})
             }),
             uint64(block.timestamp + 1 hours),
             publisher,
@@ -154,12 +152,24 @@ contract SelectablePcrPolicyTest is Test {
         assertEq(policy.platformProfileId, platformProfileId);
         assertEq(policy.measurementVariantId, measurementVariantId);
         assertEq(uint8(policy.pcrBankSelection), uint8(PcrBankSelection.Sha256AndSha384));
-        assertEq(policy.invariantPcrs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x100))));
-        assertEq(policy.variantPcrs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x300))));
-        assertEq(policy.workloadPcrs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x500))));
-        assertEq(policy.invariantPcrs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x200, 0x201)));
-        assertEq(policy.variantPcrs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x400, 0x401)));
-        assertEq(policy.workloadPcrs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x600, 0x601)));
+        assertEq(
+            policy.invariantPcrPolicy.pcrSpecs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x100)))
+        );
+        assertEq(
+            policy.variantPcrPolicy.pcrSpecs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x300)))
+        );
+        assertEq(
+            policy.workloadPcrPolicy.pcrSpecs256[0].comparison, PcrComparison.encodeStatic256(bytes32(uint256(0x500)))
+        );
+        assertEq(
+            policy.invariantPcrPolicy.pcrSpecs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x200, 0x201))
+        );
+        assertEq(
+            policy.variantPcrPolicy.pcrSpecs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x400, 0x401))
+        );
+        assertEq(
+            policy.workloadPcrPolicy.pcrSpecs384[0].comparison, PcrComparison.encodeStatic384(_bytes48(0x600, 0x601))
+        );
     }
 
     function _pcr256(uint8 index, bytes32 value) private pure returns (PcrSpec256 memory rule) {

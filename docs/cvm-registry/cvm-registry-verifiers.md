@@ -283,8 +283,8 @@ function verifyTpmQuote(
    resolve the exact `tpm_quote.v1` adapter for
    `VerificationBackendType.ZkSuccinct`.
 3. Require the Attestation Key fingerprint and `qualifyingData`.
-4. Require the proof's `verificationRequestCommitment` to equal the exact
-   current request.
+4. Require the proof's `policyCommitment` and normalized signed `pcrSelect` to
+   equal the exact current policy and selection.
 5. The Solidity path verifies the signed Quote selection and `pcrDigest`, then
    evaluates static and dynamic SHA-256 policy plus static SHA-384 policy.
    Every non-`STATIC` SHA-384 rule requires `tpm_quote.v1`.
@@ -317,7 +317,8 @@ function verifyTpmCertify(
 | `TpmQuoteBackendDoesNotSatisfyPolicy()` | A raw Solidity Quote cannot evaluate the selected policy |
 | `TpmQuoteExtraDataMismatch()` | Nonce binding check failed |
 | `TpmQuoteLibraryFailed()` | TPM attestation library returned error |
-| `VerificationRequestCommitmentMismatch()` | The proof returned a different exact verification request commitment |
+| `PolicyCommitmentMismatch()` | The proof evaluated different policy block bytes |
+| `PcrSelectCommitmentMismatch()` | The proof used a different signed PCR selection |
 | `TpmaObjectForbiddenBitsSet()` | Certified key has forbidden attributes |
 | `TpmtPublicTooShort()` | tpmtPublic data too short to extract attributes |
 
@@ -391,8 +392,8 @@ AWS provides a `ProgramBoundZkProof` for `aws_nitrotpm.v1`.
 `AkCollateralVerifier` resolves the exact proof type, backend, and program
 identifier through `ZkVerifierRegistry`. The selected adapter verifies the
 proof and returns the Attestation Key fingerprint, exact AMD SEV-SNP report
-hash, trusted-root hash, qualifying data, document timestamp, `pcrDigest`, and
-`verificationRequestCommitment`. `SessionRegistry` checks those values against
+hash, trusted-root hash, qualifying data, document timestamp, and complete
+`PcrCommitment`. `SessionRegistry` checks those values against
 the common TEE result, current nonce, trusted-root configuration, freshness
 window, and TPM Quote result.
 

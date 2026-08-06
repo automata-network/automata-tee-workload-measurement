@@ -71,8 +71,13 @@ alloy::sol! {
         bytes32 akPubFingerprint;
         bytes32 qualifyingData;
         bytes32 tpmSignatureHash;
+        PcrCommitment pcrCommitment;
+        bytes32 policyCommitment;
+    }
+
+    struct PcrCommitment {
+        bytes32 pcrSelect;
         bytes32 pcrDigest;
-        bytes32 verificationRequestCommitment;
     }
 }
 

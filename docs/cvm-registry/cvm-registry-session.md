@@ -225,7 +225,9 @@ Actions:
   - Azure: match the MAA binding hash and TEE type to the verified report
   - GCP: generate an in-memory SHA-256 PCR15 `EXTEND_FROM_ZERO` rule from the verified TDX UUID or SNP REPORT_ID
   - AWS: require AMD SEV-SNP, the raw-report hash, trusted Nitro root,
-    qualifyingData, document freshness, and generate the required SHA-384 and optional SHA-256 PCR15 rules
+    qualifyingData, document freshness, exact REPORT_DATA Attestation Key and
+    PcrCommitment bindings, and generate the required SHA-384 and optional
+    SHA-256 PCR15 rules
 Output: complete in-memory TpmVerificationRequest
 ```
 
@@ -238,7 +240,7 @@ Actions:
   - Call tpmVerifier.verifyTpmQuote(tpmQuoteReport, akPub, expectedQualifyingData, verificationRequest)
   - The verifier reverts with a specific TpmVerifier error on failure
   - Write the nonce increment immediately; it persists only if the transaction succeeds
-  - For AWS, match the Quote and NitroTPM `verificationRequestCommitment` values and `pcrDigest` values
+  - For AWS, require the Quote and NitroTPM `PcrCommitment` values to be exactly equal
 Output: TpmQuoteVerificationResult
 ```
 
@@ -270,13 +272,14 @@ Output: sessionId, sessionKeyFingerprint
 
 ### Step 7: PCR Policy Evaluation
 ```
-Input: resolved PCR policy and ProviderPcrRequirements
+Input: TpmVerificationRequest with invariant, variant, workload, and provider policy blocks
 Actions:
   - TpmVerifier evaluates the selected SHA-256 and SHA-384 policy banks
   - STATIC compares the authenticated final PCR value
   - DYNAMIC_SUBSET requires every landmark in any order
   - DYNAMIC_SUBSEQUENCE requires every landmark in order
-  - Provider PCR bindings and join indexes stay separate from registry policy
+  - EXTEND_FROM_ZERO evaluates the generated provider PCR15 rule through the same rule evaluator
+  - Duplicate PCR indexes across blocks are selected once, but every rule must pass
   - Dynamic SHA-384 policy requires tpm_quote.v1
 Output: TpmQuoteVerificationResult or a specific TpmVerifier revert
 ```
@@ -591,8 +594,11 @@ expectedExtraData = keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, ad
 // passed to verifyTpmQuote as: abi.encodePacked(expectedExtraData)
 ```
 
-### PCR Merge Semantics
-Uses a bitmask-based union: allocate a 24-slot array, place the variant specs first (building overrideMask), then insert every invariant — reverting `PcrVariantOverridesInvariant` if overrideMask already covers that index — then compact. A profile invariant always holds and is never dropped in favour of a variant spec.
+### PCR Policy Block Semantics
+`SessionRegistry` keeps the invariant, variant, workload, and provider policy
+blocks separate. A duplicate PCR index across blocks is allowed. Every rule for
+that index must pass. `BaseImageRegistry` rejects an invariant and variant
+overlap in the same bank when it stores the variant.
 
 ### Attribute Merge Semantics
 Platform attributes not overridden are kept, then all variant attributes are appended. Array is trimmed via assembly.
@@ -604,10 +610,6 @@ workload value resolves to the active exact-CPUID registry default. Key
 rotation does not contain a new TEE report and cannot change the workload,
 base image, profile, or variant. It therefore inherits the verified launch
 policy and does not run the reserved TEE attribute check again.
-
-This version assumes a clean cutover in which every session was created under
-this implementation. Compatibility with session storage written by an earlier
-implementation is outside this version.
 
 ### Session ID Derivation
 ```

@@ -9,9 +9,12 @@ import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegis
 import {Bytes48} from "../src/lib/LibBytes.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {PcrComparison} from "../src/lib/PcrComparison.sol";
+import {PcrPolicy} from "../src/lib/PcrPolicy.sol";
 import {MockTpmAttestation} from "./mocks/MockTpmAttestation.sol";
 import {
     PcrBankSelection,
+    PcrPolicyBlock,
+    PcrPolicyBlockMetadata,
     PcrSpec256,
     PcrSpec384,
     PublicIdentity,
@@ -36,11 +39,33 @@ contract TpmVerifierBanksHarness is TpmVerifier {
         bytes32 qualifyingData,
         TpmVerificationRequest memory request
     ) external returns (TpmQuoteVerificationResult memory) {
-        return verifyTpmQuote(report, akPub, qualifyingData, request);
+        (bytes32 policyCommitment, bytes32 pcrSelect) = _expectedCommitments(request);
+        return verifyTpmQuote(report, akPub, qualifyingData, request, policyCommitment, pcrSelect);
     }
 
     function requestCommitment(TpmVerificationRequest memory request) external pure returns (bytes32) {
-        return computeVerificationRequestCommitment(request);
+        (bytes32 policyCommitment,) = _expectedCommitments(request);
+        return policyCommitment;
+    }
+
+    function _expectedCommitments(TpmVerificationRequest memory request)
+        private
+        pure
+        returns (bytes32 policyCommitment, bytes32 pcrSelect)
+    {
+        PcrPolicyBlockMetadata memory invariantMetadata = PcrPolicy.metadataMemory(request.invariantPcrPolicy);
+        PcrPolicyBlockMetadata memory variantMetadata = PcrPolicy.metadataMemory(request.variantPcrPolicy);
+        PcrPolicyBlockMetadata memory workloadMetadata = PcrPolicy.metadataMemory(request.workloadPcrPolicy);
+        PcrPolicyBlockMetadata memory providerMetadata = PcrPolicy.metadataMemory(request.providerPcrPolicy);
+        policyCommitment = computePolicyCommitment(
+            invariantMetadata.blockHash,
+            variantMetadata.blockHash,
+            workloadMetadata.blockHash,
+            providerMetadata.blockHash
+        );
+        pcrSelect = PcrPolicy.combinePcrSelect(
+            request.pcrBankSelection, invariantMetadata, variantMetadata, workloadMetadata, providerMetadata
+        );
     }
 }
 
@@ -67,8 +92,11 @@ contract TpmVerifierBanksTest is Test {
         assertEq(result.akPubFingerprint, LibKey.computeKeyFingerprint(akPub));
         assertEq(result.qualifyingData, QUALIFYING_DATA);
         assertEq(result.tpmSignatureHash, keccak256(signature));
-        assertEq(result.pcrDigest, sha256(abi.encodePacked(SHA256_PCR15, sha384Pcr15.first, sha384Pcr15.second)));
-        assertEq(result.verificationRequestCommitment, verifier.requestCommitment(request));
+        assertEq(
+            result.pcrCommitment.pcrDigest,
+            sha256(abi.encodePacked(SHA256_PCR15, sha384Pcr15.first, sha384Pcr15.second))
+        );
+        assertEq(result.policyCommitment, verifier.requestCommitment(request));
     }
 
     function testRawQuoteRejectsSha384BeforeSha256() public {
@@ -90,12 +118,13 @@ contract TpmVerifierBanksTest is Test {
 
         TpmQuoteVerificationResult memory result =
             verifier.verify(_sha256OnlyReport(measuredPcr15), akPub, QUALIFYING_DATA, request);
-        assertEq(result.pcrDigest, sha256(abi.encodePacked(measuredPcr15)));
-        assertEq(request.pcrs256.length, 2);
-        assertEq(request.pcrs256[0].pcrIndex, 15);
-        assertEq(request.pcrs256[1].pcrIndex, 15);
+        assertEq(result.pcrCommitment.pcrDigest, sha256(abi.encodePacked(measuredPcr15)));
+        assertEq(request.invariantPcrPolicy.pcrSpecs256.length, 1);
+        assertEq(request.providerPcrPolicy.pcrSpecs256.length, 1);
+        assertEq(request.invariantPcrPolicy.pcrSpecs256[0].pcrIndex, 15);
+        assertEq(request.providerPcrPolicy.pcrSpecs256[0].pcrIndex, 15);
 
-        request.pcrs256[0].comparison = PcrComparison.encodeStatic256(bytes32(uint256(0xdead)));
+        request.invariantPcrPolicy.pcrSpecs256[0].comparison = PcrComparison.encodeStatic256(bytes32(uint256(0xdead)));
         TpmReport memory report = _sha256OnlyReport(measuredPcr15);
         vm.expectPartialRevert(TpmVerifier.PcrStaticMismatch256.selector);
         verifier.verify(report, akPub, QUALIFYING_DATA, request);
@@ -109,14 +138,14 @@ contract TpmVerifierBanksTest is Test {
     function testMissingQuotedPcr15FailsExactSelection() public {
         bytes32 measuredPcr15 = sha256(abi.encodePacked(bytes32(0), bytes32(uint256(0x1234))));
         TpmVerificationRequest memory request = _duplicatePcr15Request(measuredPcr15, bytes32(uint256(0x1234)));
-        request.pcrs256[0].pcrIndex = 7;
-        request.pcrs256[1].pcrIndex = 7;
+        request.invariantPcrPolicy.pcrSpecs256[0].pcrIndex = 7;
+        request.providerPcrPolicy.pcrSpecs256[0].pcrIndex = 7;
         TpmReport memory report = _sha256OnlyReport(measuredPcr15);
         vm.expectPartialRevert(TpmVerifier.PcrSelectionMismatch.selector);
         verifier.verify(report, akPub, QUALIFYING_DATA, request);
     }
 
-    function testVerificationRequestCommitmentMatchesRustAndPortalVector() public view {
+    function testPolicyCommitmentMatchesRustAndPortalVector() public view {
         PcrSpec256[] memory rules256 = new PcrSpec256[](2);
         rules256[0] = PcrSpec256({
             pcrIndex: 1, comparison: PcrComparison.encodeStatic256(bytes32(uint256(type(uint256).max) / 0xff * 0x11))
@@ -136,17 +165,15 @@ contract TpmVerifierBanksTest is Test {
             )
         });
         TpmVerificationRequest memory request = TpmVerificationRequest({
-            workloadId: bytes32(uint256(type(uint256).max) / 0xff * 0x01),
-            baseImageId: bytes32(uint256(type(uint256).max) / 0xff * 0x02),
-            platformProfileId: bytes32(uint256(type(uint256).max) / 0xff * 0x03),
-            measurementVariantId: bytes32(uint256(type(uint256).max) / 0xff * 0x04),
             pcrBankSelection: PcrBankSelection.Sha256AndSha384,
-            pcrs256: rules256,
-            pcrs384: rules384
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: rules256, pcrSpecs384: rules384}),
+            variantPcrPolicy: _emptyPcrPolicyBlock(),
+            workloadPcrPolicy: _emptyPcrPolicyBlock(),
+            providerPcrPolicy: _emptyPcrPolicyBlock()
         });
 
         assertEq(
-            verifier.requestCommitment(request), 0xc60feb45c97a8f69fbd1275315e2a2111daa1e1690089b315e0f5fe670b4a6ce
+            verifier.requestCommitment(request), 0x2e930d80b2e5a6ce2d76834627a7c0befeb76a54d73053fb92a2b5dc4afb5d04
         );
     }
 
@@ -194,14 +221,16 @@ contract TpmVerifierBanksTest is Test {
         PcrSpec256[] memory rules = new PcrSpec256[](2);
         rules[0] = PcrSpec256({pcrIndex: 15, comparison: PcrComparison.encodeStatic256(measuredPcr15)});
         rules[1] = PcrSpec256({pcrIndex: 15, comparison: PcrComparison.encodeExtendFromZero256(extendValue)});
+        PcrSpec256[] memory providerRules = new PcrSpec256[](1);
+        providerRules[0] = rules[1];
+        PcrSpec256[] memory publishedRules = new PcrSpec256[](1);
+        publishedRules[0] = rules[0];
         return TpmVerificationRequest({
-            workloadId: bytes32(uint256(1)),
-            baseImageId: bytes32(uint256(2)),
-            platformProfileId: bytes32(uint256(3)),
-            measurementVariantId: bytes32(uint256(4)),
             pcrBankSelection: PcrBankSelection.Sha256,
-            pcrs256: rules,
-            pcrs384: new PcrSpec384[](0)
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: publishedRules, pcrSpecs384: new PcrSpec384[](0)}),
+            variantPcrPolicy: _emptyPcrPolicyBlock(),
+            workloadPcrPolicy: _emptyPcrPolicyBlock(),
+            providerPcrPolicy: PcrPolicyBlock({pcrSpecs256: providerRules, pcrSpecs384: new PcrSpec384[](0)})
         });
     }
 
@@ -269,13 +298,16 @@ contract TpmVerifierBanksTest is Test {
                 : PcrComparison.encodeDynamic384(sha384ComparisonType, match384)
         });
         return TpmVerificationRequest({
-            workloadId: bytes32(uint256(1)),
-            baseImageId: bytes32(uint256(2)),
-            platformProfileId: bytes32(uint256(3)),
-            measurementVariantId: bytes32(uint256(4)),
             pcrBankSelection: PcrBankSelection.Sha256AndSha384,
-            pcrs256: rules256,
-            pcrs384: rules384
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: rules256, pcrSpecs384: rules384}),
+            variantPcrPolicy: _emptyPcrPolicyBlock(),
+            workloadPcrPolicy: _emptyPcrPolicyBlock(),
+            providerPcrPolicy: _emptyPcrPolicyBlock()
         });
+    }
+
+    function _emptyPcrPolicyBlock() private pure returns (PcrPolicyBlock memory policyBlock) {
+        policyBlock.pcrSpecs256 = new PcrSpec256[](0);
+        policyBlock.pcrSpecs384 = new PcrSpec384[](0);
     }
 }

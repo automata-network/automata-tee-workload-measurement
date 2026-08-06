@@ -31,9 +31,9 @@ contract DeployZkVerifierRegistry is DeploymentConfig {
     bytes32 internal constant AMD_SEV_SNP_PROGRAM_IDENTIFIER =
         0x00bc5bae7f7c200ec91f866ee2f2927cc01fcf365a55f76c819648e5277d1286;
     bytes32 internal constant TPM_QUOTE_PROGRAM_IDENTIFIER =
-        0x007de6987939d0963707e78fed08e71764628cc542d530f2ed479da7f800a45a;
+        0x0093daf8d7fac35987977a557eaaed760c9f7acd3abce4b21b58611eec08c108;
     bytes32 internal constant AWS_NITROTPM_PROGRAM_IDENTIFIER =
-        0x0091dcb68e3c50bd411ca5323e2196eacfa462d036fc760625ac59c6b50ce4d1;
+        0x000f530085e51691cf679b131ebc02b69534f0ad8ee06291ec3ba11ff7c97150;
 
     function _deployZkVerifierRegistry() internal returns (address) {
         address owner = vm.envAddress("OWNER");

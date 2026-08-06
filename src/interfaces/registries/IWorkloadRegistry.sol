@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {PublicIdentity, WorkloadSpec} from "../../types/Common.sol";
+import {AttributeRequirement, PcrPolicyBlockMetadata, PublicIdentity, WorkloadSpec} from "../../types/Common.sol";
 
 /// @notice Storage wrapper for workload specifications
 struct WorkloadSpecStorage {
@@ -13,6 +13,8 @@ struct WorkloadSpecStorage {
     bytes32 owner;
     /// @dev The workload specification
     WorkloadSpec workloadSpec;
+    /// @dev Registration-time commitment and PCR-selection bitmaps for workloadPcrPolicy.
+    PcrPolicyBlockMetadata workloadPcrPolicyMetadata;
 }
 
 interface IWorkloadRegistry {
@@ -67,6 +69,17 @@ interface IWorkloadRegistry {
     /// @param workloadId The workload identifier
     /// @return spec The complete workload specification
     function getWorkload(bytes32 workloadId) external view returns (WorkloadSpec memory spec);
+
+    /// @notice Get the lightweight workload policy data needed by SessionRegistry.
+    /// @dev This function does not return the stored PCR comparison blobs.
+    function getWorkloadPolicyMetadata(bytes32 workloadId)
+        external
+        view
+        returns (
+            uint64 sessionTtl,
+            AttributeRequirement[] memory requirements,
+            PcrPolicyBlockMetadata memory workloadPcrPolicyMetadata
+        );
 
     /// @notice Get the owner fingerprint of a registered workload
     /// @dev Returns the keccak256 fingerprint computed from the owner's PublicIdentity

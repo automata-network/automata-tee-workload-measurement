@@ -9,7 +9,8 @@ import {
     PcrSpec256,
     PcrSpec384,
     PcrBankSelection,
-    Attribute
+    Attribute,
+    PcrPolicyBlockMetadata
 } from "./types/Common.sol";
 import {
     BASEIMAGE_DOMAIN,
@@ -37,6 +38,7 @@ import {
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
+import {PcrPolicy} from "./lib/PcrPolicy.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -152,14 +154,14 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Validate PCR ordering for profiles and variants
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
-            _validatePcrSpecs256Sorted(profile.invariantPcrs256);
-            _validatePcrSpecs384Sorted(profile.invariantPcrs384);
+            _validatePcrSpecs256Sorted(profile.invariantPcrPolicy.pcrSpecs256);
+            _validatePcrSpecs384Sorted(profile.invariantPcrPolicy.pcrSpecs384);
             _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
-                _validatePcrSpecs256Sorted(variants[j].variantPcrs256);
-                _validatePcrSpecs384Sorted(variants[j].variantPcrs384);
+                _validatePcrSpecs256Sorted(variants[j].variantPcrPolicy.pcrSpecs256);
+                _validatePcrSpecs384Sorted(variants[j].variantPcrPolicy.pcrSpecs384);
                 _validateAttributes(variants[j].attributes);
             }
         }
@@ -226,14 +228,14 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             emit PlatformProfileRegistered(baseImageId, platformProfileId, profile.name);
 
             // Validate and store measurement variants
-            uint256 invariantMask256 = _pcrIndexMask256(profile.invariantPcrs256);
-            uint256 invariantMask384 = _pcrIndexMask384(profile.invariantPcrs384);
+            uint256 invariantMask256 = _pcrIndexMask256(profile.invariantPcrPolicy.pcrSpecs256);
+            uint256 invariantMask384 = _pcrIndexMask384(profile.invariantPcrPolicy.pcrSpecs384);
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
 
-                _requireNoInvariantOverlap256(platformProfileId, invariantMask256, variant.variantPcrs256);
-                _requireNoInvariantOverlap384(platformProfileId, invariantMask384, variant.variantPcrs384);
+                _requireNoInvariantOverlap256(platformProfileId, invariantMask256, variant.variantPcrPolicy.pcrSpecs256);
+                _requireNoInvariantOverlap384(platformProfileId, invariantMask384, variant.variantPcrPolicy.pcrSpecs384);
 
                 // Compute variant ID
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
@@ -338,14 +340,14 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         // Validate PCR ordering and attribute uniqueness for all profiles and variants
         for (uint256 i = 0; i < platformCount; i++) {
             PlatformProfile calldata profile = platformProfiles[i];
-            _validatePcrSpecs256Sorted(profile.invariantPcrs256);
-            _validatePcrSpecs384Sorted(profile.invariantPcrs384);
+            _validatePcrSpecs256Sorted(profile.invariantPcrPolicy.pcrSpecs256);
+            _validatePcrSpecs384Sorted(profile.invariantPcrPolicy.pcrSpecs384);
             _validateAttributes(profile.attributes);
 
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
-                _validatePcrSpecs256Sorted(variants[j].variantPcrs256);
-                _validatePcrSpecs384Sorted(variants[j].variantPcrs384);
+                _validatePcrSpecs256Sorted(variants[j].variantPcrPolicy.pcrSpecs256);
+                _validatePcrSpecs384Sorted(variants[j].variantPcrPolicy.pcrSpecs384);
                 _validateAttributes(variants[j].attributes);
             }
         }
@@ -395,16 +397,18 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
             // Append measurement variants for this profile. Overlap is checked against the
             // stored invariants after exact submitted-metadata validation.
-            uint256 invariantMask256 =
-                _storedPcrIndexMask256(_platformProfiles[platformProfileId].platformProfile.invariantPcrs256);
-            uint256 invariantMask384 =
-                _storedPcrIndexMask384(_platformProfiles[platformProfileId].platformProfile.invariantPcrs384);
+            uint256 invariantMask256 = _storedPcrIndexMask256(
+                _platformProfiles[platformProfileId].platformProfile.invariantPcrPolicy.pcrSpecs256
+            );
+            uint256 invariantMask384 = _storedPcrIndexMask384(
+                _platformProfiles[platformProfileId].platformProfile.invariantPcrPolicy.pcrSpecs384
+            );
             MeasurementVariant[] calldata variants = measurementVariants[i];
             for (uint256 j = 0; j < variants.length; j++) {
                 MeasurementVariant calldata variant = variants[j];
 
-                _requireNoInvariantOverlap256(platformProfileId, invariantMask256, variant.variantPcrs256);
-                _requireNoInvariantOverlap384(platformProfileId, invariantMask384, variant.variantPcrs384);
+                _requireNoInvariantOverlap256(platformProfileId, invariantMask256, variant.variantPcrPolicy.pcrSpecs256);
+                _requireNoInvariantOverlap384(platformProfileId, invariantMask384, variant.variantPcrPolicy.pcrSpecs384);
 
                 // Compute variant ID (deterministic from profile + variant name)
                 bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, variant.name));
@@ -485,30 +489,34 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             MeasurementVariant memory variant
         )
     {
-        if (!_baseImages[baseImageId].exists) {
-            revert BaseImageNotFound(baseImageId);
-        }
-        if (!_platformProfiles[platformProfileId].exists) {
-            revert PlatformProfileNotFound(platformProfileId);
-        }
-        if (!_variants[variantId].exists) {
-            revert MeasurementVariantNotFound(variantId);
-        }
-        // Recompute child IDs from the provided parent and the stored child name;
-        // by collision resistance, a match proves the child was registered under that
-        // exact parent. Otherwise reject the triple.
-        bytes32 expectedProfileId = keccak256(
-            abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, _platformProfiles[platformProfileId].platformProfile.name)
-        );
-        bytes32 expectedVariantId = keccak256(
-            abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, _variants[variantId].measurementVariant.name)
-        );
-        if (expectedProfileId != platformProfileId || expectedVariantId != variantId) {
-            revert HierarchyMismatch(baseImageId, platformProfileId, variantId);
-        }
+        _requireValidHierarchy(baseImageId, platformProfileId, variantId);
 
         return
             (_baseImages[baseImageId].spec, _loadPlatformProfile(platformProfileId), _loadMeasurementVariant(variantId));
+    }
+
+    /// @inheritdoc IBaseImageRegistry
+    function getVariantPolicyMetadata(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
+        external
+        view
+        returns (
+            PcrBankSelection pcrBankSelection,
+            Attribute[] memory platformAttributes,
+            Attribute[] memory variantAttributes,
+            PcrPolicyBlockMetadata memory invariantPcrPolicyMetadata,
+            PcrPolicyBlockMetadata memory variantPcrPolicyMetadata
+        )
+    {
+        _requireValidHierarchy(baseImageId, platformProfileId, variantId);
+        PlatformProfileStorage storage profile = _platformProfiles[platformProfileId];
+        MeasurementVariantStorage storage variant = _variants[variantId];
+        return (
+            profile.platformProfile.pcrBankSelection,
+            profile.platformProfile.attributes,
+            variant.measurementVariant.attributes,
+            profile.invariantPcrPolicyMetadata,
+            variant.variantPcrPolicyMetadata
+        );
     }
 
     /// @inheritdoc IBaseImageRegistry
@@ -726,11 +734,13 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     function _storePlatformProfile(bytes32 platformProfileId, PlatformProfile calldata profile) private {
         PlatformProfileStorage storage stored = _platformProfiles[platformProfileId];
         stored.platformProfile = profile;
+        stored.invariantPcrPolicyMetadata = PcrPolicy.metadataCalldata(profile.invariantPcrPolicy);
     }
 
     function _storeMeasurementVariant(bytes32 variantId, MeasurementVariant calldata variant) private {
         MeasurementVariantStorage storage stored = _variants[variantId];
         stored.measurementVariant = variant;
+        stored.variantPcrPolicyMetadata = PcrPolicy.metadataCalldata(variant.variantPcrPolicy);
     }
 
     function _loadPlatformProfile(bytes32 platformProfileId) private view returns (PlatformProfile memory profile) {
@@ -747,11 +757,33 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         returns (bool)
     {
         PlatformProfile memory stored = _loadPlatformProfile(platformProfileId);
+        PcrPolicyBlockMetadata memory suppliedMetadata = PcrPolicy.metadataCalldata(supplied.invariantPcrPolicy);
         return keccak256(bytes(stored.name)) == keccak256(bytes(supplied.name))
             && stored.pcrBankSelection == supplied.pcrBankSelection
-            && keccak256(abi.encode(stored.invariantPcrs256)) == keccak256(abi.encode(supplied.invariantPcrs256))
-            && keccak256(abi.encode(stored.invariantPcrs384)) == keccak256(abi.encode(supplied.invariantPcrs384))
+            && _platformProfiles[platformProfileId].invariantPcrPolicyMetadata.blockHash == suppliedMetadata.blockHash
             && keccak256(abi.encode(stored.attributes)) == keccak256(abi.encode(supplied.attributes));
+    }
+
+    function _requireValidHierarchy(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId) private view {
+        if (!_baseImages[baseImageId].exists) {
+            revert BaseImageNotFound(baseImageId);
+        }
+        if (!_platformProfiles[platformProfileId].exists) {
+            revert PlatformProfileNotFound(platformProfileId);
+        }
+        if (!_variants[variantId].exists) {
+            revert MeasurementVariantNotFound(variantId);
+        }
+
+        bytes32 expectedProfileId = keccak256(
+            abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, _platformProfiles[platformProfileId].platformProfile.name)
+        );
+        bytes32 expectedVariantId = keccak256(
+            abi.encode(PLATFORM_VARIANT_DOMAIN, platformProfileId, _variants[variantId].measurementVariant.name)
+        );
+        if (expectedProfileId != platformProfileId || expectedVariantId != variantId) {
+            revert HierarchyMismatch(baseImageId, platformProfileId, variantId);
+        }
     }
 
     function _isBooleanTeeAttributeKey(bytes32 key) private pure returns (bool) {

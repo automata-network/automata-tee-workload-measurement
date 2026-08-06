@@ -12,6 +12,12 @@ enum AccessMode {
     BLACKLIST,  // Listed base images blocked
     WHITELIST   // Only listed base images allowed
 }
+
+enum PcrBankSelection {
+    Sha256,
+    Sha384,
+    Sha256AndSha384
+}
 ```
 
 ### Primitive Structs
@@ -30,6 +36,22 @@ struct PcrSpec256 {
 struct PcrSpec384 {
     uint8 pcrIndex;
     bytes comparison;
+}
+
+struct PcrPolicyBlock {
+    PcrSpec256[] pcrSpecs256;
+    PcrSpec384[] pcrSpecs384;
+}
+
+struct PcrPolicyBlockMetadata {
+    bytes32 blockHash;
+    bytes3 pcrSelectBitmap256;
+    bytes3 pcrSelectBitmap384;
+}
+
+struct PcrCommitment {
+    bytes32 pcrSelect;
+    bytes32 pcrDigest;
 }
 
 struct Attribute {
@@ -57,15 +79,16 @@ struct BaseImageSpec {
 }
 
 struct PlatformProfile {
-    string name;               // e.g. "gcp-tdx", "azure-snp"
-    PcrSpec[] invariants;      // Typically platform baseline measurements
-    Attribute[] attributes;    // Platform metadata (cloud, TEE type, etc.)
+    string name;
+    PcrBankSelection pcrBankSelection;
+    PcrPolicyBlock invariantPcrPolicy;
+    Attribute[] attributes;
 }
 
 struct MeasurementVariant {
-    string name;                // e.g. "n2d-standard-2", "c3-standard-4"
-    PcrSpec[] overridePcrs;     // Indices the profile leaves unpinned; MUST be disjoint from invariants
-    Attribute[] attributes;     // Replaces platform attributes at matching key
+    string name;
+    PcrPolicyBlock variantPcrPolicy;
+    Attribute[] attributes;
 }
 ```
 
@@ -79,7 +102,7 @@ struct WorkloadSpec {
     AccessMode baseImageMode;                // ANY / WHITELIST / BLACKLIST
     bytes32[] baseImageIds;                  // For whitelist/blacklist filtering
     AttributeRequirement[] requirements;     // Demanded platform attributes
-    PcrSpec[] pcrs;                          // Typically workload PCR specs
+    PcrPolicyBlock workloadPcrPolicy;
 }
 ```
 
@@ -309,8 +332,8 @@ struct TpmQuoteVerificationResult {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     bytes32 tpmSignatureHash;
-    bytes32 pcrDigest;
-    bytes32 verificationRequestCommitment;
+    PcrCommitment pcrCommitment;
+    bytes32 policyCommitment;
 }
 
 struct TpmCertifyVerificationResult {
@@ -331,8 +354,7 @@ struct AkCollateralVerificationResult {
     bytes32 awsNitroRootCertHash;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 pcrDigest;
-    bytes32 verificationRequestCommitment;
+    PcrCommitment pcrCommitment;
 }
 ```
 
@@ -356,6 +378,9 @@ All are `bytes32 constant = keccak256("...")`:
 | `PLATFORM_VARIANT_DOMAIN` | `"CVM_PLATFORM_VARIANT_V1"` | Variant ID |
 | `WORKLOAD_DOMAIN` | `"CVM_WORKLOAD_V1"` | Workload ID |
 | `SESSION_NONCE_DOMAIN` | `"CVM_SESSION_REG_NONCE_V1"` | Nonce-based replay protection |
+| `PCR_POLICY_BLOCK_DOMAIN` | `"CVM_PCR_POLICY_BLOCK_V1"` | One named PCR policy block |
+| `TPM_POLICY_COMMITMENT_DOMAIN` | `"CVM_TPM_POLICY_COMMITMENT_V1"` | Four named policy block hashes |
+| `AWS_REPORT_DATA_PCR_COMMITMENT_DOMAIN` | `"CVM_AWS_REPORT_DATA_PCR_COMMITMENT_V1"` | AWS `REPORT_DATA[32:64]` binding |
 
 ### Operation Message Separators
 

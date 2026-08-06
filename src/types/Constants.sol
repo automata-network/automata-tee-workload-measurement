@@ -25,7 +25,12 @@ bytes32 constant PLATFORM_VARIANT_DOMAIN = keccak256("CVM_PLATFORM_VARIANT_V1");
 bytes32 constant WORKLOAD_DOMAIN = keccak256("CVM_WORKLOAD_V1");
 /// @dev Domain separator for TPM quote extraData nonce binding (used by SessionRegistry)
 bytes32 constant SESSION_NONCE_DOMAIN = keccak256("CVM_SESSION_REG_NONCE_V1");
-bytes32 constant TPM_VERIFICATION_REQUEST_COMMITMENT_DOMAIN = keccak256("CVM_TPM_VERIFICATION_REQUEST_COMMITMENT_V1");
+/// @dev Domain separator for one named PCR policy block.
+bytes32 constant PCR_POLICY_BLOCK_DOMAIN = keccak256("CVM_PCR_POLICY_BLOCK_V1");
+/// @dev Domain separator for the four named PCR policy block hashes.
+bytes32 constant TPM_POLICY_COMMITMENT_DOMAIN = keccak256("CVM_TPM_POLICY_COMMITMENT_V1");
+/// @dev Domain separator for the AWS AMD SEV-SNP REPORT_DATA PCR commitment hash.
+bytes32 constant AWS_REPORT_DATA_PCR_COMMITMENT_DOMAIN = keccak256("CVM_AWS_REPORT_DATA_PCR_COMMITMENT_V1");
 
 // ============================================================================
 // Verified TEE Attribute Constants

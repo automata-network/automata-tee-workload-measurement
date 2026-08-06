@@ -29,6 +29,7 @@ import {
     BaseImageSpec,
     MeasurementVariant,
     PcrBankSelection,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     PlatformProfile,
@@ -137,8 +138,7 @@ contract PcrInvariantPrecedenceTest is Test {
                 baseImageMode: AccessMode.WHITELIST,
                 baseImageIds: allowed,
                 requirements: new AttributeRequirement[](0),
-                workloadPcrs256: new PcrSpec256[](0),
-                workloadPcrs384: new PcrSpec384[](0)
+                workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
             }),
             uint64(block.timestamp + 1 hours),
             imageOwner,
@@ -178,8 +178,7 @@ contract PcrInvariantPrecedenceTest is Test {
         profilesWithoutInvariant[0] = PlatformProfile({
             name: "profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: new PcrSpec256[](0),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
 
@@ -217,8 +216,7 @@ contract PcrInvariantPrecedenceTest is Test {
         profiles[0] = PlatformProfile({
             name: "second-profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: _pcr(7, GOLDEN_PCR4),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _pcr(7, GOLDEN_PCR4), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         bytes32 newProfileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, "second-profile"));
@@ -272,8 +270,7 @@ contract PcrInvariantPrecedenceTest is Test {
         profiles[0] = PlatformProfile({
             name: "profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: invariants,
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: invariants, pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
     }
@@ -287,8 +284,7 @@ contract PcrInvariantPrecedenceTest is Test {
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "variant",
-            variantPcrs256: variantPcrs256,
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: variantPcrs256, pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
     }
@@ -302,8 +298,7 @@ contract PcrInvariantPrecedenceTest is Test {
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: name,
-            variantPcrs256: _pcrSpecs(spec),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _pcrSpecs(spec), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
     }

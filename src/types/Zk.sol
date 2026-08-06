@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {VerificationResult} from "../interfaces/external/ISnpAttestation.sol";
+import {PcrCommitment} from "./Common.sol";
 
 /// @notice Statement proved by a zero-knowledge program.
 enum ZkProofType {
@@ -61,8 +62,8 @@ struct TpmQuoteJournalV1 {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     bytes32 tpmSignatureHash;
-    bytes32 pcrDigest;
-    bytes32 verificationRequestCommitment;
+    PcrCommitment pcrCommitment;
+    bytes32 policyCommitment;
 }
 
 /// @notice Public result produced by `aws_nitrotpm.v1`.
@@ -72,6 +73,5 @@ struct AwsNitroTpmJournalV1 {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 pcrDigest;
-    bytes32 verificationRequestCommitment;
+    PcrCommitment pcrCommitment;
 }

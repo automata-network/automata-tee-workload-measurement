@@ -13,6 +13,7 @@ import {
     BaseImageSpec,
     MeasurementVariant,
     PcrBankSelection,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     PlatformProfile,
@@ -51,8 +52,7 @@ contract PcrOpaqueComparisonRegistrationTest is Test {
         profiles[0] = PlatformProfile({
             name: "new-profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: _pcrs(4, hex""),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _pcrs(4, hex""), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -86,16 +86,14 @@ contract PcrOpaqueComparisonRegistrationTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-profile",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: invariants,
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: invariants, pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "test-variant",
-            variantPcrs256: variantPcrs,
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: variantPcrs, pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         return baseImageRegistry.registerBaseImage(
@@ -112,8 +110,7 @@ contract PcrOpaqueComparisonRegistrationTest is Test {
             baseImageMode: AccessMode.ANY,
             baseImageIds: new bytes32[](0),
             requirements: new AttributeRequirement[](0),
-            workloadPcrs256: pcrs,
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: pcrs, pcrSpecs384: new PcrSpec384[](0)})
         });
         return workloadRegistry.registerWorkload(spec, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
     }

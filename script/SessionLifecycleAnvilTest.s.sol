@@ -28,6 +28,8 @@ import {
     CVMSession,
     MeasurementVariant,
     PcrBankSelection,
+    PcrCommitment,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     PlatformProfile,
@@ -143,8 +145,7 @@ contract AnvilLifecycleAkVerifier is IAkCollateralVerifier {
             awsNitroRootCertHash: bytes32(0),
             qualifyingData: bytes32(0),
             documentTimestampSeconds: 0,
-            pcrDigest: bytes32(0),
-            verificationRequestCommitment: bytes32(0)
+            pcrCommitment: PcrCommitment({pcrSelect: bytes32(0), pcrDigest: bytes32(0)})
         });
     }
 }
@@ -525,16 +526,14 @@ contract SessionLifecycleAnvilTest is Script {
         profiles[0] = PlatformProfile({
             name: "anvil-tdx",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: _invariantPcrs256(),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _invariantPcrs256(), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: attributes
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "anvil-variant",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         ids.baseImageId = baseImageRegistry.registerBaseImage(
@@ -560,8 +559,7 @@ contract SessionLifecycleAnvilTest is Script {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: baseImages,
             requirements: requirements,
-            workloadPcrs256: new PcrSpec256[](0),
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -577,16 +575,14 @@ contract SessionLifecycleAnvilTest is Script {
         profiles[0] = PlatformProfile({
             name: "anvil-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: _invariantPcrs256(),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _invariantPcrs256(), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "anvil-variant",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         ids.baseImageId = baseImageRegistry.registerBaseImage(
@@ -605,8 +601,7 @@ contract SessionLifecycleAnvilTest is Script {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: new AttributeRequirement[](0),
-            workloadPcrs256: new PcrSpec256[](0),
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");

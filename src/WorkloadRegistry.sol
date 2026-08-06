@@ -7,7 +7,8 @@ import {
     AccessMode,
     PcrSpec256,
     PcrSpec384,
-    AttributeRequirement
+    AttributeRequirement,
+    PcrPolicyBlockMetadata
 } from "./types/Common.sol";
 import {
     WORKLOAD_DOMAIN,
@@ -27,6 +28,7 @@ import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IW
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
+import {PcrPolicy} from "./lib/PcrPolicy.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -112,8 +114,8 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
-        _validatePcrSpecs256Sorted(spec.workloadPcrs256);
-        _validatePcrSpecs384Sorted(spec.workloadPcrs384);
+        _validatePcrSpecs256Sorted(spec.workloadPcrPolicy.pcrSpecs256);
+        _validatePcrSpecs384Sorted(spec.workloadPcrPolicy.pcrSpecs384);
         _validateRequirements(spec.requirements);
 
         // An empty whitelist denies every base image, so isBaseImageAllowed always returns false
@@ -207,6 +209,23 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             revert WorkloadNotFound(workloadId);
         }
         return _loadWorkload(workloadId);
+    }
+
+    /// @inheritdoc IWorkloadRegistry
+    function getWorkloadPolicyMetadata(bytes32 workloadId)
+        external
+        view
+        returns (
+            uint64 sessionTtl,
+            AttributeRequirement[] memory requirements,
+            PcrPolicyBlockMetadata memory workloadPcrPolicyMetadata
+        )
+    {
+        if (!_workloads[workloadId].exists) {
+            revert WorkloadNotFound(workloadId);
+        }
+        WorkloadSpecStorage storage stored = _workloads[workloadId];
+        return (stored.workloadSpec.sessionTtl, stored.workloadSpec.requirements, stored.workloadPcrPolicyMetadata);
     }
 
     /// @inheritdoc IWorkloadRegistry
@@ -328,6 +347,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
 
     function _storeWorkload(bytes32 workloadId, WorkloadSpec calldata spec) private {
         _workloads[workloadId].workloadSpec = spec;
+        _workloads[workloadId].workloadPcrPolicyMetadata = PcrPolicy.metadataCalldata(spec.workloadPcrPolicy);
     }
 
     function _loadWorkload(bytes32 workloadId) private view returns (WorkloadSpec memory spec) {

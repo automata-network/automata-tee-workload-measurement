@@ -9,6 +9,7 @@ import {ZkVerifierRegistry} from "../src/ZkVerifierRegistry.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {ISp1Verifier} from "../src/interfaces/zk/IZkVerifierAdapters.sol";
 import {VerificationBackendType} from "../src/types/Evidence.sol";
+import {PcrCommitment} from "../src/types/Common.sol";
 import {
     AwsNitroTpmJournalV1,
     ProgramBoundZkProof,
@@ -156,8 +157,8 @@ contract DirectSp1ZkVerifierAdapterTest is Test {
             akPubFingerprint: bytes32(uint256(1)),
             qualifyingData: bytes32(uint256(2)),
             tpmSignatureHash: bytes32(uint256(3)),
-            pcrDigest: bytes32(uint256(4)),
-            verificationRequestCommitment: bytes32(uint256(5))
+            pcrCommitment: PcrCommitment({pcrSelect: bytes32(uint256(4)), pcrDigest: bytes32(uint256(5))}),
+            policyCommitment: bytes32(uint256(6))
         });
         bytes memory output = abi.encode(expected);
         verifier.expect(PROGRAM_IDENTIFIER, output, PROOF);
@@ -173,8 +174,7 @@ contract DirectSp1ZkVerifierAdapterTest is Test {
             akPubFingerprint: bytes32(uint256(3)),
             qualifyingData: bytes32(uint256(4)),
             documentTimestampSeconds: 5,
-            pcrDigest: bytes32(uint256(6)),
-            verificationRequestCommitment: bytes32(uint256(7))
+            pcrCommitment: PcrCommitment({pcrSelect: bytes32(uint256(6)), pcrDigest: bytes32(uint256(7))})
         });
         bytes memory output = abi.encode(expected);
         verifier.expect(PROGRAM_IDENTIFIER, output, PROOF);

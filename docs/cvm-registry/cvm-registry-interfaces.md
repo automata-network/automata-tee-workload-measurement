@@ -359,8 +359,7 @@ struct AkCollateralVerificationResult {
     bytes32 awsNitroRootCertHash;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 pcrDigest;
-    bytes32 verificationRequestCommitment;
+    PcrCommitment pcrCommitment;
 }
 
 function validateAkPub(AkPubCollateralType collateralType, PublicIdentity calldata akPub)
@@ -375,8 +374,8 @@ For Azure, `teeType` is authenticated by the MAA JWT's
 `sha256(hclVarData)`. For GCP, `teeType` is ignored and `bindingHash` is zero
 because `SessionRegistry` applies the TEE-to-vTPM PCR15 binding.
 For AWS, `amdSevSnpReportHash`, `awsNitroRootCertHash`, `qualifyingData`,
-`documentTimestampSeconds`, `pcrDigest`, and `verificationRequestCommitment`
-come from the verified `aws_nitrotpm.v1` journal.
+`documentTimestampSeconds`, and `pcrCommitment` come from the verified
+`aws_nitrotpm.v1` journal.
 
 ---
 

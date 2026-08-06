@@ -50,7 +50,7 @@ struct WorkloadSpec {
     AccessMode baseImageMode;            // ANY | WHITELIST | BLACKLIST
     bytes32[] baseImageIds;              // list for whitelist/blacklist
     AttributeRequirement[] requirements; // constraints on platform attributes
-    PcrSpec[] pcrs;                      // workload PCR specs by convention
+    PcrPolicyBlock workloadPcrPolicy;
 }
 
 struct AttributeRequirement {

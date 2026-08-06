@@ -759,8 +759,11 @@ mod tests {
             akPubFingerprint: B256::ZERO,
             qualifyingData: B256::ZERO,
             tpmSignatureHash: signature_hash,
-            pcrDigest: B256::ZERO,
-            verificationRequestCommitment: B256::ZERO,
+            pcrCommitment: crate::stubs::PcrCommitment {
+                pcrSelect: B256::ZERO,
+                pcrDigest: B256::ZERO,
+            },
+            policyCommitment: B256::ZERO,
         };
         let zk_data: Bytes = ProgramBoundZkProof {
             programIdentifier: B256::repeat_byte(0xaa),

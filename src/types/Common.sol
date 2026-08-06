@@ -44,6 +44,27 @@ struct PcrSpec384 {
     bytes comparison;
 }
 
+/// @notice One named block of PCR policy comparison specifications.
+/// @dev Policy specifications are kept distinct from measured PcrValue256 and
+///      PcrValue384 evidence. Both arrays are strictly sorted by pcrIndex.
+struct PcrPolicyBlock {
+    PcrSpec256[] pcrSpecs256;
+    PcrSpec384[] pcrSpecs384;
+}
+
+/// @notice Stored commitment and exact TPM selection bitmaps for one policy block.
+struct PcrPolicyBlockMetadata {
+    bytes32 blockHash;
+    bytes3 pcrSelectBitmap256;
+    bytes3 pcrSelectBitmap384;
+}
+
+/// @notice Normalized TPM Quote PCR selection and its exact signed digest.
+struct PcrCommitment {
+    bytes32 pcrSelect;
+    bytes32 pcrDigest;
+}
+
 /// @notice PCR policy bank or banks evaluated for one platform profile.
 enum PcrBankSelection {
     Sha256,
@@ -68,10 +89,8 @@ struct Attribute {
 struct MeasurementVariant {
     /// @dev Human-readable machine type name (e.g., "n2d-standard-16", "Standard_D4s_v4")
     string name;
-    /// @dev SHA-256 rules for indices the parent profile leaves unpinned.
-    PcrSpec256[] variantPcrs256;
-    /// @dev SHA-384 rules for indices the parent profile leaves unpinned.
-    PcrSpec384[] variantPcrs384;
+    /// @dev Rules for indices the parent profile leaves unpinned.
+    PcrPolicyBlock variantPcrPolicy;
     /// @dev Machine-type-specific attributes (e.g., "machine_series": "n2d", "gpu": "nvidia-t4")
     Attribute[] attributes;
 }
@@ -84,10 +103,8 @@ struct PlatformProfile {
     string name;
     /// @dev Policy bank or banks evaluated for this platform.
     PcrBankSelection pcrBankSelection;
-    /// @dev SHA-256 PCRs constant across all machine types in this platform.
-    PcrSpec256[] invariantPcrs256;
-    /// @dev SHA-384 PCRs constant across all machine types in this platform.
-    PcrSpec384[] invariantPcrs384;
+    /// @dev PCR rules constant across all machine types in this platform.
+    PcrPolicyBlock invariantPcrPolicy;
     /// @dev Platform-wide attributes (e.g., "cloud": "Azure", "tee": "IntelTDX")
     Attribute[] attributes;
 }
@@ -136,10 +153,8 @@ struct WorkloadSpec {
     bytes32[] baseImageIds;
     /// @dev Attribute requirements (ALL must be satisfied for session registration)
     AttributeRequirement[] requirements;
-    /// @dev SHA-256 workload PCR rules.
-    PcrSpec256[] workloadPcrs256;
-    /// @dev SHA-384 workload PCR rules.
-    PcrSpec384[] workloadPcrs384;
+    /// @dev Workload PCR policy rules.
+    PcrPolicyBlock workloadPcrPolicy;
 }
 
 struct ResolvedPcrPolicy {
@@ -148,26 +163,19 @@ struct ResolvedPcrPolicy {
     bytes32 platformProfileId;
     bytes32 measurementVariantId;
     PcrBankSelection pcrBankSelection;
-    PcrSpec256[] invariantPcrs256;
-    PcrSpec256[] variantPcrs256;
-    PcrSpec256[] workloadPcrs256;
-    PcrSpec384[] invariantPcrs384;
-    PcrSpec384[] variantPcrs384;
-    PcrSpec384[] workloadPcrs384;
+    PcrPolicyBlock invariantPcrPolicy;
+    PcrPolicyBlock variantPcrPolicy;
+    PcrPolicyBlock workloadPcrPolicy;
 }
 
-/// @notice Exact PCR rules evaluated for one TPM Quote verification.
-/// @dev SessionRegistry constructs this request in memory. The rule arrays use
-///      canonical source order: invariant, variant, workload, then provider.
-///      Duplicate PCR indexes are allowed. Every rule is evaluated.
+/// @notice Exact named PCR policy blocks evaluated for one TPM Quote verification.
+/// @dev Duplicate PCR indexes across blocks are allowed. Every rule is evaluated.
 struct TpmVerificationRequest {
-    bytes32 workloadId;
-    bytes32 baseImageId;
-    bytes32 platformProfileId;
-    bytes32 measurementVariantId;
     PcrBankSelection pcrBankSelection;
-    PcrSpec256[] pcrs256;
-    PcrSpec384[] pcrs384;
+    PcrPolicyBlock invariantPcrPolicy;
+    PcrPolicyBlock variantPcrPolicy;
+    PcrPolicyBlock workloadPcrPolicy;
+    PcrPolicyBlock providerPcrPolicy;
 }
 
 // ============================================================================

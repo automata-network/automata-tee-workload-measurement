@@ -28,6 +28,8 @@ import {
     CVMSession,
     MeasurementVariant,
     PcrBankSelection,
+    PcrCommitment,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     PlatformProfile,
@@ -1327,8 +1329,7 @@ contract SessionLifecycleTest is Test {
                     awsNitroRootCertHash: bytes32(0),
                     qualifyingData: bytes32(0),
                     documentTimestampSeconds: 0,
-                    pcrDigest: bytes32(0),
-                    verificationRequestCommitment: bytes32(0)
+                    pcrCommitment: PcrCommitment({pcrSelect: bytes32(0), pcrDigest: bytes32(0)})
                 })
             )
         );
@@ -1489,16 +1490,14 @@ contract SessionLifecycleTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: _staticPcr23Policy(),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _staticPcr23Policy(), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: _teeAttributes(key, profileMode)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "test-variant",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: _teeAttributes(key, variantMode)
         });
         ids.baseImageId = baseImageRegistry.registerBaseImage(
@@ -1517,8 +1516,7 @@ contract SessionLifecycleTest is Test {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: _teeRequirements(key, workloadMode),
-            workloadPcrs256: new PcrSpec256[](0),
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -1548,8 +1546,7 @@ contract SessionLifecycleTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: _staticPcr23Policy(),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _staticPcr23Policy(), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: attributes
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
@@ -1563,8 +1560,7 @@ contract SessionLifecycleTest is Test {
         }
         variants[0][0] = MeasurementVariant({
             name: "test-variant",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: variantAttributes
         });
         BaseImageSpec memory baseImage = BaseImageSpec({name: "tdx-tcb-base", version: version, uri: ""});
@@ -1591,8 +1587,7 @@ contract SessionLifecycleTest is Test {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: requirements,
-            workloadPcrs256: new PcrSpec256[](0),
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -1627,16 +1622,14 @@ contract SessionLifecycleTest is Test {
         profiles[0] = PlatformProfile({
             name: "test-platform",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: _staticPcr23Policy(),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _staticPcr23Policy(), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "test-variant",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
 
@@ -1656,8 +1649,7 @@ contract SessionLifecycleTest is Test {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: new AttributeRequirement[](0),
-            workloadPcrs256: new PcrSpec256[](0),
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -1841,8 +1833,7 @@ contract SessionLifecycleTest is Test {
                     awsNitroRootCertHash: bytes32(0),
                     qualifyingData: bytes32(0),
                     documentTimestampSeconds: 0,
-                    pcrDigest: bytes32(0),
-                    verificationRequestCommitment: bytes32(0)
+                    pcrCommitment: PcrCommitment({pcrSelect: bytes32(0), pcrDigest: bytes32(0)})
                 })
             )
         );

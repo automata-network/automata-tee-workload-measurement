@@ -7,6 +7,7 @@ import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
 import {
     AccessMode,
     AttributeRequirement,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     PublicIdentity,
@@ -83,8 +84,7 @@ contract WorkloadRegistryTest is Test {
             baseImageMode: mode,
             baseImageIds: baseImageIds,
             requirements: new AttributeRequirement[](0),
-            workloadPcrs256: new PcrSpec256[](0),
-            workloadPcrs384: new PcrSpec384[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
     }
 }

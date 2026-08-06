@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {AkPubCollateral, AkPubCollateralType, TEEType} from "../types/Evidence.sol";
-import {PublicIdentity} from "../types/Common.sol";
+import {PcrCommitment, PublicIdentity} from "../types/Common.sol";
 
 struct AkCollateralVerificationResult {
     bytes32 akPubFingerprint;
@@ -12,8 +12,7 @@ struct AkCollateralVerificationResult {
     bytes32 awsNitroRootCertHash;
     bytes32 qualifyingData;
     uint64 documentTimestampSeconds;
-    bytes32 pcrDigest;
-    bytes32 verificationRequestCommitment;
+    PcrCommitment pcrCommitment;
 }
 
 interface IAkCollateralVerifier {

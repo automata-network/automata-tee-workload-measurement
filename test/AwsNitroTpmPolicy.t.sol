@@ -18,9 +18,9 @@ import {Bytes48, LibBytes} from "../src/lib/LibBytes.sol";
 import {PcrComparison} from "../src/lib/PcrComparison.sol";
 import {
     PcrBankSelection,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
-    ResolvedPcrPolicy,
     TpmVerificationRequest
 } from "../src/types/Common.sol";
 
@@ -46,8 +46,8 @@ contract SessionRegistryAwsHarness is SessionRegistry {
         pure
         returns (PcrSpec256[] memory pcrs256, PcrSpec384[] memory pcrs384)
     {
-        GeneratedProviderPcrRules memory rules = _gcpProviderPcrRules(extendValue);
-        return (rules.pcrs256, rules.pcrs384);
+        PcrPolicyBlock memory policyBlock = _gcpProviderPcrPolicy(extendValue);
+        return (policyBlock.pcrSpecs256, policyBlock.pcrSpecs384);
     }
 
     function awsProviderPcrRules(bytes32 reportId, PcrBankSelection bankSelection)
@@ -55,18 +55,8 @@ contract SessionRegistryAwsHarness is SessionRegistry {
         pure
         returns (PcrSpec256[] memory pcrs256, PcrSpec384[] memory pcrs384)
     {
-        GeneratedProviderPcrRules memory rules = _awsProviderPcrRules(reportId, bankSelection);
-        return (rules.pcrs256, rules.pcrs384);
-    }
-
-    function buildTpmVerificationRequest(
-        ResolvedPcrPolicy memory policy,
-        PcrSpec256[] memory providerPcrs256,
-        PcrSpec384[] memory providerPcrs384
-    ) external pure returns (TpmVerificationRequest memory) {
-        return _buildTpmVerificationRequest(
-            policy, GeneratedProviderPcrRules({pcrs256: providerPcrs256, pcrs384: providerPcrs384})
-        );
+        PcrPolicyBlock memory policyBlock = _awsProviderPcrPolicy(reportId, bankSelection);
+        return (policyBlock.pcrSpecs256, policyBlock.pcrSpecs384);
     }
 }
 
@@ -166,28 +156,24 @@ contract AwsNitroTpmPolicyTest is Test {
         PcrSpec256[] memory providerPcrs256 = new PcrSpec256[](1);
         providerPcrs256[0] = PcrSpec256({pcrIndex: 15, comparison: providerComparison});
 
-        TpmVerificationRequest memory request = registry.buildTpmVerificationRequest(
-            ResolvedPcrPolicy({
-                workloadId: bytes32(uint256(1)),
-                baseImageId: bytes32(uint256(2)),
-                platformProfileId: bytes32(uint256(3)),
-                measurementVariantId: bytes32(uint256(4)),
-                pcrBankSelection: PcrBankSelection.Sha256,
-                invariantPcrs256: invariantPcrs256,
-                variantPcrs256: new PcrSpec256[](0),
-                workloadPcrs256: new PcrSpec256[](0),
-                invariantPcrs384: new PcrSpec384[](0),
-                variantPcrs384: new PcrSpec384[](0),
-                workloadPcrs384: new PcrSpec384[](0)
-            }),
-            providerPcrs256,
-            new PcrSpec384[](0)
-        );
+        TpmVerificationRequest memory request = TpmVerificationRequest({
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: invariantPcrs256, pcrSpecs384: new PcrSpec384[](0)}),
+            variantPcrPolicy: _emptyPcrPolicyBlock(),
+            workloadPcrPolicy: _emptyPcrPolicyBlock(),
+            providerPcrPolicy: PcrPolicyBlock({pcrSpecs256: providerPcrs256, pcrSpecs384: new PcrSpec384[](0)})
+        });
 
-        assertEq(request.pcrs256.length, 2);
-        assertEq(request.pcrs256[0].pcrIndex, 15);
-        assertEq(request.pcrs256[0].comparison, publishedComparison);
-        assertEq(request.pcrs256[1].pcrIndex, 15);
-        assertEq(request.pcrs256[1].comparison, providerComparison);
+        assertEq(request.invariantPcrPolicy.pcrSpecs256.length, 1);
+        assertEq(request.providerPcrPolicy.pcrSpecs256.length, 1);
+        assertEq(request.invariantPcrPolicy.pcrSpecs256[0].pcrIndex, 15);
+        assertEq(request.invariantPcrPolicy.pcrSpecs256[0].comparison, publishedComparison);
+        assertEq(request.providerPcrPolicy.pcrSpecs256[0].pcrIndex, 15);
+        assertEq(request.providerPcrPolicy.pcrSpecs256[0].comparison, providerComparison);
+    }
+
+    function _emptyPcrPolicyBlock() private pure returns (PcrPolicyBlock memory policyBlock) {
+        policyBlock.pcrSpecs256 = new PcrSpec256[](0);
+        policyBlock.pcrSpecs384 = new PcrSpec384[](0);
     }
 }

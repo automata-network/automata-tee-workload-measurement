@@ -13,6 +13,7 @@ import {
     PlatformProfile,
     MeasurementVariant,
     PcrBankSelection,
+    PcrPolicyBlock,
     PcrSpec256,
     PcrSpec384,
     Attribute,
@@ -74,8 +75,7 @@ contract BaseImageRegistryHierarchyTest is Test {
         profiles[0] = PlatformProfile({
             name: profileName,
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: new PcrSpec256[](0),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
 
@@ -83,8 +83,7 @@ contract BaseImageRegistryHierarchyTest is Test {
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: variantName,
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
 
@@ -122,15 +121,13 @@ contract BaseImageRegistryHierarchyTest is Test {
         profiles[0] = PlatformProfile({
             name: "gcp-tdx",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: new PcrSpec256[](0),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         profiles[1] = PlatformProfile({
             name: "gcp-snp",
             pcrBankSelection: PcrBankSelection.Sha256,
-            invariantPcrs256: new PcrSpec256[](0),
-            invariantPcrs384: new PcrSpec384[](0),
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
 
@@ -138,15 +135,13 @@ contract BaseImageRegistryHierarchyTest is Test {
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
             name: "tdx-var",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
         variants[1] = new MeasurementVariant[](1);
         variants[1][0] = MeasurementVariant({
             name: "snp-var",
-            variantPcrs256: new PcrSpec256[](0),
-            variantPcrs384: new PcrSpec384[](0),
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
             attributes: new Attribute[](0)
         });
 

@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity} from "../../types/Common.sol";
+import {
+    Attribute,
+    BaseImageSpec,
+    MeasurementVariant,
+    PcrBankSelection,
+    PcrPolicyBlockMetadata,
+    PlatformProfile,
+    PublicIdentity
+} from "../../types/Common.sol";
 
 /// @dev implements mapping (bytes32 baseImageId => BaseImageSpecStorage)
 struct BaseImageSpecStorage {
@@ -16,6 +24,7 @@ struct BaseImageSpecStorage {
 struct PlatformProfileStorage {
     bool exists;
     PlatformProfile platformProfile;
+    PcrPolicyBlockMetadata invariantPcrPolicyMetadata;
     bytes32[] variantIds;
 }
 
@@ -23,6 +32,7 @@ struct PlatformProfileStorage {
 struct MeasurementVariantStorage {
     bool exists;
     MeasurementVariant measurementVariant;
+    PcrPolicyBlockMetadata variantPcrPolicyMetadata;
 }
 
 interface IBaseImageRegistry {
@@ -157,6 +167,20 @@ interface IBaseImageRegistry {
             BaseImageSpec memory baseImage,
             PlatformProfile memory platformProfile,
             MeasurementVariant memory variant
+        );
+
+    /// @notice Get the lightweight policy metadata and attributes for one valid hierarchy.
+    /// @dev SessionRegistry uses this function for ZK verification without loading the stored
+    ///      comparison blobs. The function enforces the same parent-child hierarchy as getVariant.
+    function getVariantPolicyMetadata(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
+        external
+        view
+        returns (
+            PcrBankSelection pcrBankSelection,
+            Attribute[] memory platformAttributes,
+            Attribute[] memory variantAttributes,
+            PcrPolicyBlockMetadata memory invariantPcrPolicyMetadata,
+            PcrPolicyBlockMetadata memory variantPcrPolicyMetadata
         );
 
     /// @notice Get the owner fingerprint of a registered base image

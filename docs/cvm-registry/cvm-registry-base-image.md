@@ -43,13 +43,15 @@ struct BaseImageSpecStorage {
 
 struct PlatformProfileStorage {
     bool exists;
-    PlatformProfile platformProfile;  // name, invariants[], attributes[]
+    PlatformProfile platformProfile;
+    PcrPolicyBlockMetadata invariantPcrPolicyMetadata;
     bytes32[] variantIds;
 }
 
 struct MeasurementVariantStorage {
     bool exists;
-    MeasurementVariant measurementVariant;  // name, overridePcrs[], attributes[]
+    MeasurementVariant measurementVariant;
+    PcrPolicyBlockMetadata variantPcrPolicyMetadata;
 }
 ```
 
@@ -61,11 +63,12 @@ BaseImage (e.g. "automata-linux v0.1.6")
   ├── owner: bytes32 fingerprint
   └── PlatformProfile[] (e.g. "gcp-tdx", "azure-snp")
         ├── name: string
-        ├── invariants: PcrSpec[]     (platform baseline by convention)
+        ├── pcrBankSelection: PcrBankSelection
+        ├── invariantPcrPolicy: PcrPolicyBlock
         ├── attributes: Attribute[]   (key-value metadata)
         └── MeasurementVariant[] (e.g. "n2d-standard-2", "c3-standard-4")
               ├── name: string
-              ├── overridePcrs: PcrSpec[]  (indices the profile leaves unpinned; disjoint from invariants)
+              ├── variantPcrPolicy: PcrPolicyBlock
               └── attributes: Attribute[] (replaces profile attrs at matching key)
 ```
 
@@ -126,10 +129,14 @@ function addPlatformVariants(
 ) external
 ```
 
-- Append-only for new metadata; lenient about resubmitted profile metadata:
-  - New profile ids → stored with their `invariants` + `attributes`; emits `PlatformProfileRegistered`.
-  - Existing profile ids → submitted `invariants` and `attributes` are silently dropped (§14.2). The stored profile metadata is immutable post-registration; only the variant set under that profile can grow. Callers can pass the full PlatformProfile struct from their config without having to clear the metadata fields first.
-  - New variant ids → stored with their `overridePcrs` + `attributes`; emits `MeasurementVariantRegistered`.
+- Append-only for new metadata:
+  - New profile ids → store the bank selection, invariant policy block,
+    invariant block metadata, and attributes; emit `PlatformProfileRegistered`.
+  - Existing profile ids → require the submitted bank selection, invariant
+    policy block hash, and attributes to equal the stored profile. Only the
+    variant set may grow.
+  - New variant ids → store the variant policy block, variant block
+    metadata, and attributes; emit `MeasurementVariantRegistered`.
   - Existing variant ids → reverts `MeasurementVariantAlreadyExists(variantId)`.
   - Every new profile and variant may contain fully validated custom and reserved attributes. A variant attribute replaces the matching stored profile attribute for sessions that select that variant.
   - Adding a variant does not change an existing policy branch. The new variant id is immutable after it is stored. The verified TEE report and workload policy still gate every new session that selects it.
@@ -138,11 +145,11 @@ function addPlatformVariants(
 #### Scope of the append-only guarantee
 
 Append-only immutability is **per variant id**, not per base image. A session
-records its `measurementVariantId`, and that branch's stored `overridePcrs` and
+records its `measurementVariantId`, and that branch's stored `variantPcrPolicy` and
 attributes never change. It does not follow that the set of policies reachable
 under a given `baseImageId` is fixed: the owner may append a further variant
 that declares different reserved TEE attributes, and a registrant is free to
-select it. A variant with an empty `overridePcrs` adds no measurement
+select it. A variant with an empty `variantPcrPolicy` adds no measurement
 constraint of its own.
 
 Two limits bound what an appended branch can do. The workload leg is evaluated
@@ -237,7 +244,8 @@ Contract starts **paused** (`_pause()` called in `initialize`). Owner must eithe
 ## Internal Helpers
 
 - `_checkRegistrationAllowed(ownerFingerprint)` -- Reverts NotWhitelisted if paused AND not whitelisted
-- `_validatePcrSpecsSorted(PcrSpec[])` -- Checks ascending order, index range (< 24), exact-one `STATIC` cardinality, and non-empty `DYNAMIC_*` cardinality
+- `_validatePcrSpecs256Sorted(PcrSpec256[])` -- Checks strict ascending order, supported indexes, and non-empty comparisons
+- `_validatePcrSpecs384Sorted(PcrSpec384[])` -- Applies the same checks to SHA-384 rules
 - `_validateAttributes(Attribute[])` -- Validates reserved verified TEE attribute values and checks attribute-key uniqueness
 
 ## Implementation Nuance

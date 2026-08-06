@@ -3,7 +3,15 @@ pragma solidity ^0.8.27;
 
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {PcrSpec256, PcrSpec384, PublicIdentity, TpmVerificationRequest} from "../types/Common.sol";
+import {
+    PcrBankSelection,
+    PcrCommitment,
+    PcrPolicyBlock,
+    PcrSpec256,
+    PcrSpec384,
+    PublicIdentity,
+    TpmVerificationRequest
+} from "../types/Common.sol";
 import {
     PcrValue256,
     PcrValue384,
@@ -13,12 +21,12 @@ import {
     TpmReportType,
     VerificationBackendType
 } from "../types/Evidence.sol";
-import {TPM_VERIFICATION_REQUEST_COMMITMENT_DOMAIN} from "../types/Constants.sol";
 import {ProgramBoundZkProof, TpmQuoteJournalV1, ZkProofType} from "../types/Zk.sol";
 import {IZkVerifierRegistry} from "../interfaces/registries/IZkVerifierRegistry.sol";
 import {ITpmQuoteZkVerifierAdapter} from "../interfaces/zk/IZkVerifierAdapters.sol";
 import {Bytes48, LibBytes} from "../lib/LibBytes.sol";
 import {PcrComparison} from "../lib/PcrComparison.sol";
+import {PcrPolicy} from "../lib/PcrPolicy.sol";
 import {LibKey} from "../lib/LibKey.sol";
 import {TpmBase} from "./TpmBase.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
@@ -28,8 +36,8 @@ struct TpmQuoteVerificationResult {
     bytes32 akPubFingerprint;
     bytes32 qualifyingData;
     bytes32 tpmSignatureHash;
-    bytes32 pcrDigest;
-    bytes32 verificationRequestCommitment;
+    PcrCommitment pcrCommitment;
+    bytes32 policyCommitment;
 }
 
 struct TpmCertifyVerificationResult {
@@ -43,6 +51,9 @@ struct QuoteSelection {
     bool sha384Present;
     uint32 sha256Mask;
     uint32 sha384Mask;
+    bytes3 sha256Bitmap;
+    bytes3 sha384Bitmap;
+    bytes32 pcrSelect;
     bytes32 pcrDigest;
 }
 
@@ -99,7 +110,8 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
     error PcrIndexedEventSetMismatch(uint16 algorithm, uint8 pcrIndex, uint16 eventIndex);
     error AttestationKeyFingerprintMismatch(bytes32 measured, bytes32 expected);
     error QualifyingDataMismatch(bytes32 measured, bytes32 expected);
-    error VerificationRequestCommitmentMismatch(bytes32 measured, bytes32 expected);
+    error PolicyCommitmentMismatch(bytes32 measured, bytes32 expected);
+    error PcrSelectCommitmentMismatch(bytes32 measured, bytes32 expected);
     error TpmQuoteBackendDoesNotSatisfyPolicy(VerificationBackendType backend);
     error TpmaObjectForbiddenBitsSet(uint32 actualAttrs, uint32 forbiddenBitsSet);
     error TpmtPublicTooShort(uint256 length);
@@ -118,7 +130,9 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
         TpmReport memory tpmReport,
         PublicIdentity memory akPub,
         bytes32 expectedQualifyingData,
-        TpmVerificationRequest memory request
+        TpmVerificationRequest memory request,
+        bytes32 expectedPolicyCommitment,
+        bytes32 expectedPcrSelect
     ) public returns (TpmQuoteVerificationResult memory result) {
         if (tpmReport.tpmReportType != TpmReportType.TpmQuote) {
             revert UnexpectedTpmReportType(tpmReport.tpmReportType, TpmReportType.TpmQuote);
@@ -126,7 +140,9 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
         _requireQuoteBackendForRequest(tpmReport.verificationBackendType, request);
 
         if (tpmReport.verificationBackendType == VerificationBackendType.Solidity) {
-            result = _verifyRawTpmQuote(tpmReport.data, akPub, expectedQualifyingData, request);
+            result = _verifyRawTpmQuote(
+                tpmReport.data, akPub, expectedQualifyingData, request, expectedPolicyCommitment, expectedPcrSelect
+            );
         } else if (tpmReport.verificationBackendType == VerificationBackendType.ZkSuccinct) {
             ProgramBoundZkProof memory proof = abi.decode(tpmReport.data, (ProgramBoundZkProof));
             address adapter = zkVerifierRegistry.resolveVerifierAdapter(
@@ -137,13 +153,19 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
                 akPubFingerprint: journal.akPubFingerprint,
                 qualifyingData: journal.qualifyingData,
                 tpmSignatureHash: journal.tpmSignatureHash,
-                pcrDigest: journal.pcrDigest,
-                verificationRequestCommitment: journal.verificationRequestCommitment
+                pcrCommitment: journal.pcrCommitment,
+                policyCommitment: journal.policyCommitment
             });
         } else {
             revert TpmReportBackendNotConfigured(tpmReport.tpmReportType, tpmReport.verificationBackendType);
         }
-        _verifyCommonQuoteResult(result, LibKey.computeKeyFingerprint(akPub), expectedQualifyingData, request);
+        _verifyCommonQuoteResult(
+            result,
+            LibKey.computeKeyFingerprint(akPub),
+            expectedQualifyingData,
+            expectedPolicyCommitment,
+            expectedPcrSelect
+        );
     }
 
     function verifyTpmCertify(TpmReport memory tpmReport, PublicIdentity memory akPub)
@@ -179,7 +201,9 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
         bytes memory encodedEvidence,
         PublicIdentity memory akPub,
         bytes32 expectedQualifyingData,
-        TpmVerificationRequest memory request
+        TpmVerificationRequest memory request,
+        bytes32 expectedPolicyCommitment,
+        bytes32 expectedPcrSelect
     ) private returns (TpmQuoteVerificationResult memory result) {
         TpmQuoteEvidence memory evidence = abi.decode(encodedEvidence, (TpmQuoteEvidence));
         CertPubkey memory akCertPubkey = LibKey.publicIdentityToCertPubkey(akPub);
@@ -204,33 +228,31 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
             akPubFingerprint: LibKey.computeKeyFingerprint(akPub),
             qualifyingData: qualifyingData,
             tpmSignatureHash: keccak256(evidence.tpmSignature),
-            pcrDigest: selection.pcrDigest,
-            verificationRequestCommitment: computeVerificationRequestCommitment(request)
+            pcrCommitment: PcrCommitment({pcrSelect: selection.pcrSelect, pcrDigest: selection.pcrDigest}),
+            policyCommitment: expectedPolicyCommitment
         });
+        if (selection.pcrSelect != expectedPcrSelect) {
+            revert PcrSelectCommitmentMismatch(selection.pcrSelect, expectedPcrSelect);
+        }
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
-    function computeVerificationRequestCommitment(TpmVerificationRequest memory request) public pure returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                TPM_VERIFICATION_REQUEST_COMMITMENT_DOMAIN,
-                request.workloadId,
-                request.baseImageId,
-                request.platformProfileId,
-                request.measurementVariantId,
-                request.pcrBankSelection,
-                request.pcrs256,
-                request.pcrs384
-            )
-        );
+    function computePolicyCommitment(
+        bytes32 invariantBlockHash,
+        bytes32 variantBlockHash,
+        bytes32 workloadBlockHash,
+        bytes32 providerBlockHash
+    ) public pure returns (bytes32) {
+        return PcrPolicy.policyCommitment(invariantBlockHash, variantBlockHash, workloadBlockHash, providerBlockHash);
     }
 
     function _verifyCommonQuoteResult(
         TpmQuoteVerificationResult memory result,
         bytes32 akPubFingerprint,
         bytes32 expectedQualifyingData,
-        TpmVerificationRequest memory request
+        bytes32 expectedPolicyCommitment,
+        bytes32 expectedPcrSelect
     ) private pure {
         if (result.akPubFingerprint != akPubFingerprint) {
             revert AttestationKeyFingerprintMismatch(result.akPubFingerprint, akPubFingerprint);
@@ -238,9 +260,11 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
         if (result.qualifyingData != expectedQualifyingData) {
             revert QualifyingDataMismatch(result.qualifyingData, expectedQualifyingData);
         }
-        bytes32 expectedCommitment = computeVerificationRequestCommitment(request);
-        if (result.verificationRequestCommitment != expectedCommitment) {
-            revert VerificationRequestCommitmentMismatch(result.verificationRequestCommitment, expectedCommitment);
+        if (result.policyCommitment != expectedPolicyCommitment) {
+            revert PolicyCommitmentMismatch(result.policyCommitment, expectedPolicyCommitment);
+        }
+        if (result.pcrCommitment.pcrSelect != expectedPcrSelect) {
+            revert PcrSelectCommitmentMismatch(result.pcrCommitment.pcrSelect, expectedPcrSelect);
         }
     }
 
@@ -254,11 +278,19 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function _hasZkOnlySha384Rule(TpmVerificationRequest memory request) private pure returns (bool) {
-        for (uint256 i; i < request.pcrs384.length; ++i) {
-            if (
-                _comparisonType(TPM_ALG_SHA384, request.pcrs384[i].pcrIndex, request.pcrs384[i].comparison)
-                    != PcrComparison.STATIC
-            ) return true;
+        if (request.pcrBankSelection == PcrBankSelection.Sha256) return false;
+        return _blockHasZkOnlySha384Rule(request.invariantPcrPolicy)
+            || _blockHasZkOnlySha384Rule(request.variantPcrPolicy)
+            || _blockHasZkOnlySha384Rule(request.workloadPcrPolicy)
+            || _blockHasZkOnlySha384Rule(request.providerPcrPolicy);
+    }
+
+    function _blockHasZkOnlySha384Rule(PcrPolicyBlock memory policyBlock) private pure returns (bool) {
+        for (uint256 i; i < policyBlock.pcrSpecs384.length; ++i) {
+            PcrSpec384 memory pcrSpec = policyBlock.pcrSpecs384[i];
+            if (_comparisonType(TPM_ALG_SHA384, pcrSpec.pcrIndex, pcrSpec.comparison) != PcrComparison.STATIC) {
+                return true;
+            }
         }
         return false;
     }
@@ -282,6 +314,10 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
             _requireAvailable(quote, offset + 3, size);
             uint32 mask = uint32(uint8(quote[offset + 3])) | (uint32(uint8(quote[offset + 4])) << 8)
                 | (uint32(uint8(quote[offset + 5])) << 16);
+            bytes3 bitmap = bytes3(
+                (uint24(uint8(quote[offset + 3])) << 16) | (uint24(uint8(quote[offset + 4])) << 8)
+                    | uint24(uint8(quote[offset + 5]))
+            );
             if (mask == 0) revert EmptyPcrSelection(algorithm);
             if ((mask & ~SUPPORTED_PCR_MASK) != 0) revert UnsupportedPcrSelection(algorithm, mask);
 
@@ -289,15 +325,19 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
                 if (selection.sha256Present || selection.sha384Present) revert InvalidPcrBankOrder();
                 selection.sha256Present = true;
                 selection.sha256Mask = mask;
+                selection.sha256Bitmap = bitmap;
             } else if (algorithm == TPM_ALG_SHA384) {
                 if (selection.sha384Present) revert InvalidPcrBankOrder();
                 selection.sha384Present = true;
                 selection.sha384Mask = mask;
+                selection.sha384Bitmap = bitmap;
             } else {
                 revert InvalidPcrBank(algorithm);
             }
             offset += 3 + size;
         }
+
+        selection.pcrSelect = PcrPolicy.packPcrSelect(selection.sha256Bitmap, selection.sha384Bitmap);
 
         _requireAvailable(quote, offset, 2);
         uint16 digestLength = uint16(LibBytes.readBytes2(quote, offset));
@@ -351,8 +391,18 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
         pure
         returns (uint32 mask256, uint32 mask384)
     {
-        mask256 = _addRuleIndexes256(mask256, request.pcrs256);
-        mask384 = _addRuleIndexes384(mask384, request.pcrs384);
+        if (request.pcrBankSelection != PcrBankSelection.Sha384) {
+            mask256 = _addBlockRuleIndexes256(mask256, request.invariantPcrPolicy);
+            mask256 = _addBlockRuleIndexes256(mask256, request.variantPcrPolicy);
+            mask256 = _addBlockRuleIndexes256(mask256, request.workloadPcrPolicy);
+            mask256 = _addBlockRuleIndexes256(mask256, request.providerPcrPolicy);
+        }
+        if (request.pcrBankSelection != PcrBankSelection.Sha256) {
+            mask384 = _addBlockRuleIndexes384(mask384, request.invariantPcrPolicy);
+            mask384 = _addBlockRuleIndexes384(mask384, request.variantPcrPolicy);
+            mask384 = _addBlockRuleIndexes384(mask384, request.workloadPcrPolicy);
+            mask384 = _addBlockRuleIndexes384(mask384, request.providerPcrPolicy);
+        }
     }
 
     function _requireExactSelection(QuoteSelection memory selection, uint32 mask256, uint32 mask384) private pure {
@@ -365,8 +415,24 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function _evaluateRequest(TpmQuoteEvidence memory evidence, TpmVerificationRequest memory request) private pure {
-        _evaluateRules256(evidence.pcrValues256, request.pcrs256, evidence.pcr0StartupLocality);
-        _evaluateRules384(evidence.pcrValues384, request.pcrs384);
+        if (request.pcrBankSelection != PcrBankSelection.Sha384) {
+            _evaluateRules256(
+                evidence.pcrValues256, request.invariantPcrPolicy.pcrSpecs256, evidence.pcr0StartupLocality
+            );
+            _evaluateRules256(evidence.pcrValues256, request.variantPcrPolicy.pcrSpecs256, evidence.pcr0StartupLocality);
+            _evaluateRules256(
+                evidence.pcrValues256, request.workloadPcrPolicy.pcrSpecs256, evidence.pcr0StartupLocality
+            );
+            _evaluateRules256(
+                evidence.pcrValues256, request.providerPcrPolicy.pcrSpecs256, evidence.pcr0StartupLocality
+            );
+        }
+        if (request.pcrBankSelection != PcrBankSelection.Sha256) {
+            _evaluateRules384(evidence.pcrValues384, request.invariantPcrPolicy.pcrSpecs384);
+            _evaluateRules384(evidence.pcrValues384, request.variantPcrPolicy.pcrSpecs384);
+            _evaluateRules384(evidence.pcrValues384, request.workloadPcrPolicy.pcrSpecs384);
+            _evaluateRules384(evidence.pcrValues384, request.providerPcrPolicy.pcrSpecs384);
+        }
     }
 
     function _evaluateRules256(PcrValue256[] memory values, PcrSpec256[] memory rules, uint8 locality) private pure {
@@ -541,12 +607,20 @@ contract TpmVerifier is TpmBase, OwnableUpgradeable, UUPSUpgradeable {
         return mask;
     }
 
+    function _addBlockRuleIndexes256(uint32 mask, PcrPolicyBlock memory policyBlock) private pure returns (uint32) {
+        return _addRuleIndexes256(mask, policyBlock.pcrSpecs256);
+    }
+
     function _addRuleIndexes384(uint32 mask, PcrSpec384[] memory rules) private pure returns (uint32) {
         for (uint256 i; i < rules.length; ++i) {
             _requireSupportedIndex(TPM_ALG_SHA384, rules[i].pcrIndex);
             mask |= uint32(1) << rules[i].pcrIndex;
         }
         return mask;
+    }
+
+    function _addBlockRuleIndexes384(uint32 mask, PcrPolicyBlock memory policyBlock) private pure returns (uint32) {
+        return _addRuleIndexes384(mask, policyBlock.pcrSpecs384);
     }
 
     function _findValue256(PcrValue256[] memory values, uint8 index) private pure returns (PcrValue256 memory) {
