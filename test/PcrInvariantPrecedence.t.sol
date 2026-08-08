@@ -251,8 +251,13 @@ contract PcrInvariantPrecedenceTest is Test {
     // Helpers
     // ────────────────────────────────────────────────────────────────────────
 
-    function _otherBaseImageId() private pure returns (bytes32) {
-        return keccak256(abi.encode(keccak256("CVM_BASEIMAGE_V1"), "invariant-base", "v2"));
+    /// Mirrors the on-chain derivation, which is qualified by the publisher's
+    /// owner fingerprint, so a name belongs to one publisher rather than to
+    /// whoever registered it first.
+    function _otherBaseImageId() private view returns (bytes32) {
+        return keccak256(
+            abi.encode(keccak256("CVM_BASEIMAGE_V1"), LibKey.computeKeyFingerprint(imageOwner), "invariant-base", "v2")
+        );
     }
 
     function _pcr(uint8 index, bytes32 value) private pure returns (PcrSpec256[] memory specs) {

@@ -40,7 +40,9 @@ interface IWorkloadRegistry {
 
     /// @notice Register a new workload with policy and PCR specifications (immutable after registration)
     /// @dev Workload ID is computed as:
-    ///      keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version))
+    ///      keccak256(abi.encode(WORKLOAD_DOMAIN, ownerFingerprint, spec.name, spec.version))
+    ///      The owner fingerprint qualifies the name, so each publisher has its own
+    ///      name space and a name cannot be squatted across publishers.
     /// @param spec Complete workload specification (name, version, policy, pcrs)
     /// @param opExpiresAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the workload owner

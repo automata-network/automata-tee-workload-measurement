@@ -128,7 +128,14 @@ impl BaseImageRegistry {
         measurement_variants: Vec<Vec<MeasurementVariant>>,
         op_expiry_seconds: u64,
     ) -> Result<BaseImageResult> {
-        let image_id = Self::get_image_id(&AppRef::new(&spec.name, &spec.version));
+        // The publisher is part of the identifier, so the owner identity has to
+        // be computed before it rather than after the duplicate check.
+        let owner_identity = PublicIdentity::secp256k1(signer);
+        let image_id = Self::get_image_id(&AppRef::new(
+            owner_identity.fingerprint(),
+            &spec.name,
+            &spec.version,
+        ));
         for item in &platform_profiles {
             let profile_id = Self::get_platform_profile_id(image_id, &item.name);
             for variant in measurement_variants.iter().flatten() {

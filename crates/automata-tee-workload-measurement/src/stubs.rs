@@ -151,6 +151,24 @@ impl PublicIdentity {
     }
 }
 
+/// Fingerprint of an ES256K private key given as hex, with or without `0x`.
+///
+/// This is the publisher component of every identifier the key can register, so
+/// every tool that holds a key derives its name space through here. It lives
+/// beside the fingerprint definition rather than in each caller: two
+/// implementations that drifted would give one key two publishers, and the
+/// resulting identifiers would be registered to nobody.
+///
+/// The key is borrowed and never retained; only the public fingerprint is
+/// returned.
+pub fn es256k_fingerprint(private_key_hex: &str) -> Result<B256> {
+    let raw = private_key_hex
+        .strip_prefix("0x")
+        .unwrap_or(private_key_hex);
+    let signer: PrivateKeySigner = raw.parse().context("not a valid es256k private key")?;
+    Ok(PublicIdentity::secp256k1(&signer).fingerprint())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AlgoId, KEY_DOMAIN, PublicIdentity};

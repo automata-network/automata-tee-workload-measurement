@@ -166,16 +166,22 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
             }
         }
 
-        // Compute base image ID
-        baseImageId = keccak256(abi.encode(BASEIMAGE_DOMAIN, spec.name, spec.version));
+        // The owner fingerprint is an input to the identifier, so it must be
+        // computed before it. The previous order deliberately hashed the
+        // identity only after the duplicate check, to avoid paying for it on a
+        // path about to revert; that optimization is no longer possible, and
+        // every duplicate revert now costs one extra keccak256. Accepted: it
+        // buys a per-publisher name space.
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
-        // Check for duplicate
+        // Compute base image ID, qualified by the publisher
+        baseImageId = keccak256(abi.encode(BASEIMAGE_DOMAIN, ownerFingerprint, spec.name, spec.version));
+
+        // Check for duplicate. This now means "you have already registered this
+        // name and version", not "someone has claimed this name".
         if (_baseImages[baseImageId].exists) {
             revert BaseImageAlreadyExists(baseImageId);
         }
-
-        // Compute owner fingerprint after duplicate check
-        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
         // Check whitelist if paused
         _checkRegistrationAllowed(ownerFingerprint);
