@@ -2,7 +2,7 @@ use alloy::{
     primitives::{B256, Bytes, keccak256},
     sol_types::SolValue,
 };
-use anyhow::ensure;
+use anyhow::{bail, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::sync::LazyLock;
 
@@ -135,23 +135,46 @@ pub fn tee_attribute_boolean_from_value(value: B256) -> Option<bool> {
     }
 }
 
-#[derive(Clone, Debug)]
+/// A publisher-qualified reference to a registered base image or workload.
+///
+/// The publisher is the owner fingerprint,
+/// `keccak256(abi.encode(KEY_DOMAIN, identity.typeId, identity.key))`, and it is
+/// part of the derived identifier rather than metadata beside it. Without it the
+/// name space is flat and shared: a `WorkloadSpec.baseImageIds` entry would name
+/// a name-and-version pair and nothing more, an identity anyone can claim to
+/// speak for. On chain that gap is closed outside the identifier by registration
+/// access control, but an offline verifier reading a signed archive reaches none
+/// of that, so the binding has to live in the identifier itself.
+///
+/// One `AppRef` serves both registries, so base-image and workload identifiers
+/// share this grammar by construction.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppRef {
+    /// Owner fingerprint of the publisher that registered this name.
+    pub publisher: B256,
     pub name: String,
     pub version: String,
 }
 
 impl AppRef {
-    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
+    pub fn new(publisher: B256, name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
+            publisher,
             name: name.into(),
             version: version.into(),
         }
     }
 
     pub fn id(&self, domain: &str) -> B256 {
-        // Compute workloadId as keccak256(abi.encode(name, version))
-        keccak256((keccak256(domain), self.name.clone(), self.version.clone()).abi_encode_params())
+        keccak256(
+            (
+                keccak256(domain),
+                self.publisher,
+                self.name.clone(),
+                self.version.clone(),
+            )
+                .abi_encode_params(),
+        )
     }
 }
 
@@ -177,23 +200,62 @@ impl<'de> Deserialize<'de> for AppRef {
 impl std::str::FromStr for AppRef {
     type Err = anyhow::Error;
 
+    /// Parse the canonical form `<publisher>/<name>:<version>` only.
+    ///
+    /// A two-part `name:version` reference is **rejected outright** rather than
+    /// accepted with a zero or defaulted publisher. Tolerating the old form
+    /// would let every existing manifest keep parsing while nothing was
+    /// actually bound, so the change would ship without taking effect. There is
+    /// no migration, so hard rejection costs nothing.
+    ///
+    /// Publisher aliases are not resolved here. This type has no business
+    /// reading operator configuration, and a wire type's `FromStr` must be
+    /// total and pure; expansion is a separate step in the command and
+    /// configuration layer that runs before this parse.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.splitn(2, ':').collect();
+        let Some((publisher, rest)) = s.split_once('/') else {
+            bail!(
+                "expected format '<publisher>/<name>:<version>', got '{}'; \
+                 a reference without a publisher is no longer accepted",
+                s
+            );
+        };
         ensure!(
-            parts.len() == 2,
-            "Expected format 'name:version', got '{}'",
-            s
+            publisher.len() == 66 && publisher.starts_with("0x"),
+            "publisher must be '0x' followed by 64 lowercase hexadecimal characters, got '{}'",
+            publisher
         );
+        ensure!(
+            publisher[2..]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "publisher must be lowercase hexadecimal, got '{}'",
+            publisher
+        );
+        let publisher: B256 = publisher
+            .parse()
+            .map_err(|error| anyhow::anyhow!("invalid publisher fingerprint: {error}"))?;
+        let Some((name, version)) = rest.split_once(':') else {
+            bail!(
+                "expected format '<publisher>/<name>:<version>', got '{}'",
+                s
+            );
+        };
+        ensure!(!name.is_empty(), "name must not be empty in '{}'", s);
+        ensure!(!version.is_empty(), "version must not be empty in '{}'", s);
         Ok(AppRef {
-            name: parts[0].to_string(),
-            version: parts[1].to_string(),
+            publisher,
+            name: name.to_string(),
+            version: version.to_string(),
         })
     }
 }
 
 impl std::fmt::Display for AppRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.name, self.version)
+        // The fingerprint is never truncated: it is the binding, and shortening
+        // it reintroduces the collision this grammar removes.
+        write!(f, "{}/{}:{}", self.publisher, self.name, self.version)
     }
 }
 
@@ -416,5 +478,98 @@ mod tee_attribute_tests {
         );
         assert_eq!(tdx_tcb_status_names(0), None);
         assert_eq!(tdx_tcb_status_names(0x401), None);
+    }
+}
+
+#[cfg(test)]
+mod app_ref_tests {
+    use super::AppRef;
+    use alloy::primitives::{B256, b256};
+
+    const PUBLISHER: B256 =
+        b256!("9f2c1d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f");
+
+    fn canonical() -> String {
+        format!("{PUBLISHER}/fedora-oci:v0.0.16")
+    }
+
+    /// The whole change depends on this. Accepting a two-part reference with a
+    /// zero or defaulted publisher would let every existing manifest keep
+    /// parsing while nothing was actually bound, and the change would ship
+    /// without taking effect.
+    #[test]
+    fn a_reference_without_a_publisher_is_rejected() {
+        for unqualified in [
+            "fedora-oci:v0.0.16",
+            "automata-linux:v0.2.8-debug",
+            ":v1",
+            "name:",
+        ] {
+            let error = unqualified
+                .parse::<AppRef>()
+                .expect_err("an unqualified reference must not parse");
+            assert!(
+                error.to_string().contains("publisher"),
+                "the failure must say what is missing; got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_canonical_form_round_trips() {
+        let parsed: AppRef = canonical().parse().expect("canonical reference");
+        assert_eq!(parsed.publisher, PUBLISHER);
+        assert_eq!(parsed.name, "fedora-oci");
+        assert_eq!(parsed.version, "v0.0.16");
+        assert_eq!(parsed.to_string(), canonical());
+    }
+
+    /// The fingerprint is the binding, so a shortened one is refused rather
+    /// than padded or accepted.
+    #[test]
+    fn a_truncated_or_malformed_publisher_is_rejected() {
+        for bad in [
+            "0x9f2c/name:v1",
+            "9f2c1d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f/name:v1",
+            "0X9F2C1D3E4A5B6C7D8E9F0A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F/name:v1",
+            "0xzzzc1d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f/name:v1",
+        ] {
+            assert!(
+                bad.parse::<AppRef>().is_err(),
+                "a malformed publisher must be rejected: {bad}"
+            );
+        }
+    }
+
+    /// The publisher is part of the identifier, not metadata beside it: the
+    /// same name and version registered by two publishers are two identifiers.
+    #[test]
+    fn the_publisher_changes_the_identifier() {
+        let mine = AppRef::new(PUBLISHER, "fedora-oci", "v0.0.16");
+        let theirs = AppRef::new(B256::repeat_byte(0xab), "fedora-oci", "v0.0.16");
+        assert_ne!(
+            mine.id("CVM_BASEIMAGE_V1"),
+            theirs.id("CVM_BASEIMAGE_V1"),
+            "the same name under a different publisher must be a different identifier"
+        );
+    }
+
+    /// One `AppRef` serves both registries, and the domain still separates them.
+    #[test]
+    fn the_domain_still_separates_the_two_registries() {
+        let reference = AppRef::new(PUBLISHER, "shared-name", "v1");
+        assert_ne!(
+            reference.id("CVM_BASEIMAGE_V1"),
+            reference.id("CVM_WORKLOAD_V1")
+        );
+    }
+
+    #[test]
+    fn serialization_uses_the_canonical_form() {
+        let reference: AppRef = canonical().parse().unwrap();
+        let encoded = serde_json::to_string(&reference).expect("serialize");
+        assert_eq!(encoded, format!("\"{}\"", canonical()));
+        let decoded: AppRef = serde_json::from_str(&encoded).expect("deserialize");
+        assert_eq!(decoded, reference);
     }
 }

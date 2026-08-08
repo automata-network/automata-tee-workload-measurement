@@ -126,16 +126,19 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             revert EmptyBaseImageWhitelist();
         }
 
-        // Compute workload ID
-        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version));
+        // The owner fingerprint is an input to the identifier, so it must be
+        // computed before it. See the note in BaseImageRegistry.registerBaseImage:
+        // the duplicate-revert path now pays one extra keccak256.
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
-        // Check for duplicate
+        // Compute workload ID, qualified by the publisher
+        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, ownerFingerprint, spec.name, spec.version));
+
+        // Check for duplicate. This now means "you have already registered this
+        // name and version", not "someone has claimed this name".
         if (_workloads[workloadId].exists) {
             revert WorkloadAlreadyExists(workloadId);
         }
-
-        // Compute owner fingerprint after duplicate check
-        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
         // Check whitelist if paused
         _checkRegistrationAllowed(ownerFingerprint);
