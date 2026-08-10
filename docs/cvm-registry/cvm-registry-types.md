@@ -219,7 +219,8 @@ struct TeeVerificationResult {
 Intel TDX uses `IntelTdxDcapZkEvidence`. The proof commits to both
 `keccak256(fullRawQuote)` and `keccak256(quoteBody)`. The call supplies only
 the exact TD10 or TD15 quote body. `TeeVerifier` checks the body hash and
-returns the proof-bound full raw quote hash as `teeReportBytesHash`. AMD
+returns the proof-bound exact signed quote hash as `teeReportBytesHash`.
+Provider buffer padding is not part of the Intel TDX quote. AMD
 SEV-SNP uses `AmdSevSnpZkEvidence` because the verifier needs the full report
 body after checking
 `keccak256(rawReport) == AmdSevSnpVerifierJournal.reportHash`.

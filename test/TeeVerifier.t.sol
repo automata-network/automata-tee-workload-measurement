@@ -449,14 +449,14 @@ contract TeeVerifierSnpTest is Test {
     }
 
     function _td10Quote() internal pure returns (bytes memory quote) {
-        quote = new bytes(48 + 584);
+        quote = new bytes(48 + 584 + 4);
         quote[0] = bytes1(uint8(4));
         quote[4] = bytes1(uint8(0x81));
         quote[48 + 123] = bytes1(uint8(0x10)); // TD_ATTRIBUTES.SEPT_VE_DISABLE
     }
 
     function _td15Quote() internal pure returns (bytes memory quote) {
-        quote = new bytes(48 + 6 + 648);
+        quote = new bytes(48 + 6 + 648 + 4);
         quote[0] = bytes1(uint8(5));
         quote[4] = bytes1(uint8(0x81));
         quote[48] = bytes1(uint8(3)); // TD15 quote body type
@@ -509,6 +509,29 @@ contract TeeVerifierSnpTest is Test {
         assertEq(solidityResult.teeReportBytesHash, zkResult.teeReportBytesHash);
         assertEq(solidityResult.reportData, quoteBody);
         assertEq(zkResult.reportData, quoteBody);
+    }
+
+    function test_tdx_solidity_rejects_all_trailing_bytes() public {
+        bytes memory exactQuote = _td10Quote();
+        for (uint256 trailingByte = 0; trailingByte <= 1; trailingByte++) {
+            bytes memory paddedQuote = bytes.concat(exactQuote, bytes1(uint8(trailingByte)));
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    TeeVerifier.InvalidDcapQuoteLength.selector, paddedQuote.length, exactQuote.length
+                )
+            );
+            teeVerifier.verifyTeeReport(_tdxReport(paddedQuote));
+        }
+    }
+
+    function test_tdx_solidity_rejects_a_truncated_declared_signature() public {
+        bytes memory quote = _td10Quote();
+        _setLeUint32(quote, 48 + 584, 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(TeeVerifier.InvalidDcapQuoteLength.selector, quote.length, quote.length + 1)
+        );
+        teeVerifier.verifyTeeReport(_tdxReport(quote));
     }
 
     function test_tdx_zk_rejects_a_different_supplied_quote_body() public {

@@ -34,7 +34,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Contract version
-    string public constant TEE_VERIFIER_VERSION = "2.0.0";
+    string public constant TEE_VERIFIER_VERSION = "2.1.0";
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
@@ -61,6 +61,11 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @dev Size of TD15 quote body in bytes
     uint256 private constant TD15_QUOTE_BODY_SIZE = 648;
+
+    /// @dev Exact Intel TDX DCAP TDQUOTE framing.
+    uint256 private constant DCAP_QUOTE_HEADER_SIZE = 48;
+    uint256 private constant DCAP_VERSION_5_BODY_HEADER_SIZE = 6;
+    uint32 private constant INTEL_TDX_TEE_TYPE = 0x81;
 
     /// @dev Offset of quote body in DCAP output (2+2+1+6 byte header)
     uint256 private constant DCAP_QUOTE_BODY_OFFSET = 11;
@@ -167,6 +172,15 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice The supplied Intel TDX quote body does not match the body committed by the ZK proof.
     error DcapQuoteBodyHashMismatch(bytes32 expected, bytes32 actual);
+
+    /// @notice The supplied Intel TDX quote version is unsupported.
+    error UnsupportedDcapQuoteVersion(uint16 actual);
+
+    /// @notice The supplied Intel TDX quote has the wrong TEE type.
+    error InvalidDcapTeeType(uint32 actual);
+
+    /// @notice The supplied Intel TDX quote is truncated or has trailing bytes.
+    error InvalidDcapQuoteLength(uint256 actual, uint256 expected);
 
     /// @notice Reserved Intel TDX TD_ATTRIBUTES bits are set.
     error InvalidTdxAttributes(bytes8 actual);
@@ -387,6 +401,44 @@ contract TeeVerifier is ITeeVerifier {
             | (uint32(uint8(data[offset + 2])) << 16) | (uint32(uint8(data[offset + 3])) << 24);
     }
 
+    function _readLeUint16(bytes memory data, uint256 offset) private pure returns (uint16 value) {
+        return uint16(uint8(data[offset])) | (uint16(uint8(data[offset + 1])) << 8);
+    }
+
+    /// @dev Require one exact TDQUOTE. The provider adapter removes allowed
+    ///      provider-owned zero padding before submission. Verifiers reject
+    ///      every trailing byte instead of normalizing a second representation.
+    function _requireExactDcapQuote(bytes memory quote) private pure {
+        if (quote.length < DCAP_QUOTE_HEADER_SIZE) {
+            revert TeeReportTooShort(quote.length, DCAP_QUOTE_HEADER_SIZE);
+        }
+        uint32 teeType = _readLeUint32(quote, 4);
+        if (teeType != INTEL_TDX_TEE_TYPE) revert InvalidDcapTeeType(teeType);
+
+        uint16 version = _readLeUint16(quote, 0);
+        uint256 bodyEnd;
+        if (version == 4) {
+            bodyEnd = DCAP_QUOTE_HEADER_SIZE + TD10_QUOTE_BODY_SIZE;
+        } else if (version == 5) {
+            uint256 bodyHeaderEnd = DCAP_QUOTE_HEADER_SIZE + DCAP_VERSION_5_BODY_HEADER_SIZE;
+            if (quote.length < bodyHeaderEnd) revert TeeReportTooShort(quote.length, bodyHeaderEnd);
+            uint16 bodyType = _readLeUint16(quote, DCAP_QUOTE_HEADER_SIZE);
+            uint256 expectedBodyLength = _dcapQuoteBodySize(bodyType);
+            uint256 bodyLength = _readLeUint32(quote, DCAP_QUOTE_HEADER_SIZE + 2);
+            if (bodyLength != expectedBodyLength) {
+                revert InvalidDcapQuoteBodyLength(bodyLength, expectedBodyLength);
+            }
+            bodyEnd = bodyHeaderEnd + bodyLength;
+        } else {
+            revert UnsupportedDcapQuoteVersion(version);
+        }
+
+        uint256 signatureLengthEnd = bodyEnd + 4;
+        if (quote.length < signatureLengthEnd) revert TeeReportTooShort(quote.length, signatureLengthEnd);
+        uint256 exactQuoteLength = signatureLengthEnd + _readLeUint32(quote, bodyEnd);
+        if (quote.length != exactQuoteLength) revert InvalidDcapQuoteLength(quote.length, exactQuoteLength);
+    }
+
     function _readLeUint64(bytes memory data, uint256 offset) private pure returns (uint64 value) {
         value = uint64(uint8(data[offset])) | (uint64(uint8(data[offset + 1])) << 8)
             | (uint64(uint8(data[offset + 2])) << 16) | (uint64(uint8(data[offset + 3])) << 24)
@@ -523,6 +575,7 @@ contract TeeVerifier is ITeeVerifier {
 
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
             // Direct on-chain verification
+            _requireExactDcapQuote(teeReport.data);
             (bool success, bytes memory output) = dcapAttestation.verifyAndAttestOnChain(teeReport.data);
             // Surface DCAP failure with the verifier's raw output so off-chain decoders
             // can pick out the specific reason.

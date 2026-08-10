@@ -36,7 +36,7 @@ uint256 constant SNP_REPORT_SIZE = 1184;
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "2.0.0";
+string public constant TEE_VERIFIER_VERSION = "2.1.0";
 ```
 
 ### Functions
@@ -55,7 +55,9 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 
 **TDX (Intel) flow**:
 1. Dispatch based on `VerificationBackendType`:
-   - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
+   - Solidity: require `teeReport.data` to end exactly after its declared DCAP
+     signature data, then call
+     `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
    - ZK Succinct: decode `IntelTdxDcapZkEvidence` and resolve the exact
      `intel_tdx_dcap.v1` adapter through `ZkVerifierRegistry`
 2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
@@ -66,9 +68,10 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 5. Require valid reserved attribute bits and `SEPT_VE_DISABLE`.
 6. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`.
 7. Extract `DEBUG` into `enabledTeeAttributes`.
-8. Return the quote body with `valid=true`. Return the complete raw quote hash
+8. Return the quote body with `valid=true`. Return the exact quote hash
    as `teeReportBytesHash`: `keccak256(teeReport.data)` for Solidity or
-   `journal.fullQuoteHash` for ZK.
+   `journal.fullQuoteHash` for ZK. Both paths reject every trailing byte,
+   including zero, and never truncate verifier input.
 
 **SNP (AMD) flow**:
 1. ZK only: resolve the exact `amd_sev_snp.v1` adapter through
@@ -156,6 +159,11 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 | `DcapReportDataOob(uint256 length, uint256 minRequired)` | DCAP report-data slice is out of bounds |
 | `DcapVerificationFailed(bytes output)` | Upstream DCAP verification failed |
 | `DcapTcbStatusNotAccepted(uint8 actual)` | DCAP trusted computing base status is 6, 7, or an unknown non-configurable value |
+| `InvalidDcapQuoteBodyLength(uint256 actual, uint256 expected)` | Intel TDX quote body length does not match its body type |
+| `DcapQuoteBodyHashMismatch(bytes32 expected, bytes32 actual)` | Supplied Intel TDX quote body does not match the proof journal |
+| `UnsupportedDcapQuoteVersion(uint16 actual)` | Raw Intel TDX quote version is not 4 or 5 |
+| `InvalidDcapTeeType(uint32 actual)` | Raw Intel TDX quote does not declare Intel TDX TEE type `0x81` |
+| `InvalidDcapQuoteLength(uint256 actual, uint256 expected)` | Raw Intel TDX quote is truncated or has trailing bytes |
 | `InvalidTdxAttributes(bytes8 actual)` | Intel TDX reserved attribute bits are invalid |
 | `TdxSeptVeDisableRequired()` | Intel TDX `SEPT_VE_DISABLE` is absent |
 | `TdxMigrationServiceTdNotSupported()` | Intel TDX 1.5 `MR_SERVICETD` is nonzero |
