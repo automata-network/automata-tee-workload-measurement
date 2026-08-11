@@ -79,8 +79,9 @@ library AmdSnpPolicy {
     }
 
     /// @notice Returns true when a CPUID identifies a processor this version supports.
-    /// @dev Shared by TeeVerifier (report extraction) and AmdSnpSecurityPolicyRegistry
-    ///      (policy admission) so the supported-silicon window is defined in one place.
+    /// @dev Shared by TeeVerifier (report extraction) and
+    ///      AmdSnpSecurityPolicyRegistry (policy admission) so the
+    ///      supported-silicon window is defined in one place.
     ///      Family 0x19 models 0x00-0x0f are Milan and 0x10-0x1f are Genoa. Turin
     ///      (family 0x1a) is not supported. The stepping byte is not constrained here;
     ///      policy is keyed on the exact CPUID including stepping.

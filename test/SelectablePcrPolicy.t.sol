@@ -10,7 +10,7 @@ import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
-import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ITeeSecurityPolicyVerifier} from "../src/interfaces/ITeeSecurityPolicyVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
@@ -71,7 +71,7 @@ contract SelectablePcrPolicyTest is Test {
                             IAkCollateralVerifier(address(4)),
                             baseImageRegistry,
                             workloadRegistry,
-                            IAmdSnpSecurityPolicyRegistry(address(5))
+                            ITeeSecurityPolicyVerifier(address(5))
                         )
                     ),
                     abi.encodeCall(SessionRegistry.initialize, (OWNER))

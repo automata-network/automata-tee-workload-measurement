@@ -8,6 +8,7 @@ import {
     SessionKeyRotationEvidence,
     SessionRenewalAuthorization
 } from "../../types/Evidence.sol";
+import {ITeeSecurityPolicyVerifier} from "../ITeeSecurityPolicyVerifier.sol";
 
 struct CVMSessionStorage {
     bool exists;
@@ -76,6 +77,9 @@ interface ISessionRegistry {
     // ============================================================================
     // Functions
     // ============================================================================
+
+    /// @notice Return the verifier used for ordinary and reserved TEE security policy.
+    function teeSecurityPolicyVerifier() external view returns (ITeeSecurityPolicyVerifier);
 
     /// @notice Register a new CVM session after attestation verification
     /// @param evidence The attestation evidence bundle (contains TEE type and backend type)

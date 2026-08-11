@@ -12,6 +12,7 @@ import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
+import {TeeSecurityPolicyVerifier} from "../src/TeeSecurityPolicyVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
@@ -295,7 +296,7 @@ contract SessionLifecycleAnvilTest is Script {
             akVerifier,
             baseImageRegistry,
             workloadRegistry,
-            amdSnpSecurityPolicyRegistry
+            new TeeSecurityPolicyVerifier(amdSnpSecurityPolicyRegistry)
         );
         expectedRevertProbe = new AnvilExpectedRevertProbe();
 
@@ -437,12 +438,10 @@ contract SessionLifecycleAnvilTest is Script {
         bytes32[] memory falseOnly = new bytes32[](1);
         falseOnly[0] = bytes32(0);
         PolicyIds memory workloadVeto = _registerTeePolicy("workload-veto", TEE_ATTRIBUTE_TRUE, falseOnly);
-        _expectRegisterRevert(workloadVeto, 0x52, 7, AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector);
+        _expectRegisterRevert(workloadVeto, 0x52, 7, TeeSecurityPolicyVerifier.TeeAttributeValueNotAllowed.selector);
 
         PolicyIds memory baseMismatch = _registerTeePolicy("base-mismatch", bytes32(0), allowDebug);
-        _expectRegisterRevert(
-            baseMismatch, 0x53, 7, AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector
-        );
+        _expectRegisterRevert(baseMismatch, 0x53, 7, TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector);
 
         teeVerifier.configure(true, TEEType.IntelTDX, 0, 1);
         _expectRegisterRevert(

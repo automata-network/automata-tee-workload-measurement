@@ -92,9 +92,10 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
    Earlier versions return zero for both vectors.
 9. Return the raw report with `valid=true`.
 
-`AmdSnpSecurityPolicyRegistry` checks the extracted AMD state against the
-resolved base-image and workload policies. Its active exact-CPUID record
-supplies any missing packed value. See
+`TeeSecurityPolicyVerifier` checks the extracted AMD state against the resolved
+base-image and workload policies. It reads the active exact-CPUID
+`AmdSnpSecurityPolicyRegistry` record for any missing packed value. See
+[TeeSecurityPolicyVerifier](cvm-registry-tee-security-policy.md) and
 [AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
 
 #### Runbook: vendor firmware introduces a new bit or version
@@ -128,14 +129,14 @@ operation, not a policy edit:
 3. Only then relax the corresponding policy, if any.
 
 `script/UpgradeTeeVerifier.s.sol` performs both steps and asserts the rewiring
-afterwards. Note the ordering constraint already encoded there: upgrade
-`AmdSnpSecurityPolicyRegistry` **first**, because `SessionRegistry` calls
-`verifyTeePolicy` with the current `VerifiedTeePolicyInputs` layout.
+afterwards.
 
-`AmdSnpSecurityPolicyRegistry` is a UUPS proxy and *is* upgradeable, so
-`isSupportedCpuid` is shared between the two contracts to keep the supported
-window defined once. Widening it in the registry alone still has no effect —
-`TeeVerifier` rejects the report before the registry is ever consulted.
+`TeeSecurityPolicyVerifier` is also immutable. A change to
+`VerifiedTeePolicyInputs` or its evaluation rules requires a new
+`TeeSecurityPolicyVerifier` and a new `SessionRegistry` implementation that
+references it. `AmdSnpSecurityPolicyRegistry` remains a UUPS proxy. Widening
+its `isSupportedCpuid` window alone still has no effect because `TeeVerifier`
+rejects the report before `TeeSecurityPolicyVerifier` reads the registry.
 
 #### Helper Functions
 

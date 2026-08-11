@@ -434,8 +434,8 @@ function publicIdentityToCertPubkey(PublicIdentity memory identity) → CertPubk
 ### AmdSnpPolicy.sol (`src/lib/AmdSnpPolicy.sol`)
 
 The single definition of the packed AMD SEV-SNP policy formats and of the
-supported-silicon window. `TeeVerifier` and `AmdSnpSecurityPolicyRegistry` both
-depend on it so the two never drift.
+supported-silicon window. `TeeVerifier`, `TeeSecurityPolicyVerifier`, and
+`AmdSnpSecurityPolicyRegistry` depend on it so the definitions do not drift.
 
 ```solidity
 function validateTcb(bytes32 packedTcb)
@@ -456,7 +456,7 @@ function isSupportedCpuid(uint24 cpuid) → bool
 
 `tryMergePlatformInfoPolicies` does not revert. It returns `ok = false` when
 one side requires a bit set that the other requires cleared, leaving the caller
-to report the conflict in its own terms — `AmdSnpSecurityPolicyRegistry` raises
+to report the conflict in its own terms — `TeeSecurityPolicyVerifier` raises
 `TeeAttributePolicyConflict(key, baseValue, workloadValue)`, which names the
 attribute and both contributing values. `merged` is only meaningful when `ok`
 is true.

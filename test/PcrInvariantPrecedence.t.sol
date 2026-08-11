@@ -12,7 +12,7 @@ import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
-import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {TeeSecurityPolicyVerifier} from "../src/TeeSecurityPolicyVerifier.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
@@ -114,7 +114,7 @@ contract PcrInvariantPrecedenceTest is Test {
             IAkCollateralVerifier(AK_COLLATERAL_VERIFIER),
             baseImageRegistry,
             workloadRegistry,
-            IAmdSnpSecurityPolicyRegistry(address(amdPolicy))
+            new TeeSecurityPolicyVerifier(amdPolicy)
         );
 
         // Profile pins PCR4 as an invariant; the initial variant pins only PCR10 (disjoint).

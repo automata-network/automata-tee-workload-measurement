@@ -43,7 +43,8 @@ The system is composed of six contract groups with strict separation of concerns
 - **BaseImageRegistry** — Defines platform images and their expected PCR measurement specifications. Managed by base image publishers.
 - **WorkloadRegistry** — Defines application-level policies including base image access control, attribute requirements, and PCR constraints. Managed by workload developers.
 - **SessionRegistry** — Orchestrates the full attestation verification workflow, creates on-chain session identities, and manages session lifecycle.
-- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults plus mandatory mitigation-vector masks for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
+- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults plus mandatory mitigation-vector masks for each exact supported CPUID.
+- **TeeSecurityPolicyVerifier** — Evaluates ordinary attributes and the reserved policy for either verified TEE type. It reads `AmdSnpSecurityPolicyRegistry` only for AMD SEV-SNP evidence.
 - **AkCollateralVerifier** — Separately deployed Azure MAA JWT, GCP Attestation Key certificate-chain, and AWS NitroTPM proof verifier.
 - **MaaKeyRegistry** — Stores the owner-managed Microsoft Azure Attestation signing keys used by `AkCollateralVerifier`.
 - **TeeVerifier** — Stateless dispatcher for TEE attestation reports. Routes to DCAP (Intel TDX) or SNP (AMD SEV-SNP) verifiers. Supports ZK proof backends (RiscZero, SP1).
@@ -64,7 +65,7 @@ SessionRegistry
 separately deployed `IAkCollateralVerifier`. The `TpmVerifier` implementation
 is upgradeable. Its other immutable references are
 `ITeeVerifier`, `ISignatureVerifier`, `IBaseImageRegistry`,
-`IWorkloadRegistry`, and `IAmdSnpSecurityPolicyRegistry`.
+`IWorkloadRegistry`, and `ITeeSecurityPolicyVerifier`.
 
 **BaseImageRegistry / WorkloadRegistry:**
 ```
@@ -272,7 +273,8 @@ The SessionRegistry holds immutable addresses for:
 - `IAkCollateralVerifier` — Azure MAA JWT, GCP Attestation Key collateral, and AWS NitroTPM proof verification
 - `IBaseImageRegistry` — Platform policy lookup
 - `IWorkloadRegistry` — Application policy lookup
-- `IAmdSnpSecurityPolicyRegistry` — AMD SEV-SNP policy defaults plus ordinary and reserved TEE attribute evaluation
+- `ITeeSecurityPolicyVerifier` — Ordinary and reserved TEE attribute
+  evaluation; it holds the AMD SEV-SNP policy registry reference
 
 ### Key Operations
 
@@ -391,11 +393,9 @@ TCB status, and the AMD SEV-SNP TCB, `PLATFORM_INFO`, CPUID, report-version,
 
 ### Step 2a: Verified TEE and Attribute Policy
 
-`SessionRegistry` calls
-`AmdSnpSecurityPolicyRegistry.verifyTeePolicy` before AK and TPM
-verification. Despite the component name, this call handles all ordinary
-attribute requirements plus the reserved attributes for the verified
-`TeeVerificationResult.teeType`.
+`SessionRegistry` calls `TeeSecurityPolicyVerifier.verifyTeePolicy` before AK
+and TPM verification. This call handles all ordinary attribute requirements
+plus the reserved attributes for the verified `TeeVerificationResult.teeType`.
 
 The call evaluates ordinary metadata first. It then applies the profile and
 measurement-variant lookup to custom attributes and every reserved TEE

@@ -12,11 +12,14 @@ import {SessionRegistry} from "../src/SessionRegistry.sol";
 import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
+import {TeeSecurityPolicyVerifier} from "../src/TeeSecurityPolicyVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
+import {ITeeSecurityPolicyVerifier} from "../src/interfaces/ITeeSecurityPolicyVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ISessionRegistry} from "../src/interfaces/registries/ISessionRegistry.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
@@ -159,11 +162,18 @@ contract SessionLifecycleTest is Test {
             IAkCollateralVerifier(AK_COLLATERAL_VERIFIER),
             baseImageRegistry,
             workloadRegistry,
-            amdSnpSecurityPolicyRegistry
+            new TeeSecurityPolicyVerifier(amdSnpSecurityPolicyRegistry)
         );
 
         oldPolicy = _registerPolicy("base-v1", "workload-v1", 1 days);
         newPolicy = _registerPolicy("base-v2", "workload-v2", 7 days);
+    }
+
+    function testSecurityPolicyDependencyGraphIsPublic() public view {
+        ITeeSecurityPolicyVerifier policyVerifier =
+            ISessionRegistry(address(sessionRegistry)).teeSecurityPolicyVerifier();
+        assertEq(address(policyVerifier), address(sessionRegistry.teeSecurityPolicyVerifier()));
+        assertEq(address(policyVerifier.amdSnpSecurityPolicyRegistry()), address(amdSnpSecurityPolicyRegistry));
     }
 
     function testIsSessionExpiredRejectsUnknownSession() public {
@@ -799,7 +809,7 @@ contract SessionLifecycleTest is Test {
                             bytes32 declaredValue = baseMode == 2 ? TEE_ATTRIBUTE_TRUE : bytes32(0);
                             vm.expectRevert(
                                 abi.encodeWithSelector(
-                                    AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
+                                    TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector,
                                     keys[keyIndex],
                                     declaredValue,
                                     actual ? TEE_ATTRIBUTE_TRUE : bytes32(0)
@@ -808,7 +818,7 @@ contract SessionLifecycleTest is Test {
                         } else if (!workloadPermits) {
                             vm.expectRevert(
                                 abi.encodeWithSelector(
-                                    AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector,
+                                    TeeSecurityPolicyVerifier.TeeAttributeValueNotAllowed.selector,
                                     keys[keyIndex],
                                     TEE_ATTRIBUTE_TRUE
                                 )
@@ -992,7 +1002,7 @@ contract SessionLifecycleTest is Test {
                     if (!basePermits) {
                         vm.expectRevert(
                             abi.encodeWithSelector(
-                                AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
+                                TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector,
                                 TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
                                 bytes32(TDX_TCB_STATUS_OK),
                                 bytes32(actualStatus)
@@ -1001,7 +1011,7 @@ contract SessionLifecycleTest is Test {
                     } else if (!workloadPermits) {
                         vm.expectRevert(
                             abi.encodeWithSelector(
-                                AmdSnpSecurityPolicyRegistry.TeeAttributeValueNotAllowed.selector,
+                                TeeSecurityPolicyVerifier.TeeAttributeValueNotAllowed.selector,
                                 TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
                                 bytes32(actualStatus)
                             )
@@ -1126,7 +1136,7 @@ contract SessionLifecycleTest is Test {
         );
         vm.expectRevert(
             abi.encodeWithSelector(
-                AmdSnpSecurityPolicyRegistry.TeeAttributeBaseImageMismatch.selector,
+                TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector,
                 TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
                 minimumTcb,
                 result.amdSevSnpTcbValues

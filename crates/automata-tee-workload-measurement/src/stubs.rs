@@ -20,6 +20,7 @@ alloy::contract! {
     TpmAttestation => "./contract_artifacts/TpmAttestation.sol/TpmAttestation.json",
     TpmVerifier => "./contract_artifacts/TpmVerifier.sol/TpmVerifier.json",
     TeeVerifier => "./contract_artifacts/TeeVerifier.sol/TeeVerifier.json",
+    TeeSecurityPolicyVerifier => "./contract_artifacts/TeeSecurityPolicyVerifier.sol/TeeSecurityPolicyVerifier.json",
     AkCollateralVerifier => "./contract_artifacts/AkCollateralVerifier.sol/AkCollateralVerifier.json",
     AmdSnpSecurityPolicyRegistry => "./contract_artifacts/AmdSnpSecurityPolicyRegistry.sol/AmdSnpSecurityPolicyRegistry.json",
     ZkVerifierRegistry => "./contract_artifacts/ZkVerifierRegistry.sol/ZkVerifierRegistry.json",

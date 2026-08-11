@@ -11,6 +11,7 @@ import {DeployMaaKeyRegistry} from "./DeployMaaKeyRegistry.s.sol";
 import {DeployKeyResolver} from "./DeployKeyResolver.s.sol";
 import {DeployAkCollateralVerifier} from "./DeployAkCollateralVerifier.s.sol";
 import {DeployAmdSnpSecurityPolicyRegistry} from "./DeployAmdSnpSecurityPolicyRegistry.s.sol";
+import {DeployTeeSecurityPolicyVerifier} from "./DeployTeeSecurityPolicyVerifier.s.sol";
 import {DeploySessionRegistry} from "./DeploySessionRegistry.s.sol";
 import "forge-std/console.sol";
 
@@ -54,6 +55,7 @@ contract DeployFork is
     DeployKeyResolver,
     DeployAkCollateralVerifier,
     DeployAmdSnpSecurityPolicyRegistry,
+    DeployTeeSecurityPolicyVerifier,
     DeploySessionRegistry
 {
     function run()
@@ -69,6 +71,7 @@ contract DeployFork is
             DeployKeyResolver,
             DeployAkCollateralVerifier,
             DeployAmdSnpSecurityPolicyRegistry,
+            DeployTeeSecurityPolicyVerifier,
             DeploySessionRegistry
         )
     {
@@ -88,6 +91,7 @@ contract DeployFork is
         deployKeyResolverProxy(address(0));
         deployAkCollateralVerifier();
         deployAmdSnpSecurityPolicyRegistryProxy(address(0));
+        deployTeeSecurityPolicyVerifier();
 
         // 3. SessionRegistry last (depends on all others + real TPM_ATTESTATION_ADDR)
         deploySessionRegistryProxy(address(0));

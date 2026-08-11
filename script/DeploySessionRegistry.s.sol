@@ -10,7 +10,7 @@ import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
-import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ITeeSecurityPolicyVerifier} from "../src/interfaces/ITeeSecurityPolicyVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "forge-std/console.sol";
@@ -23,7 +23,7 @@ contract DeploySessionRegistry is DeploymentConfig {
         address akCollateralVerifierAddr = readContractAddress("AkCollateralVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
-        address amdSnpSecurityPolicyRegistryAddr = readContractAddress("AmdSnpSecurityPolicyRegistry");
+        address teeSecurityPolicyVerifierAddr = readContractAddress("TeeSecurityPolicyVerifier");
 
         console.log("Using TeeVerifier at:", teeVerifierAddr);
         console.log("Using TpmVerifier at:", tpmVerifierAddr);
@@ -31,7 +31,7 @@ contract DeploySessionRegistry is DeploymentConfig {
         console.log("Using AkCollateralVerifier at:", akCollateralVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
-        console.log("Using AmdSnpSecurityPolicyRegistry at:", amdSnpSecurityPolicyRegistryAddr);
+        console.log("Using TeeSecurityPolicyVerifier at:", teeSecurityPolicyVerifierAddr);
 
         SessionRegistry impl = new SessionRegistry{salt: SESSION_REGISTRY_IMPL_SALT}(
             ITeeVerifier(teeVerifierAddr),
@@ -40,7 +40,7 @@ contract DeploySessionRegistry is DeploymentConfig {
             IAkCollateralVerifier(akCollateralVerifierAddr),
             IBaseImageRegistry(baseImageRegistryAddr),
             IWorkloadRegistry(workloadRegistryAddr),
-            IAmdSnpSecurityPolicyRegistry(amdSnpSecurityPolicyRegistryAddr)
+            ITeeSecurityPolicyVerifier(teeSecurityPolicyVerifierAddr)
         );
         console.log("SessionRegistry implementation deployed at:", address(impl));
         writeToJson("SessionRegistryImpl", address(impl));

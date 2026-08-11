@@ -6,10 +6,7 @@ import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "./interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "./interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "./interfaces/registries/IWorkloadRegistry.sol";
-import {
-    IAmdSnpSecurityPolicyRegistry,
-    VerifiedTeePolicyInputs
-} from "./interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ITeeSecurityPolicyVerifier, VerifiedTeePolicyInputs} from "./interfaces/ITeeSecurityPolicyVerifier.sol";
 import {ISessionRegistry, CVMSessionStorage} from "./interfaces/registries/ISessionRegistry.sol";
 import {TpmCertifyVerificationResult, TpmQuoteVerificationResult, TpmVerifier} from "./bases/TpmVerifier.sol";
 import {
@@ -74,7 +71,7 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
     IAkCollateralVerifier public immutable akCollateralVerifier;
     IBaseImageRegistry public immutable baseImageRegistry;
     IWorkloadRegistry public immutable workloadRegistry;
-    IAmdSnpSecurityPolicyRegistry public immutable amdSnpSecurityPolicyRegistry;
+    ITeeSecurityPolicyVerifier public immutable override teeSecurityPolicyVerifier;
 
     mapping(bytes32 sessionId => CVMSessionStorage session) private _sessions;
     mapping(bytes32 ownerFingerprint => uint256 nonce) private _ownerNonces;
@@ -132,7 +129,7 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         IAkCollateralVerifier akCollateralVerifier_,
         IBaseImageRegistry baseImageRegistry_,
         IWorkloadRegistry workloadRegistry_,
-        IAmdSnpSecurityPolicyRegistry amdSnpSecurityPolicyRegistry_
+        ITeeSecurityPolicyVerifier teeSecurityPolicyVerifier_
     ) {
         teeVerifier = teeVerifier_;
         tpmVerifier = tpmVerifier_;
@@ -140,7 +137,7 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         akCollateralVerifier = akCollateralVerifier_;
         baseImageRegistry = baseImageRegistry_;
         workloadRegistry = workloadRegistry_;
-        amdSnpSecurityPolicyRegistry = amdSnpSecurityPolicyRegistry_;
+        teeSecurityPolicyVerifier = teeSecurityPolicyVerifier_;
         _disableInitializers();
     }
 
@@ -549,7 +546,7 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         private
         view
     {
-        amdSnpSecurityPolicyRegistry.verifyTeePolicy(
+        teeSecurityPolicyVerifier.verifyTeePolicy(
             VerifiedTeePolicyInputs({
                 teeType: teeResult.teeType,
                 enabledTeeAttributes: teeResult.enabledTeeAttributes,

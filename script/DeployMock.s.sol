@@ -15,7 +15,7 @@ import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
-import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ITeeSecurityPolicyVerifier} from "../src/interfaces/ITeeSecurityPolicyVerifier.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
@@ -34,6 +34,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 ///        - SignatureVerifier (stateless, shared across environments)
 ///        - BaseImageRegistry
 ///        - WorkloadRegistry
+///        - MaaKeyRegistry
+///        - TeeSecurityPolicyVerifier, deployed after AmdSnpSecurityPolicyRegistry
 ///
 /// Usage as standalone script:
 ///   forge script script/DeployMock.s.sol:DeployMock --rpc-url $RPC_URL --broadcast
@@ -61,8 +63,10 @@ contract DeployMock is Script, DeploymentConfig {
 
     /// @notice Deploy mock infrastructure and return addresses.
     /// @dev Must be called within a broadcast context (vm.startBroadcast).
-    ///      Reads SignatureVerifier, BaseImageRegistry and WorkloadRegistry
-    ///      from deployment JSON (deploy them first via their individual scripts).
+    ///      Reads SignatureVerifier, BaseImageRegistry, WorkloadRegistry,
+    ///      MaaKeyRegistry, and TeeSecurityPolicyVerifier from deployment JSON.
+    ///      Deploy all five first. TeeSecurityPolicyVerifier itself requires an
+    ///      already-deployed AmdSnpSecurityPolicyRegistry.
     function _deployMock() internal returns (MockDeployment memory d) {
         // 1. Mock TEE attestation
         d.dcapAttestation = new MockAutomataDcapAttestation();
@@ -102,12 +106,12 @@ contract DeployMock is Script, DeploymentConfig {
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
-        address amdSnpSecurityPolicyRegistryAddr = readContractAddress("AmdSnpSecurityPolicyRegistry");
+        address teeSecurityPolicyVerifierAddr = readContractAddress("TeeSecurityPolicyVerifier");
         address maaKeyRegistryAddr = readContractAddress("MaaKeyRegistry");
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
-        console.log("Using AmdSnpSecurityPolicyRegistry at:", amdSnpSecurityPolicyRegistryAddr);
+        console.log("Using TeeSecurityPolicyVerifier at:", teeSecurityPolicyVerifierAddr);
         console.log("Using MaaKeyRegistry at:", maaKeyRegistryAddr);
 
         d.akCollateralVerifier = new AkCollateralVerifier(
@@ -138,7 +142,7 @@ contract DeployMock is Script, DeploymentConfig {
             IAkCollateralVerifier(address(d.akCollateralVerifier)),
             IBaseImageRegistry(baseImageRegistryAddr),
             IWorkloadRegistry(workloadRegistryAddr),
-            IAmdSnpSecurityPolicyRegistry(amdSnpSecurityPolicyRegistryAddr)
+            ITeeSecurityPolicyVerifier(teeSecurityPolicyVerifierAddr)
         );
         console.log("Mock SessionRegistry deployed at:", address(d.sessionRegistry));
     }

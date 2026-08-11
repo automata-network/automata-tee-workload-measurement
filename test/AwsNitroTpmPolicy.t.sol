@@ -10,7 +10,7 @@ import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
-import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ITeeSecurityPolicyVerifier} from "../src/interfaces/ITeeSecurityPolicyVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
@@ -33,7 +33,7 @@ contract SessionRegistryAwsHarness is SessionRegistry {
             IAkCollateralVerifier(address(5)),
             IBaseImageRegistry(address(6)),
             IWorkloadRegistry(address(7)),
-            IAmdSnpSecurityPolicyRegistry(address(8))
+            ITeeSecurityPolicyVerifier(address(8))
         )
     {}
 

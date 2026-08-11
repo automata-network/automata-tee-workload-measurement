@@ -50,9 +50,10 @@ contracts require sorted PCR indexes below 24 but do not enforce a fixed
 platform-versus-workload index split.
 
 4. **Verified TEE policy** -- `TeeVerifier` extracts signed security state.
-`AmdSnpSecurityPolicyRegistry` stores per-CPUID AMD defaults and evaluates TEE
-and metadata attributes. An explicit value replaces a default on its policy
-side; the registry value is not an independent mandatory floor.
+`TeeSecurityPolicyVerifier` evaluates TEE and metadata attributes.
+`AmdSnpSecurityPolicyRegistry` stores per-CPUID AMD defaults. An explicit value
+replaces a default on its policy side; the registry value is not an independent
+mandatory floor.
 
 5. **UUPS upgradeable registries** -- `BaseImageRegistry`, `WorkloadRegistry`,
 `SessionRegistry`, `ZkVerifierRegistry`, `AmdSnpSecurityPolicyRegistry`, and
@@ -71,6 +72,7 @@ src/
 ├── SessionRegistry.sol
 ├── ZkVerifierRegistry.sol
 ├── AmdSnpSecurityPolicyRegistry.sol
+├── TeeSecurityPolicyVerifier.sol
 ├── KeyResolver.sol
 ├── MaaKeyRegistry.sol             (per-region MAA signing keys for AzureMaaJwt)
 ├── TeeVerifier.sol
@@ -82,6 +84,7 @@ src/
 ├── interfaces/
 │   ├── IAkCollateralVerifier.sol
 │   ├── ISignatureVerifier.sol
+│   ├── ITeeSecurityPolicyVerifier.sol
 │   ├── ITeeVerifier.sol
 │   ├── registries/
 │   │   ├── IAmdSnpSecurityPolicyRegistry.sol
@@ -123,7 +126,7 @@ SessionRegistry
   ├── inherits: ISessionRegistry, OwnableUpgradeable, UUPSUpgradeable
   ├── immutable refs: ITeeVerifier, TpmVerifier, IAkCollateralVerifier,
   │                   ISignatureVerifier, IBaseImageRegistry, IWorkloadRegistry,
-  │                   and IAmdSnpSecurityPolicyRegistry
+  │                   and ITeeSecurityPolicyVerifier
   └── uses: LibKey and LibBytes
 
 BaseImageRegistry
@@ -143,6 +146,11 @@ TeeVerifier
 
 AmdSnpSecurityPolicyRegistry
   ├── inherits: IAmdSnpSecurityPolicyRegistry, OwnableUpgradeable, UUPSUpgradeable
+  └── uses: AmdSnpPolicy
+
+TeeSecurityPolicyVerifier
+  ├── inherits: ITeeSecurityPolicyVerifier
+  ├── immutable ref: IAmdSnpSecurityPolicyRegistry
   └── uses: AmdSnpPolicy
 
 SignatureVerifier
@@ -213,8 +221,8 @@ message = sha256(abi.encode(MSG_SEPARATOR, block.chainid, address(this), opExpir
 ## Deployment status
 
 The verified TEE attribute implementation adds
-`AmdSnpSecurityPolicyRegistry` and changes the immutable dependencies of
-`SessionRegistry`. It is not the deployment recorded by the older address
+`AmdSnpSecurityPolicyRegistry` and `TeeSecurityPolicyVerifier`, and changes the
+immutable dependencies of `SessionRegistry`. It is not the deployment recorded by the older address
 snapshot in `deployment/560048.json`. Do not treat addresses in that file as a
 deployment of this feature. Verify the active implementation and every
 immutable dependency from live chain state before an upgrade.

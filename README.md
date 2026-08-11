@@ -25,6 +25,7 @@ SessionRegistry (attestation verification and session lifecycle)
 ├── WorkloadRegistry (application PCR and attribute policies)
 │   └── WorkloadSpec (container measurements, attribute requirements, base image access control)
 ├── AmdSnpSecurityPolicyRegistry (default policy for each exact AMD CPUID)
+├── TeeSecurityPolicyVerifier (TEE and metadata policy evaluation)
 ├── TeeVerifier (dispatches to DCAP/SNP attestation verifiers; supports ZK backends)
 ├── AkCollateralVerifier (Azure MAA JWT and GCP AK certificate-chain verification)
 ├── MaaKeyRegistry (Azure MAA signing-key directory)
@@ -37,19 +38,18 @@ below 24 but do not enforce a fixed platform-versus-workload range.
 
 `TeeVerifier` extracts six authorable Intel TDX and AMD SEV-SNP
 security-policy inputs plus the AMD SEV-SNP report version and version-5
-mitigation vectors from verified reports. `SessionRegistry` sends the effective profile,
-variant, and workload attributes to `AmdSnpSecurityPolicyRegistry`. That
-registry evaluates ordinary metadata first, then only the reserved attributes
+mitigation vectors from verified reports. `SessionRegistry` sends the effective
+profile, variant, and workload attributes to `TeeSecurityPolicyVerifier`. The
+verifier evaluates ordinary metadata first, then only the reserved attributes
 for the verified TEE type. Intel TDX TCB status uses a configurable one-hot
 mask. AMD SEV-SNP TCB and `PLATFORM_INFO` checks also require the active
-`AmdSnpSecurityPolicyRegistry` record for the report's exact CPUID. That
-record also applies mandatory mitigation-vector masks that authors cannot
-override.
+`AmdSnpSecurityPolicyRegistry` record for the report's exact CPUID. That record
+also applies mandatory mitigation-vector masks that authors cannot override.
 
 **Key Principles:**
 - **Separation of Concerns** — Base images (privileged OS), workloads (unprivileged apps), and sessions (runtime identity) are managed independently
 - **PublicIdentity Ownership** — Registry ownership is based on cryptographic keys, independent of EVM addresses
-- **Immutable Verifiers** — `TeeVerifier` and `SignatureVerifier` are stateless and reusable across registries
+- **Immutable Verifiers** — `TeeVerifier`, `TeeSecurityPolicyVerifier`, and `SignatureVerifier` are reusable across registries
 - **Upgradeable Registries** — `BaseImageRegistry`, `WorkloadRegistry`,
   `SessionRegistry`, `AmdSnpSecurityPolicyRegistry`, `MaaKeyRegistry`, and
   `KeyResolver` use UUPS proxies
@@ -63,6 +63,7 @@ src/
 ├── BaseImageRegistry.sol         # OS/platform measurement policy management
 ├── WorkloadRegistry.sol          # Application measurement policy management
 ├── AmdSnpSecurityPolicyRegistry.sol # AMD SEV-SNP policy defaults by CPUID
+├── TeeSecurityPolicyVerifier.sol # TEE and metadata policy evaluation
 ├── MaaKeyRegistry.sol            # Microsoft Azure Attestation signing keys
 ├── TeeVerifier.sol               # TEE attestation dispatcher (DCAP / SNP / ZK)
 ├── SignatureVerifier.sol          # Cryptographic signature verification (RS256, ES256, ES256K)
@@ -89,9 +90,9 @@ test/                                   # Integration tests and benchmarks
 
 The verified TEE attribute implementation is not the older Hoodi deployment
 recorded in `deployment/560048.json`. It adds
-`AmdSnpSecurityPolicyRegistry` and changes the immutable dependencies of
-`SessionRegistry`. Verify the proxy implementations and every immutable
-dependency from live chain state before using a deployment.
+`AmdSnpSecurityPolicyRegistry` and `TeeSecurityPolicyVerifier`, and changes the
+immutable dependencies of `SessionRegistry`. Verify the proxy implementations
+and every immutable dependency from live chain state before using a deployment.
 
 ## Related Projects
 

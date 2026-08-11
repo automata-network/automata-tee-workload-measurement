@@ -108,6 +108,7 @@ SessionRegistry (orchestrator)
 ├── WorkloadRegistry (application)
 │   └── WorkloadSpec (application PCR and attribute policy)
 ├── AmdSnpSecurityPolicyRegistry (AMD policy defaults by exact CPUID)
+├── TeeSecurityPolicyVerifier (TEE and metadata policy evaluation)
 ├── TeeVerifier (TEE attestation)
 ├── AkCollateralVerifier (Azure MAA and GCP AK collateral)
 └── SignatureVerifier (owner authentication)
@@ -115,7 +116,7 @@ SessionRegistry (orchestrator)
 
 **Key Principles:**
 - **Separation of Concerns**: BaseImage (privileged), Workload (unprivileged), Session (runtime)
-- **Immutable Verifiers**: TeeVerifier is stateless and can be reused across registries
+- **Immutable Verifiers**: TeeVerifier and TeeSecurityPolicyVerifier can be reused across registries
 - **Upgradeable Registries**: BaseImageRegistry, WorkloadRegistry,
   SessionRegistry, AmdSnpSecurityPolicyRegistry, MaaKeyRegistry, and
   KeyResolver use UUPS proxies
@@ -127,7 +128,7 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 
 1. **Policy lookup** - Resolve the workload, base image, platform profile, and measurement variant.
 2. **TEE attestation** - Verify the Intel TDX quote or AMD SEV-SNP report.
-3. **Verified TEE and attribute policy** - Call `AmdSnpSecurityPolicyRegistry.verifyTeePolicy`. It evaluates ordinary attributes first, then the applicable reserved TEE attributes. The active exact-CPUID record supplies missing AMD packed values.
+3. **Verified TEE and attribute policy** - Call `TeeSecurityPolicyVerifier.verifyTeePolicy`. It evaluates ordinary attributes first, then the applicable reserved TEE attributes. The active exact-CPUID `AmdSnpSecurityPolicyRegistry` record supplies missing AMD packed values.
 4. **AK collateral and TEE-AK binding** - Verify the TPM Attestation Key and bind it to the verified TEE report.
 5. **TPM Quote** - Verify the Quote signature, nonce, and PCR values.
 6. **TPM Certify** - Verify that the TPM signing key is certified by the AK.
@@ -154,7 +155,7 @@ SessionRegistry
 `SessionRegistry` calls separately deployed `TpmVerifier` and
 `IAkCollateralVerifier` contracts. It also holds immutable
 `ITeeVerifier`, `ISignatureVerifier`, `IBaseImageRegistry`,
-`IWorkloadRegistry`, and `IAmdSnpSecurityPolicyRegistry` references.
+`IWorkloadRegistry`, and `ITeeSecurityPolicyVerifier` references.
 
 **BaseImageRegistry / WorkloadRegistry**:
 ```
@@ -194,6 +195,7 @@ they are not fields in `CVMSession`.
 - `BaseImageRegistry.sol` - OS/platform policy management
 - `WorkloadRegistry.sol` - Application policy management
 - `AmdSnpSecurityPolicyRegistry.sol` - AMD SEV-SNP policy defaults by exact CPUID
+- `TeeSecurityPolicyVerifier.sol` - Ordinary metadata and reserved TEE security-policy evaluation
 - `MaaKeyRegistry.sol` - Microsoft Azure Attestation signing-key directory
 - `TeeVerifier.sol` - TEE attestation dispatcher
 - `SignatureVerifier.sol` - ECDSA/RSA signature verification

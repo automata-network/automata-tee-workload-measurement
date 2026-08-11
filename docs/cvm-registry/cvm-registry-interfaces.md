@@ -8,6 +8,7 @@
 src/interfaces/
 ├── IAkCollateralVerifier.sol
 ├── ISignatureVerifier.sol
+├── ITeeSecurityPolicyVerifier.sol
 ├── ITeeVerifier.sol
 ├── registries/
 │   ├── IAmdSnpSecurityPolicyRegistry.sol
@@ -216,6 +217,9 @@ event SessionRecovered(
 ### Function Signatures
 
 ```solidity
+function teeSecurityPolicyVerifier()
+    external view returns (ITeeSecurityPolicyVerifier);
+
 function registerSession(
     AttestationEvidence calldata evidence,
     bytes32 workloadId,
@@ -286,10 +290,9 @@ function verifySessionSignature(
 
 ---
 
-## IAmdSnpSecurityPolicyRegistry
+## ITeeSecurityPolicyVerifier
 
-**File**:
-`src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol`
+**File**: `src/interfaces/ITeeSecurityPolicyVerifier.sol`
 
 ```solidity
 struct VerifiedTeePolicyInputs {
@@ -304,6 +307,25 @@ struct VerifiedTeePolicyInputs {
     uint64 amdSevSnpCurrentMitigationVector;
 }
 
+function amdSnpSecurityPolicyRegistry()
+    external view returns (IAmdSnpSecurityPolicyRegistry);
+
+function verifyTeePolicy(
+    VerifiedTeePolicyInputs calldata inputs,
+    Attribute[] calldata profileAttributes,
+    Attribute[] calldata variantAttributes,
+    AttributeRequirement[] calldata requirements
+) external view;
+```
+
+---
+
+## IAmdSnpSecurityPolicyRegistry
+
+**File**:
+`src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol`
+
+```solidity
 struct AmdSnpSecurityPolicy {
     bytes32 minimumTcb;
     bytes32 platformInfoPolicy;
@@ -335,13 +357,6 @@ function getPolicy(uint24 cpuid)
 
 function getActivePolicy(uint24 cpuid)
     external view returns (AmdSnpSecurityPolicy memory policy);
-
-function verifyTeePolicy(
-    VerifiedTeePolicyInputs calldata inputs,
-    Attribute[] calldata profileAttributes,
-    Attribute[] calldata variantAttributes,
-    AttributeRequirement[] calldata requirements
-) external view;
 ```
 
 ---

@@ -39,7 +39,7 @@ uint8 private constant PROVIDER_BINDING_PCR_INDEX = 15;
 | `akCollateralVerifier` | `IAkCollateralVerifier` | External Azure, GCP, and AWS Attestation Key collateral verification |
 | `baseImageRegistry` | `IBaseImageRegistry` | Platform policy lookup |
 | `workloadRegistry` | `IWorkloadRegistry` | Application policy lookup |
-| `amdSnpSecurityPolicyRegistry` | `IAmdSnpSecurityPolicyRegistry` | AMD SEV-SNP defaults and verified TEE attribute evaluation |
+| `teeSecurityPolicyVerifier` | `ITeeSecurityPolicyVerifier` | Ordinary metadata and reserved TEE security-policy evaluation |
 
 ## Storage
 
@@ -158,16 +158,14 @@ This step runs immediately after TEE verification. It uses `teeType` to
 evaluate only the reserved attributes for the verified TEE platform.
 `enabledTeeAttributes` carries the three reserved Boolean states.
 
-`SessionRegistry` calls
-`AmdSnpSecurityPolicyRegistry.verifyTeePolicy` with the verified state,
-profile attributes, variant attributes, and workload requirements. Despite its
-AMD-specific name, this function evaluates Intel TDX policy and ordinary
-metadata too. It performs all attribute checks here, before AK and TPM
-verification, to keep `SessionRegistry` below the EIP-170 code-size limit.
-It evaluates ordinary metadata requirements first, then the applicable
-reserved policy.
+`SessionRegistry` calls `TeeSecurityPolicyVerifier.verifyTeePolicy` with the
+verified state, profile attributes, variant attributes, and workload
+requirements. It performs all attribute checks here, before AK and TPM
+verification, to keep `SessionRegistry` below the EIP-170 code-size limit. It
+evaluates ordinary metadata requirements first, then the applicable reserved
+policy.
 
-For each reserved key, the policy registry merges profile and variant
+For each reserved key, `TeeSecurityPolicyVerifier` merges profile and variant
 attributes, with the variant value replacing the profile value. A missing
 base-image value means `false`. Every declared base-image value must equal the
 verified report value.
@@ -181,14 +179,15 @@ base-image mask and workload mask each default to `0x1`, which permits only
 `ok`. Both masks must contain the verified bit. A measurement-variant mask
 replaces the matching profile mask.
 
-For AMD SEV-SNP, SessionRegistry passes the verified CPUID, report version,
+For AMD SEV-SNP, `SessionRegistry` passes the verified CPUID, report version,
 four packed TCB values, `PLATFORM_INFO`, `LAUNCH_MIT_VECTOR`, and
-`CURRENT_MIT_VECTOR` to `AmdSnpSecurityPolicyRegistry`. The registry
-requires an active policy for that exact CPUID. That record supplies defaults;
-it is not an independent mandatory floor. Packed AMD SEV-SNP values use the
-same measurement-variant-first lookup. The base-image side resolves from the
-measurement variant, then platform profile, then registry default. The
-workload side resolves from an explicit requirement or the registry default.
+`CURRENT_MIT_VECTOR` to `TeeSecurityPolicyVerifier`. The verifier reads the
+active `AmdSnpSecurityPolicyRegistry` policy for that exact CPUID. That record
+supplies defaults; it is not an independent mandatory floor. Packed AMD
+SEV-SNP values use the same measurement-variant-first lookup. The base-image
+side resolves from the measurement variant, then platform profile, then
+registry default. The workload side resolves from an explicit requirement or
+the registry default.
 The effective `tcb.minimum` is the component-wise maximum of those two
 resolved values. The effective `platform-info.policy` combines only the two
 resolved required-set and required-clear masks. Conflicting masks fail.
@@ -287,7 +286,7 @@ Output: TpmQuoteVerificationResult or a specific TpmVerifier revert
 ### Attribute Requirements Evaluation (executed in Step 2a)
 
 The implementation executes these rules inside
-`AmdSnpSecurityPolicyRegistry.verifyTeePolicy` during Step 2a. There is no
+`TeeSecurityPolicyVerifier.verifyTeePolicy` during Step 2a. There is no
 second attribute-evaluation call after the PCR checks.
 ```
 Input: workloadSpec.requirements, merged platform+variant attributes
