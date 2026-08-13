@@ -27,7 +27,7 @@ import "forge-std/console.sol";
 
 contract DeployZkVerifierRegistry is DeploymentConfig {
     bytes32 internal constant INTEL_TDX_DCAP_PROGRAM_IDENTIFIER =
-        0x002973c41c78fbad885b2331b84bcd36df9f01d20c12efd8a969d709154f5dc5;
+        0x003e867031f3ecfb37bfa94d669b407a3ddb9b4e6e051201226d8bdad3a49120;
     bytes32 internal constant AMD_SEV_SNP_PROGRAM_IDENTIFIER =
         0x00bc5bae7f7c200ec91f866ee2f2927cc01fcf365a55f76c819648e5277d1286;
     bytes32 internal constant TPM_QUOTE_PROGRAM_IDENTIFIER =

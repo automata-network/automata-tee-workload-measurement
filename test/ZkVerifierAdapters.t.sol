@@ -11,7 +11,7 @@ import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.s
 import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
 
 contract IntelTdxDcapZkVerifierAdapterTest is Test {
-    bytes32 private constant PROGRAM_IDENTIFIER = 0x002973c41c78fbad885b2331b84bcd36df9f01d20c12efd8a969d709154f5dc5;
+    bytes32 private constant PROGRAM_IDENTIFIER = 0x003e867031f3ecfb37bfa94d669b407a3ddb9b4e6e051201226d8bdad3a49120;
     uint32 private constant TCB_EVALUATION_DATA_NUMBER = 19;
 
     MockAutomataDcapAttestation private dcapAttestation;
