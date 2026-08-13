@@ -87,7 +87,9 @@ contract AmdSevSnpZkVerifierAdapter is IAmdSevSnpZkVerifierAdapter {
         returns (AmdSevSnpVerifierJournal memory journal)
     {
         VerifierJournal memory verified =
-            snpAttestation.verifyAndAttestWithZKProof(proof.output, zkCoProcessorType, proof.proofBytes);
+            snpAttestation.verifyAndAttestWithZKProof(
+                proof.output, zkCoProcessorType, proof.programIdentifier, proof.proofBytes
+            );
         return AmdSevSnpVerifierJournal({
             result: verified.result,
             timestamp: verified.timestamp,

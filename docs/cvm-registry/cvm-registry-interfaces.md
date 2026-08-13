@@ -548,12 +548,13 @@ interface ISnpAttestation {
     function verifyAndAttestWithZKProof(
         bytes calldata output,
         ZkCoProcessorType zkCoprocessor,
+        bytes32 identifier,
         bytes calldata proofBytes
     ) external returns (VerifierJournal memory verifiedOutput);
 }
 ```
 
-Note: SNP only supports ZK proof verification (no on-chain equivalent of `verifyAndAttestOnChain`).
+Note: SNP only supports ZK proof verification (no on-chain equivalent of `verifyAndAttestOnChain`). The consumer passes the exact program identifier selected by `ZkVerifierRegistry`; it does not ask the external verifier to substitute its latest identifier.
 
 ---
 

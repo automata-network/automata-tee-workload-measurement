@@ -4,9 +4,11 @@ pragma solidity ^0.8.27;
 import {Test} from "forge-std/Test.sol";
 
 import {IDcapAttestation} from "../src/interfaces/external/IDcapAttestation.sol";
-import {IntelTdxDcapJournalV1, ProgramBoundZkProof} from "../src/types/Zk.sol";
-import {IntelTdxDcapZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
+import {ISnpAttestation, VerificationResult} from "../src/interfaces/external/ISnpAttestation.sol";
+import {AmdSevSnpVerifierJournal, IntelTdxDcapJournalV1, ProgramBoundZkProof} from "../src/types/Zk.sol";
+import {AmdSevSnpZkVerifierAdapter, IntelTdxDcapZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
 import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.sol";
+import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
 
 contract IntelTdxDcapZkVerifierAdapterTest is Test {
     bytes32 private constant PROGRAM_IDENTIFIER = 0x002973c41c78fbad885b2331b84bcd36df9f01d20c12efd8a969d709154f5dc5;
@@ -55,5 +57,59 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
             abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalOutputLength.selector, 74, 75)
         );
         adapter.verifyProof(proof);
+    }
+}
+
+contract AmdSevSnpZkVerifierAdapterTest is Test {
+    bytes32 private constant PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.v1.selected");
+    bytes32 private constant IMPLICIT_LATEST_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.v1.latest");
+
+    MockAutomataSnpAttestation private snpAttestation;
+    AmdSevSnpZkVerifierAdapter private adapter;
+
+    function setUp() public {
+        snpAttestation = new MockAutomataSnpAttestation();
+        snpAttestation.setLatestProgramIdentifier(IMPLICIT_LATEST_PROGRAM_IDENTIFIER);
+        adapter = new AmdSevSnpZkVerifierAdapter(
+            ISnpAttestation(address(snpAttestation)), ISnpAttestation.ZkCoProcessorType.Succinct
+        );
+    }
+
+    function testPassesExactProgramIdentifierAndPreservesPackedJournalParsing() public {
+        bytes32 reportHash = keccak256("AMD SEV-SNP report");
+        bytes32 firstCert = keccak256("AMD ARK");
+        bytes32 secondCert = keccak256("AMD ASK");
+        uint160 firstSerial = uint160(0x1234);
+        uint160 secondSerial = uint160(0x5678);
+        bytes memory output = abi.encodePacked(
+            uint8(VerificationResult.Success),
+            uint64(1_700_000_000),
+            uint8(1),
+            uint32(2),
+            firstCert,
+            secondCert,
+            firstSerial,
+            secondSerial,
+            reportHash
+        );
+        ProgramBoundZkProof memory proof =
+            ProgramBoundZkProof({programIdentifier: PROGRAM_IDENTIFIER, output: output, proofBytes: hex"01020304"});
+
+        AmdSevSnpVerifierJournal memory journal = adapter.verifyProof(proof);
+
+        assertEq(uint8(journal.result), uint8(VerificationResult.Success));
+        assertEq(journal.timestamp, 1_700_000_000);
+        assertEq(journal.processorModel, 1);
+        assertEq(journal.reportHash, reportHash);
+        assertEq(journal.certs.length, 2);
+        assertEq(journal.certs[0], firstCert);
+        assertEq(journal.certs[1], secondCert);
+        assertEq(journal.certSerials.length, 2);
+        assertEq(journal.certSerials[0], firstSerial);
+        assertEq(journal.certSerials[1], secondSerial);
+        assertEq(snpAttestation.lastProgramIdentifier(), PROGRAM_IDENTIFIER);
+        assertTrue(snpAttestation.lastProgramIdentifier() != snpAttestation.latestProgramIdentifier());
+        assertEq(uint8(snpAttestation.lastZkCoProcessorType()), uint8(ISnpAttestation.ZkCoProcessorType.Succinct));
+        assertEq(snpAttestation.callCount(), 1);
     }
 }

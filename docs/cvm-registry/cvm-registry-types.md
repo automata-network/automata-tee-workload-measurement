@@ -576,6 +576,7 @@ struct VerifierJournal {
 function verifyAndAttestWithZKProof(
     bytes calldata output,
     ZkCoProcessorType zkCoprocessor,
+    bytes32 identifier,
     bytes calldata proofBytes
 ) → VerifierJournal memory
 ```

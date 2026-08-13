@@ -25,27 +25,46 @@ import {
 ///         (VerifierJournal.reportHash = keccak256(report)), including the report-binding guard.
 contract TeeVerifierSnpTest is Test {
     bytes32 internal constant SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.v1.test");
+    bytes32 internal constant SECOND_SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.v2.test");
+    bytes32 internal constant DISABLED_SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.disabled.test");
+    bytes32 internal constant UNKNOWN_SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.unknown.test");
     bytes32 internal constant TDX_PROGRAM_IDENTIFIER = keccak256("intel_tdx_dcap.v1.test");
 
     TeeVerifier internal teeVerifier;
+    ZkVerifierRegistry internal registry;
     MockAutomataSnpAttestation internal snp;
     MockAutomataDcapAttestation internal dcap;
+    AmdSevSnpZkVerifierAdapter internal snpAdapter;
 
     function setUp() public {
         snp = new MockAutomataSnpAttestation();
         dcap = new MockAutomataDcapAttestation();
         ZkVerifierRegistry implementation = new ZkVerifierRegistry();
-        ZkVerifierRegistry registry = ZkVerifierRegistry(
+        registry = ZkVerifierRegistry(
             address(
                 new ERC1967Proxy(
                     address(implementation), abi.encodeCall(ZkVerifierRegistry.initialize, (address(this)))
                 )
             )
         );
-        AmdSevSnpZkVerifierAdapter adapter =
-            new AmdSevSnpZkVerifierAdapter(ISnpAttestation(address(snp)), ISnpAttestation.ZkCoProcessorType.RiscZero);
+        snpAdapter =
+            new AmdSevSnpZkVerifierAdapter(ISnpAttestation(address(snp)), ISnpAttestation.ZkCoProcessorType.Succinct);
         registry.setZkProgramConfig(
-            ZkProofType.AmdSevSnp, VerificationBackendType.ZkRiscZero, SNP_PROGRAM_IDENTIFIER, address(adapter), true
+            ZkProofType.AmdSevSnp, VerificationBackendType.ZkSuccinct, SNP_PROGRAM_IDENTIFIER, address(snpAdapter), true
+        );
+        registry.setZkProgramConfig(
+            ZkProofType.AmdSevSnp,
+            VerificationBackendType.ZkSuccinct,
+            SECOND_SNP_PROGRAM_IDENTIFIER,
+            address(snpAdapter),
+            true
+        );
+        registry.setZkProgramConfig(
+            ZkProofType.AmdSevSnp,
+            VerificationBackendType.ZkSuccinct,
+            DISABLED_SNP_PROGRAM_IDENTIFIER,
+            address(snpAdapter),
+            false
         );
         IntelTdxDcapZkVerifierAdapter tdxAdapter = new IntelTdxDcapZkVerifierAdapter(
             IDcapAttestation(address(dcap)), IDcapAttestation.ZkCoProcessorType.Succinct, 19
@@ -85,14 +104,22 @@ contract TeeVerifierSnpTest is Test {
     }
 
     function _teeReport(bytes memory journalOutput, bytes memory rawReport) internal pure returns (TeeReport memory) {
+        return _teeReportForProgramIdentifier(journalOutput, rawReport, SNP_PROGRAM_IDENTIFIER);
+    }
+
+    function _teeReportForProgramIdentifier(
+        bytes memory journalOutput,
+        bytes memory rawReport,
+        bytes32 programIdentifier
+    ) internal pure returns (TeeReport memory) {
         AmdSevSnpZkEvidence memory evidence = AmdSevSnpZkEvidence({
             proof: ProgramBoundZkProof({
-                programIdentifier: SNP_PROGRAM_IDENTIFIER, output: journalOutput, proofBytes: hex""
+                programIdentifier: programIdentifier, output: journalOutput, proofBytes: hex""
             }),
             rawReport: rawReport
         });
         return TeeReport({
-            verificationBackendType: VerificationBackendType.ZkRiscZero,
+            verificationBackendType: VerificationBackendType.ZkSuccinct,
             teeType: TEEType.AmdSevSnp,
             data: abi.encode(evidence)
         });
@@ -136,6 +163,68 @@ contract TeeVerifierSnpTest is Test {
         assertEq(res.amdSevSnpCurrentMitigationVector, 0);
         // _verifyAmdSevSnp returns the full bound report as reportData.
         assertEq(res.reportData, report);
+        assertEq(snp.lastProgramIdentifier(), SNP_PROGRAM_IDENTIFIER);
+        assertEq(uint8(snp.lastZkCoProcessorType()), uint8(ISnpAttestation.ZkCoProcessorType.Succinct));
+    }
+
+    function test_snp_two_enabled_identifiers_use_same_adapter_and_reach_external_verifier_exactly() public {
+        assertEq(
+            registry.resolveVerifierAdapter(
+                ZkProofType.AmdSevSnp, VerificationBackendType.ZkSuccinct, SNP_PROGRAM_IDENTIFIER
+            ),
+            address(snpAdapter)
+        );
+        assertEq(
+            registry.resolveVerifierAdapter(
+                ZkProofType.AmdSevSnp, VerificationBackendType.ZkSuccinct, SECOND_SNP_PROGRAM_IDENTIFIER
+            ),
+            address(snpAdapter)
+        );
+
+        bytes memory report = _report();
+        bytes memory journal = _packedJournal(VerificationResult.Success, keccak256(report));
+        teeVerifier.verifyTeeReport(_teeReportForProgramIdentifier(journal, report, SNP_PROGRAM_IDENTIFIER));
+        assertEq(snp.lastProgramIdentifier(), SNP_PROGRAM_IDENTIFIER);
+
+        teeVerifier.verifyTeeReport(_teeReportForProgramIdentifier(journal, report, SECOND_SNP_PROGRAM_IDENTIFIER));
+        assertEq(snp.lastProgramIdentifier(), SECOND_SNP_PROGRAM_IDENTIFIER);
+        assertEq(snp.callCount(), 2);
+    }
+
+    function test_snp_disabled_identifier_is_rejected_by_registry() public {
+        bytes memory report = _report();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ZkVerifierRegistry.ZkProgramNotEnabled.selector,
+                ZkProofType.AmdSevSnp,
+                VerificationBackendType.ZkSuccinct,
+                DISABLED_SNP_PROGRAM_IDENTIFIER
+            )
+        );
+        teeVerifier.verifyTeeReport(
+            _teeReportForProgramIdentifier(
+                _packedJournal(VerificationResult.Success, keccak256(report)), report, DISABLED_SNP_PROGRAM_IDENTIFIER
+            )
+        );
+        assertEq(snp.callCount(), 0);
+    }
+
+    function test_snp_unknown_identifier_is_rejected_by_registry() public {
+        bytes memory report = _report();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ZkVerifierRegistry.ZkProgramNotEnabled.selector,
+                ZkProofType.AmdSevSnp,
+                VerificationBackendType.ZkSuccinct,
+                UNKNOWN_SNP_PROGRAM_IDENTIFIER
+            )
+        );
+        teeVerifier.verifyTeeReport(
+            _teeReportForProgramIdentifier(
+                _packedJournal(VerificationResult.Success, keccak256(report)), report, UNKNOWN_SNP_PROGRAM_IDENTIFIER
+            )
+        );
+        assertEq(snp.callCount(), 0);
     }
 
     function test_gcp_snp_pcr15_extend_value_is_exact_report_id() public {

@@ -49,11 +49,13 @@ interface ISnpAttestation {
     ///      allowing for efficient on-chain verification.
     /// @param output The journal/public output from the ZK proof containing parsed report data
     /// @param zkCoprocessor The type of ZK co-processor that generated the proof
+    /// @param identifier The exact ZK program identifier that generated the proof
     /// @param proofBytes The serialized ZK proof bytes
     /// @return verifiedOutput The verified attestation data, including the keccak256 report hash
     function verifyAndAttestWithZKProof(
         bytes calldata output,
         ZkCoProcessorType zkCoprocessor,
+        bytes32 identifier,
         bytes calldata proofBytes
     ) external returns (VerifierJournal memory verifiedOutput);
 }
