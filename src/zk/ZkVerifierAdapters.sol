@@ -21,8 +21,15 @@ import {
 contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
     error DcapProofVerificationFailed(bytes output);
     error InvalidDcapJournalOutputLength(uint256 actual, uint256 expected);
+    error InvalidDcapLegacyRejectPrefix(bytes16 actual);
+    error InvalidDcapJournalMagic(bytes4 actual);
+    error UnsupportedDcapJournalFormatType(uint16 actual);
+    error UnsupportedDcapJournalFormatVersion(uint16 actual);
 
-    uint256 private constant INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH = 75;
+    uint256 private constant INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH = 131;
+    bytes4 private constant INTEL_TDX_DCAP_JOURNAL_MAGIC = 0x41544b4a; // "ATKJ"
+    uint16 private constant INTEL_TDX_DCAP_FORMAT_TYPE = 1;
+    uint16 private constant INTEL_TDX_DCAP_FORMAT_VERSION = 1;
 
     IDcapAttestation public immutable dcapAttestation;
     IDcapAttestation.ZkCoProcessorType public immutable zkCoProcessorType;
@@ -51,16 +58,38 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
         uint16 quoteBodyType;
         uint8 tcbStatus;
         bytes6 fmspc;
+        bytes16 legacyRejectPrefix;
+        bytes4 magic;
+        uint16 formatType;
+        uint16 formatVersion;
         bytes32 fullQuoteHash;
         bytes32 quoteBodyHash;
+        bytes32 advisoryIdsHash;
         assembly ("memory-safe") {
             let start := add(output, 0x20)
             quoteVersion := shr(240, mload(start))
             quoteBodyType := and(shr(224, mload(start)), 0xffff)
             tcbStatus := byte(4, mload(start))
             fmspc := mload(add(start, 5))
-            fullQuoteHash := mload(add(start, 11))
-            quoteBodyHash := mload(add(start, 43))
+            legacyRejectPrefix := mload(add(start, 11))
+            magic := mload(add(start, 27))
+            formatType := shr(240, mload(add(start, 31)))
+            formatVersion := shr(240, mload(add(start, 33)))
+            fullQuoteHash := mload(add(start, 35))
+            quoteBodyHash := mload(add(start, 67))
+            advisoryIdsHash := mload(add(start, 99))
+        }
+        if (legacyRejectPrefix != bytes16(0)) {
+            revert InvalidDcapLegacyRejectPrefix(legacyRejectPrefix);
+        }
+        if (magic != INTEL_TDX_DCAP_JOURNAL_MAGIC) {
+            revert InvalidDcapJournalMagic(magic);
+        }
+        if (formatType != INTEL_TDX_DCAP_FORMAT_TYPE) {
+            revert UnsupportedDcapJournalFormatType(formatType);
+        }
+        if (formatVersion != INTEL_TDX_DCAP_FORMAT_VERSION) {
+            revert UnsupportedDcapJournalFormatVersion(formatVersion);
         }
         return IntelTdxDcapJournalV1({
             quoteVersion: quoteVersion,
@@ -68,7 +97,8 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
             tcbStatus: tcbStatus,
             fmspc: fmspc,
             fullQuoteHash: fullQuoteHash,
-            quoteBodyHash: quoteBodyHash
+            quoteBodyHash: quoteBodyHash,
+            advisoryIdsHash: advisoryIdsHash
         });
     }
 }

@@ -11,11 +11,40 @@ import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.s
 import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
 
 contract IntelTdxDcapZkVerifierAdapterTest is Test {
-    bytes32 private constant PROGRAM_IDENTIFIER = 0x003e867031f3ecfb37bfa94d669b407a3ddb9b4e6e051201226d8bdad3a49120;
+    bytes32 private constant PROGRAM_IDENTIFIER = 0x00ed85153a35a84ea1fff62d16ac42f850082f11caea923bf25c20a432bdae46;
     uint32 private constant TCB_EVALUATION_DATA_NUMBER = 19;
 
     MockAutomataDcapAttestation private dcapAttestation;
     IntelTdxDcapZkVerifierAdapter private adapter;
+
+    function _framedOutput(
+        bytes16 legacyRejectPrefix,
+        bytes4 magic,
+        uint16 formatType,
+        uint16 formatVersion,
+        bytes32 fullQuoteHash,
+        bytes32 quoteBodyHash,
+        bytes32 advisoryIdsHash
+    ) private pure returns (bytes memory) {
+        return abi.encodePacked(
+            uint16(4),
+            uint16(2),
+            uint8(5),
+            bytes6(0x010203040506),
+            legacyRejectPrefix,
+            magic,
+            formatType,
+            formatVersion,
+            fullQuoteHash,
+            quoteBodyHash,
+            advisoryIdsHash
+        );
+    }
+
+    function _proof(bytes memory output) private pure returns (ProgramBoundZkProof memory) {
+        bytes memory journal = abi.encodePacked(uint16(output.length), output, bytes32(uint256(1)));
+        return ProgramBoundZkProof({programIdentifier: PROGRAM_IDENTIFIER, output: journal, proofBytes: hex"01020304"});
+    }
 
     function setUp() public {
         dcapAttestation = new MockAutomataDcapAttestation();
@@ -29,13 +58,11 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
     function testPassesProgramIdentifierAndTcbEvaluationDataNumber() public {
         bytes32 fullQuoteHash = keccak256("full Intel TDX quote");
         bytes32 quoteBodyHash = keccak256("Intel TDX quote body");
+        bytes32 advisoryIdsHash = keccak256("canonical Intel advisory IDs");
         bytes memory expectedOutput =
-            abi.encodePacked(uint16(4), uint16(2), uint8(5), bytes6(0x010203040506), fullQuoteHash, quoteBodyHash);
-        bytes memory journal = abi.encodePacked(uint16(expectedOutput.length), expectedOutput, bytes32(uint256(1)));
-        ProgramBoundZkProof memory proof =
-            ProgramBoundZkProof({programIdentifier: PROGRAM_IDENTIFIER, output: journal, proofBytes: hex"01020304"});
+            _framedOutput(bytes16(0), 0x41544b4a, 1, 1, fullQuoteHash, quoteBodyHash, advisoryIdsHash);
 
-        IntelTdxDcapJournalV1 memory actualOutput = adapter.verifyProof(proof);
+        IntelTdxDcapJournalV1 memory actualOutput = adapter.verifyProof(_proof(expectedOutput));
 
         assertEq(actualOutput.quoteVersion, 4);
         assertEq(actualOutput.quoteBodyType, 2);
@@ -43,20 +70,76 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
         assertEq(actualOutput.fmspc, bytes6(0x010203040506));
         assertEq(actualOutput.fullQuoteHash, fullQuoteHash);
         assertEq(actualOutput.quoteBodyHash, quoteBodyHash);
+        assertEq(actualOutput.advisoryIdsHash, advisoryIdsHash);
         assertEq(dcapAttestation.lastProgramIdentifier(), PROGRAM_IDENTIFIER);
         assertEq(dcapAttestation.lastTcbEvaluationDataNumber(), TCB_EVALUATION_DATA_NUMBER);
     }
 
     function testRejectsNonCanonicalCompactOutputLength() public {
-        bytes memory expectedOutput = new bytes(74);
-        bytes memory journal = abi.encodePacked(uint16(expectedOutput.length), expectedOutput);
-        ProgramBoundZkProof memory proof =
-            ProgramBoundZkProof({programIdentifier: PROGRAM_IDENTIFIER, output: journal, proofBytes: hex""});
+        bytes memory expectedOutput = new bytes(130);
 
         vm.expectRevert(
-            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalOutputLength.selector, 74, 75)
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalOutputLength.selector, 130, 131)
         );
-        adapter.verifyProof(proof);
+        adapter.verifyProof(_proof(expectedOutput));
+    }
+
+    function testFramedAdapterRejectsLegacyOutput() public {
+        bytes memory legacyOutput = new bytes(75);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalOutputLength.selector, 75, 131)
+        );
+        adapter.verifyProof(_proof(legacyOutput));
+    }
+
+    function testRejectsNonzeroLegacyRejectPrefix() public {
+        bytes memory output = _framedOutput(bytes16(uint128(1)), 0x41544b4a, 1, 1, bytes32(0), bytes32(0), bytes32(0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IntelTdxDcapZkVerifierAdapter.InvalidDcapLegacyRejectPrefix.selector, bytes16(uint128(1))
+            )
+        );
+        adapter.verifyProof(_proof(output));
+    }
+
+    function testRejectsWrongMagic() public {
+        bytes memory output = _framedOutput(bytes16(0), 0x42414421, 1, 1, bytes32(0), bytes32(0), bytes32(0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalMagic.selector, bytes4(0x42414421))
+        );
+        adapter.verifyProof(_proof(output));
+    }
+
+    function testRejectsUnsupportedFormatType() public {
+        bytes memory output = _framedOutput(bytes16(0), 0x41544b4a, 2, 1, bytes32(0), bytes32(0), bytes32(0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.UnsupportedDcapJournalFormatType.selector, 2)
+        );
+        adapter.verifyProof(_proof(output));
+    }
+
+    function testRejectsUnsupportedFormatVersion() public {
+        bytes memory output = _framedOutput(bytes16(0), 0x41544b4a, 1, 2, bytes32(0), bytes32(0), bytes32(0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.UnsupportedDcapJournalFormatVersion.selector, 2)
+        );
+        adapter.verifyProof(_proof(output));
+    }
+
+    function testAdvisoryHashEncodingMatchesRust() public pure {
+        string[] memory advisoryIds = new string[](2);
+        advisoryIds[0] = "INTEL-SA-00001";
+        advisoryIds[1] = "INTEL-SA-00002";
+
+        assertEq(
+            keccak256(abi.encode(bytes32("ATKJ_ADVISORY_IDS_V1"), advisoryIds)),
+            0x74e331084383d7664e2286bc530b1be303d794a53fa76fe96418d6f00f6c6164
+        );
     }
 }
 

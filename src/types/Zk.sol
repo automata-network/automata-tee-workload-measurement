@@ -33,6 +33,8 @@ struct IntelTdxDcapJournalV1 {
     bytes6 fmspc;
     bytes32 fullQuoteHash;
     bytes32 quoteBodyHash;
+    /// @dev keccak256(abi.encode(bytes32("ATKJ_ADVISORY_IDS_V1"), sortedUniqueAdvisoryIds)).
+    bytes32 advisoryIdsHash;
 }
 
 /// @notice AMD SEV-SNP proof plus the exact report body committed by the proof.

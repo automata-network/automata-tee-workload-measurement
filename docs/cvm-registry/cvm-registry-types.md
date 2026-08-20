@@ -187,6 +187,7 @@ struct IntelTdxDcapJournalV1 {
     bytes6 fmspc;
     bytes32 fullQuoteHash;
     bytes32 quoteBodyHash;
+    bytes32 advisoryIdsHash;
 }
 
 struct AmdSevSnpZkEvidence {
@@ -215,6 +216,16 @@ struct TeeVerificationResult {
     bytes32 teeReportBytesHash;
 }
 ```
+
+The proved DCAP journal uses a 131-byte internal body. After the 11-byte
+Automata header, it contains 16 zero bytes, `ATKJ`, `uint16(1)` format type,
+`uint16(1)` format version, `fullQuoteHash`, `quoteBodyHash`, and
+`advisoryIdsHash`. The full journal is 333 bytes after adding the two-byte
+length and 200-byte collateral commitment suffix.
+
+`advisoryIdsHash` is
+`keccak256(abi.encode(bytes32("ATKJ_ADVISORY_IDS_V1"), sortedUniqueAdvisoryIds))`.
+The identifiers use strict ascending UTF-8 byte order.
 
 Intel TDX uses `IntelTdxDcapZkEvidence`. The proof commits to both
 `keccak256(fullRawQuote)` and `keccak256(quoteBody)`. The call supplies only

@@ -545,10 +545,14 @@ pub fn compute_tee_report_hash(tee_report: &TeeReport) -> Result<B256> {
 }
 
 fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidence) -> Result<B256> {
-    const JOURNAL_LENGTH: usize = 277;
-    const VERIFIED_OUTPUT_LENGTH: usize = 75;
-    const FULL_QUOTE_HASH_OFFSET: usize = 13;
-    const QUOTE_BODY_HASH_OFFSET: usize = 45;
+    const JOURNAL_LENGTH: usize = 333;
+    const VERIFIED_OUTPUT_LENGTH: usize = 131;
+    const LEGACY_REJECT_PREFIX_OFFSET: usize = 13;
+    const MAGIC_OFFSET: usize = 29;
+    const FORMAT_TYPE_OFFSET: usize = 33;
+    const FORMAT_VERSION_OFFSET: usize = 35;
+    const FULL_QUOTE_HASH_OFFSET: usize = 37;
+    const QUOTE_BODY_HASH_OFFSET: usize = 69;
 
     let output = evidence.proof.output.as_ref();
     anyhow::ensure!(
@@ -560,6 +564,28 @@ fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidenc
     anyhow::ensure!(
         verified_output_length == VERIFIED_OUTPUT_LENGTH,
         "Intel TDX DCAP verified output must be {VERIFIED_OUTPUT_LENGTH} bytes, got {verified_output_length}"
+    );
+    anyhow::ensure!(
+        output[LEGACY_REJECT_PREFIX_OFFSET..MAGIC_OFFSET] == [0; 16],
+        "Intel TDX DCAP legacy rejection prefix must be zero"
+    );
+    anyhow::ensure!(
+        output[MAGIC_OFFSET..FORMAT_TYPE_OFFSET] == *b"ATKJ",
+        "Intel TDX DCAP journal magic must be ATKJ"
+    );
+    let format_type =
+        u16::from_be_bytes([output[FORMAT_TYPE_OFFSET], output[FORMAT_TYPE_OFFSET + 1]]);
+    anyhow::ensure!(
+        format_type == 1,
+        "Intel TDX DCAP journal format type must be 1, got {format_type}"
+    );
+    let format_version = u16::from_be_bytes([
+        output[FORMAT_VERSION_OFFSET],
+        output[FORMAT_VERSION_OFFSET + 1],
+    ]);
+    anyhow::ensure!(
+        format_version == 1,
+        "Intel TDX DCAP journal format version must be 1, got {format_version}"
     );
     let body_type = u16::from_be_bytes([output[4], output[5]]);
     let body_len = dcap_body_len(body_type)?;
@@ -695,14 +721,19 @@ mod tests {
         full_quote.extend_from_slice(&[0x77; 64]);
         let full_quote_hash = keccak256(&full_quote);
 
-        let mut output = Vec::with_capacity(277);
-        output.extend_from_slice(&75u16.to_be_bytes());
+        let mut output = Vec::with_capacity(333);
+        output.extend_from_slice(&131u16.to_be_bytes());
         output.extend_from_slice(&4u16.to_be_bytes());
         output.extend_from_slice(&2u16.to_be_bytes());
         output.push(0);
         output.extend_from_slice(&[0x11; 6]);
+        output.extend_from_slice(&[0; 16]);
+        output.extend_from_slice(b"ATKJ");
+        output.extend_from_slice(&1u16.to_be_bytes());
+        output.extend_from_slice(&1u16.to_be_bytes());
         output.extend_from_slice(full_quote_hash.as_slice());
         output.extend_from_slice(keccak256(&quote_body).as_slice());
+        output.extend_from_slice(&[0x99; 32]);
         output.extend_from_slice(&[0u8; 8 + 6 * 32]);
         let data: Bytes = IntelTdxDcapZkEvidence {
             proof: ProgramBoundZkProof {

@@ -520,7 +520,17 @@ contract TeeVerifierSnpTest is Test {
     {
         uint16 quoteVersion = uint16(uint8(fullQuote[0])) | (uint16(uint8(fullQuote[1])) << 8);
         bytes memory compactOutput = abi.encodePacked(
-            quoteVersion, quoteBodyType, uint8(0), bytes6(0x010203040506), keccak256(fullQuote), keccak256(quoteBody)
+            quoteVersion,
+            quoteBodyType,
+            uint8(0),
+            bytes6(0x010203040506),
+            bytes16(0),
+            bytes4(0x41544b4a),
+            uint16(1),
+            uint16(1),
+            keccak256(fullQuote),
+            keccak256(quoteBody),
+            keccak256("no advisories")
         );
         IntelTdxDcapZkEvidence memory evidence = IntelTdxDcapZkEvidence({
             proof: ProgramBoundZkProof({

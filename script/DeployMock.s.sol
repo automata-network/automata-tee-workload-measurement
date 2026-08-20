@@ -93,7 +93,7 @@ contract DeployMock is Script, DeploymentConfig {
             .setZkProgramConfig(
                 ZkProofType.AmdSevSnp,
                 VerificationBackendType.ZkSuccinct,
-                0x00bc5bae7f7c200ec91f866ee2f2927cc01fcf365a55f76c819648e5277d1286,
+                0x007589387c69b403fe8d2b0e1c7db05175155daff7125fc981ac6ecd1985d18c,
                 address(amdAdapter),
                 true
             );

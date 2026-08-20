@@ -63,8 +63,10 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
 3. Return the accepted status as `intelTdxTcbStatusBit = 1 << rawStatus`.
 4. For Solidity, extract the quote body from verified DCAP output. For ZK,
-   require the supplied quote body to have the verified TD10 or TD15 length and
-   require `keccak256(quoteBody) == journal.quoteBodyHash`.
+   require the exact 131-byte framed output, zero legacy rejection prefix,
+   `ATKJ` magic, format type 1, and format version 1. Then require the supplied
+   quote body to have the verified TD10 or TD15 length and require
+   `keccak256(quoteBody) == journal.quoteBodyHash`.
 5. Require valid reserved attribute bits and `SEPT_VE_DISABLE`.
 6. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`.
 7. Extract `DEBUG` into `enabledTeeAttributes`.

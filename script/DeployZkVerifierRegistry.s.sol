@@ -27,13 +27,13 @@ import "forge-std/console.sol";
 
 contract DeployZkVerifierRegistry is DeploymentConfig {
     bytes32 internal constant INTEL_TDX_DCAP_PROGRAM_IDENTIFIER =
-        0x003e867031f3ecfb37bfa94d669b407a3ddb9b4e6e051201226d8bdad3a49120;
+        0x00ed85153a35a84ea1fff62d16ac42f850082f11caea923bf25c20a432bdae46;
     bytes32 internal constant AMD_SEV_SNP_PROGRAM_IDENTIFIER =
-        0x00bc5bae7f7c200ec91f866ee2f2927cc01fcf365a55f76c819648e5277d1286;
+        0x007589387c69b403fe8d2b0e1c7db05175155daff7125fc981ac6ecd1985d18c;
     bytes32 internal constant TPM_QUOTE_PROGRAM_IDENTIFIER =
-        0x0093daf8d7fac35987977a557eaaed760c9f7acd3abce4b21b58611eec08c108;
+        0x004b8dbbef212fa2002717517013cc2bf744243ec71ca93bcd6a273ccd800fc3;
     bytes32 internal constant AWS_NITROTPM_PROGRAM_IDENTIFIER =
-        0x000f530085e51691cf679b131ebc02b69534f0ad8ee06291ec3ba11ff7c97150;
+        0x00cd086453546fe7d98b1d429c024ca657abce6231b04645b465f3ca965cc9eb;
 
     function _deployZkVerifierRegistry() internal returns (address) {
         address owner = vm.envAddress("OWNER");
