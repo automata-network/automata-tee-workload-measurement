@@ -53,6 +53,9 @@ import {
 } from "../src/types/Constants.sol";
 
 contract SessionRegistryTest is Test {
+    bytes32 internal constant TDX_PROGRAM_IDENTIFIER = keccak256("intel_tdx_dcap.test");
+    bytes32 internal constant SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.test");
+
     // Deployed contracts
     SignatureVerifier public signatureVerifier;
     BaseImageRegistry public baseImageRegistry;
@@ -112,7 +115,7 @@ contract SessionRegistryTest is Test {
         workloadRegistry = new WorkloadRegistry(signatureVerifier);
 
         // Deploy TeeVerifier (wraps DCAP + SNP into single contract)
-        teeVerifier = new TeeVerifier(mockDcap, mockSnp);
+        teeVerifier = new TeeVerifier(mockDcap, mockSnp, TDX_PROGRAM_IDENTIFIER, SNP_PROGRAM_IDENTIFIER);
 
         // Deploy MaaKeyRegistry behind a proxy (UUPS, owner-initialized).
         // Required for SessionRegistry construction even when tests don't exercise the

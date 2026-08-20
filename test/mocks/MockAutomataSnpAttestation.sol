@@ -14,11 +14,13 @@ import {ISnpAttestation, VerifierJournal, VerificationResult} from "../../src/in
 ///   u8 result | u64 timestamp (BE) | u8 processorModel | u32 certSize (BE) |
 ///   bytes32[certSize] certs | uint160[certSize] certSerials (20 bytes each) | bytes32 reportHash
 contract MockAutomataSnpAttestation is ISnpAttestation {
-    function verifyAndAttestWithZKProof(bytes calldata output, ZkCoProcessorType, bytes calldata)
+    bytes32 public lastProgramIdentifier;
+
+    function verifyAndAttestWithZKProof(bytes calldata output, ZkCoProcessorType, bytes32 identifier, bytes calldata)
         external
-        pure
         returns (VerifierJournal memory journal)
     {
+        lastProgramIdentifier = identifier;
         uint256 offset = 0;
 
         journal.result = VerificationResult(uint8(output[offset]));

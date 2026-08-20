@@ -66,7 +66,9 @@ contract DeployMock is Script, DeploymentConfig {
         console.log("MockTpmAttestation deployed at:", address(d.tpmAttestation));
 
         // 3. TeeVerifier with mock backends
-        d.teeVerifier = new TeeVerifier(d.dcapAttestation, d.snpAttestation);
+        d.teeVerifier = new TeeVerifier(
+            d.dcapAttestation, d.snpAttestation, keccak256("intel_tdx_dcap.mock"), keccak256("amd_sev_snp.mock")
+        );
         console.log("TeeVerifier deployed at:", address(d.teeVerifier));
 
         // 4. Read existing shared contract addresses

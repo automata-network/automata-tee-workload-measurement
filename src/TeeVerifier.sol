@@ -30,7 +30,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Contract version
-    string public constant TEE_VERIFIER_VERSION = "1.4.0";
+    string public constant TEE_VERIFIER_VERSION = "1.4.1";
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Immutables - Vendor-Specific Attestation Contracts
@@ -41,6 +41,12 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice SNP attestation verifier contract for AMD SEV-SNP reports
     ISnpAttestation public immutable snpAttestation;
+
+    /// @notice Exact Succinct SP1 program accepted for Intel TDX DCAP proofs
+    bytes32 public immutable intelTdxDcapProgramIdentifier;
+
+    /// @notice Exact Succinct SP1 program accepted for AMD SEV-SNP proofs
+    bytes32 public immutable amdSevSnpProgramIdentifier;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants - DCAP Output Layout
@@ -63,6 +69,12 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @dev Offset of tcbStatus in DCAP output (2-byte version + 2-byte quoteBodyType)
     uint256 private constant DCAP_TCB_STATUS_OFFSET = 4;
+
+    /// @dev Packed collateral commitments after the length-prefixed DCAP output.
+    uint256 private constant DCAP_ZK_COLLATERAL_SIZE = 200;
+
+    /// @dev Preserve the value selected by the former three-argument DCAP call.
+    uint32 private constant DCAP_TCB_EVALUATION_DATA_NUMBER = 0;
 
     /// @dev DCAP TCB statuses 6 (Revoked), 7 (Unrecognized), and unknown values are hard failures.
     uint8 private constant TCB_STATUS_OUT_OF_DATE_CONFIGURATION_NEEDED = 5;
@@ -156,6 +168,12 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice The DCAP verifier returned a hard-rejected or unknown trusted computing base status.
     error DcapTcbStatusNotAccepted(uint8 actual);
 
+    /// @notice The packed DCAP journal length does not match its length prefix and collateral section.
+    error InvalidDcapZkJournalLength(uint256 actual, uint256 expected);
+
+    /// @notice A zero program identifier cannot pin a ZK verifier program.
+    error InvalidProgramIdentifier(TEEType teeType);
+
     /// @notice Reserved Intel TDX TD_ATTRIBUTES bits are set.
     error InvalidTdxAttributes(bytes8 actual);
 
@@ -215,25 +233,66 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice Initializes the TeeVerifier with vendor-specific attestation contracts
     /// @param _dcapAttestation Address of the DCAP attestation verifier contract
     /// @param _snpAttestation Address of the SNP attestation verifier contract
-    constructor(IDcapAttestation _dcapAttestation, ISnpAttestation _snpAttestation) {
+    /// @param _intelTdxDcapProgramIdentifier Exact Succinct SP1 TDX DCAP program identifier
+    /// @param _amdSevSnpProgramIdentifier Exact Succinct SP1 SEV-SNP program identifier
+    constructor(
+        IDcapAttestation _dcapAttestation,
+        ISnpAttestation _snpAttestation,
+        bytes32 _intelTdxDcapProgramIdentifier,
+        bytes32 _amdSevSnpProgramIdentifier
+    ) {
+        if (_intelTdxDcapProgramIdentifier == bytes32(0)) {
+            revert InvalidProgramIdentifier(TEEType.IntelTDX);
+        }
+        if (_amdSevSnpProgramIdentifier == bytes32(0)) {
+            revert InvalidProgramIdentifier(TEEType.AmdSevSnp);
+        }
         dcapAttestation = _dcapAttestation;
         snpAttestation = _snpAttestation;
+        intelTdxDcapProgramIdentifier = _intelTdxDcapProgramIdentifier;
+        amdSevSnpProgramIdentifier = _amdSevSnpProgramIdentifier;
     }
 
     function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32) {
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
             return keccak256(teeReport.data);
-        } else {
+        } else if (teeReport.teeType == TEEType.IntelTDX) {
             ZkProof memory zkProof = abi.decode(teeReport.data, (ZkProof));
-            bytes memory zkOutput = zkProof.output;
-            if (zkOutput.length < 32) revert TeeReportTooShort(zkOutput.length, 32);
-            // get the last 32 bytes of the output
-            bytes32 outputHash;
-            assembly ("memory-safe") {
-                let outputLen := mload(zkOutput)
-                outputHash := mload(add(zkOutput, add(0x20, sub(outputLen, 32))))
-            }
-            return outputHash;
+            return _extractDcapFullQuoteHash(zkProof.output);
+        } else if (teeReport.teeType == TEEType.AmdSevSnp) {
+            SnpZkProof memory zkProof = abi.decode(teeReport.data, (SnpZkProof));
+            return _readTrailingBytes32(zkProof.output);
+        } else {
+            revert UnsupportedTeeType(teeReport.teeType);
+        }
+    }
+
+    /// @dev Reads the full quote hash inserted at the end of the variable DCAP output.
+    function _extractDcapFullQuoteHash(bytes memory zkOutput) private pure returns (bytes32 fullQuoteHash) {
+        if (zkOutput.length < 2) revert TeeReportTooShort(zkOutput.length, 2);
+
+        uint16 variableOutputLength;
+        assembly ("memory-safe") {
+            variableOutputLength := shr(240, mload(add(zkOutput, 0x20)))
+        }
+        if (variableOutputLength < 32) revert TeeReportTooShort(variableOutputLength, 32);
+
+        uint256 collateralOffset = 2 + uint256(variableOutputLength);
+        uint256 expectedLength = collateralOffset + DCAP_ZK_COLLATERAL_SIZE;
+        if (zkOutput.length != expectedLength) {
+            revert InvalidDcapZkJournalLength(zkOutput.length, expectedLength);
+        }
+
+        uint256 hashOffset = collateralOffset - 32;
+        assembly ("memory-safe") {
+            fullQuoteHash := mload(add(add(zkOutput, 0x20), hashOffset))
+        }
+    }
+
+    function _readTrailingBytes32(bytes memory value) private pure returns (bytes32 result) {
+        if (value.length < 32) revert TeeReportTooShort(value.length, 32);
+        assembly ("memory-safe") {
+            result := mload(add(value, add(0x20, sub(mload(value), 32))))
         }
     }
 
@@ -507,6 +566,9 @@ contract TeeVerifier is ITeeVerifier {
             // Direct on-chain verification
             (success, output) = dcapAttestation.verifyAndAttestOnChain(teeReport.data);
         } else {
+            if (teeReport.verificationBackendType != VerificationBackendType.ZkSuccinct) {
+                revert UnsupportedBackendType(TEEType.IntelTDX, teeReport.verificationBackendType);
+            }
             // ZK proof verification
             ZkProof memory zkProof = abi.decode(teeReport.data, (ZkProof));
 
@@ -514,7 +576,13 @@ contract TeeVerifier is ITeeVerifier {
             IDcapAttestation.ZkCoProcessorType zkType =
                 IDcapAttestation.ZkCoProcessorType(uint8(teeReport.verificationBackendType));
 
-            (success, output) = dcapAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
+            (success, output) = dcapAttestation.verifyAndAttestWithZKProof(
+                zkProof.output,
+                zkType,
+                zkProof.proofBytes,
+                intelTdxDcapProgramIdentifier,
+                DCAP_TCB_EVALUATION_DATA_NUMBER
+            );
         }
 
         // Surface DCAP failure with the verifier's raw output so off-chain decoders
@@ -562,6 +630,9 @@ contract TeeVerifier is ITeeVerifier {
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
             revert UnsupportedBackendType(TEEType.AmdSevSnp, teeReport.verificationBackendType);
         }
+        if (teeReport.verificationBackendType != VerificationBackendType.ZkSuccinct) {
+            revert UnsupportedBackendType(TEEType.AmdSevSnp, teeReport.verificationBackendType);
+        }
 
         // ZK proof verification. The SNP journal commits only to keccak256(report), so the full
         // report body is carried separately in SnpZkProof.rawReport and bound to the proof below.
@@ -571,8 +642,9 @@ contract TeeVerifier is ITeeVerifier {
         ISnpAttestation.ZkCoProcessorType zkType =
             ISnpAttestation.ZkCoProcessorType(uint8(teeReport.verificationBackendType));
 
-        VerifierJournal memory journal =
-            snpAttestation.verifyAndAttestWithZKProof(zkProof.output, zkType, zkProof.proofBytes);
+        VerifierJournal memory journal = snpAttestation.verifyAndAttestWithZKProof(
+            zkProof.output, zkType, amdSevSnpProgramIdentifier, zkProof.proofBytes
+        );
 
         // Surface SNP verifier failure mode (was silently swallowed before).
         if (journal.result != VerificationResult.Success) {

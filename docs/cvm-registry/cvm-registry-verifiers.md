@@ -12,6 +12,8 @@
 |---|---|---|
 | `dcapAttestation` | `IDcapAttestation` | Intel DCAP verification backend |
 | `snpAttestation` | `ISnpAttestation` | AMD SNP verification backend |
+| `intelTdxDcapProgramIdentifier` | `bytes32` | Exact accepted Succinct SP1 TDX DCAP program |
+| `amdSevSnpProgramIdentifier` | `bytes32` | Exact accepted Succinct SP1 SEV-SNP program |
 
 ### Constants
 
@@ -36,7 +38,7 @@ uint256 constant SNP_REPORT_SIZE = 1184;
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "1.4.0";
+string public constant TEE_VERIFIER_VERSION = "1.4.1";
 ```
 
 ### Functions
@@ -46,7 +48,9 @@ string public constant TEE_VERIFIER_VERSION = "1.4.0";
 function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32)
 ```
 - Solidity backend: `keccak256(teeReport.data)`
-- ZK backend: decodes `ZkProof` from data, extracts last 32 bytes of `zkProof.output`
+- Intel TDX ZK backend: reads `keccak256(raw TDX quote)` from the end of the
+  length-prefixed output, immediately before the exact 200-byte collateral section
+- AMD SEV-SNP ZK backend: reads the trailing `reportHash` from the SNP journal
 
 #### `verifyTeeReport`
 ```solidity
@@ -56,7 +60,7 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 **TDX (Intel) flow**:
 1. Dispatch based on `VerificationBackendType`:
    - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
-   - ZK RiscZero/Succinct: `dcapAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
+   - ZK Succinct only: `dcapAttestation.verifyAndAttestWithZKProof(output, Succinct, proofBytes, intelTdxDcapProgramIdentifier, 0)`
 2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
 3. Return the accepted status as `intelTdxTcbStatusBit = 1 << rawStatus`.
 4. Extract the quote body from DCAP output.
@@ -66,7 +70,7 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 8. Return the quote body with `valid=true`.
 
 **SNP (AMD) flow**:
-1. ZK only: `snpAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
+1. ZK Succinct only: `snpAttestation.verifyAndAttestWithZKProof(output, Succinct, amdSevSnpProgramIdentifier, proofBytes)`
 2. Check the proof-bound report hash before reading report fields
 3. Require an exact 1,184-byte report and version 3 through 5
 4. Validate signature selection, key settings, policy, `VMPL`, raw TCB,
@@ -113,7 +117,8 @@ immutables and sits behind no proxy, and `SessionRegistry.teeVerifier` is
 likewise immutable. Widening any gate above is therefore a two-contract
 operation, not a policy edit:
 
-1. Deploy a new `TeeVerifier` with the widened constants.
+1. Deploy a new `TeeVerifier` with the widened constants and the exact accepted
+   TDX and SEV-SNP program identifiers.
 2. Deploy a new `SessionRegistry` implementation constructed against that
    address and `upgradeToAndCall` the `SessionRegistry` proxy.
 3. Only then relax the corresponding policy, if any.

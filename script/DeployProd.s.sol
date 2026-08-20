@@ -17,6 +17,8 @@ import "forge-std/console.sol";
 /// @dev Requires environment variables:
 ///      - DCAP_ATTESTATION_ADDR: Automata DCAP attestation contract address
 ///      - SNP_ATTESTATION_ADDR: Automata SNP attestation contract address
+///      - TDX_DCAP_PROGRAM_IDENTIFIER: Exact Succinct SP1 TDX DCAP program identifier
+///      - AMD_SEV_SNP_PROGRAM_IDENTIFIER: Exact Succinct SP1 SEV-SNP program identifier
 ///      - TPM_ATTESTATION_ADDR: Automata TPM attestation contract address
 ///      - OWNER: Deployer address (also used as initial owner)
 ///

@@ -49,12 +49,16 @@ interface IDcapAttestation {
     ///        determining which verifier contract to use
     /// @param proofBytes The serialized ZK proof bytes in the format expected by
     ///        the corresponding verifier (RiscZero or Succinct)
+    /// @param programIdentifier The exact ZK guest program identifier that generated the proof
+    /// @param tcbEvaluationDataNumber The Intel TCB collateral version used to build the proof
     /// @return success True if the ZK proof is valid and the attestation passes, false otherwise
     /// @return verifiedOutput The verified attestation output after proof validation,
     ///         containing the same claims as the input output if verification succeeds
     function verifyAndAttestWithZKProof(
         bytes calldata output,
         ZkCoProcessorType zkCoprocessor,
-        bytes calldata proofBytes
+        bytes calldata proofBytes,
+        bytes32 programIdentifier,
+        uint32 tcbEvaluationDataNumber
     ) external payable returns (bool success, bytes memory verifiedOutput);
 }

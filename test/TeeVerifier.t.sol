@@ -11,6 +11,7 @@ import {
     TeeReport,
     TEEType,
     VerificationBackendType,
+    ZkProof,
     SnpZkProof,
     TeeVerificationResult
 } from "../src/types/Evidence.sol";
@@ -23,6 +24,9 @@ import {
 /// @notice Exercises the SEV-SNP path of TeeVerifier against the SDK journal layout
 ///         (VerifierJournal.reportHash = keccak256(report)), including the report-binding guard.
 contract TeeVerifierSnpTest is Test {
+    bytes32 internal constant TDX_PROGRAM_IDENTIFIER = keccak256("intel_tdx_dcap.test");
+    bytes32 internal constant SNP_PROGRAM_IDENTIFIER = keccak256("amd_sev_snp.test");
+
     TeeVerifier internal teeVerifier;
     MockAutomataSnpAttestation internal snp;
     MockAutomataDcapAttestation internal dcap;
@@ -30,7 +34,26 @@ contract TeeVerifierSnpTest is Test {
     function setUp() public {
         snp = new MockAutomataSnpAttestation();
         dcap = new MockAutomataDcapAttestation();
-        teeVerifier = new TeeVerifier(IDcapAttestation(address(dcap)), ISnpAttestation(address(snp)));
+        teeVerifier = new TeeVerifier(
+            IDcapAttestation(address(dcap)),
+            ISnpAttestation(address(snp)),
+            TDX_PROGRAM_IDENTIFIER,
+            SNP_PROGRAM_IDENTIFIER
+        );
+    }
+
+    function test_constructor_rejects_zero_tdx_program_identifier() public {
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidProgramIdentifier.selector, TEEType.IntelTDX));
+        new TeeVerifier(
+            IDcapAttestation(address(dcap)), ISnpAttestation(address(snp)), bytes32(0), SNP_PROGRAM_IDENTIFIER
+        );
+    }
+
+    function test_constructor_rejects_zero_snp_program_identifier() public {
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidProgramIdentifier.selector, TEEType.AmdSevSnp));
+        new TeeVerifier(
+            IDcapAttestation(address(dcap)), ISnpAttestation(address(snp)), TDX_PROGRAM_IDENTIFIER, bytes32(0)
+        );
     }
 
     /// @dev A deterministic, structurally valid, full-size SEV-SNP report.
@@ -60,7 +83,7 @@ contract TeeVerifierSnpTest is Test {
     function _teeReport(bytes memory journalOutput, bytes memory rawReport) internal pure returns (TeeReport memory) {
         SnpZkProof memory p = SnpZkProof({output: journalOutput, proofBytes: hex"", rawReport: rawReport});
         return TeeReport({
-            verificationBackendType: VerificationBackendType.ZkRiscZero, teeType: TEEType.AmdSevSnp, data: abi.encode(p)
+            verificationBackendType: VerificationBackendType.ZkSuccinct, teeType: TEEType.AmdSevSnp, data: abi.encode(p)
         });
     }
 
@@ -102,6 +125,7 @@ contract TeeVerifierSnpTest is Test {
         assertEq(res.amdSevSnpCurrentMitigationVector, 0);
         // _verifyAmdSevSnp returns the full bound report as reportData.
         assertEq(res.reportData, report);
+        assertEq(snp.lastProgramIdentifier(), SNP_PROGRAM_IDENTIFIER);
     }
 
     function test_snp_revert_on_reportHash_mismatch() public {
@@ -343,8 +367,7 @@ contract TeeVerifierSnpTest is Test {
     }
 
     /// @dev Session-ID binding: getTeeReportHash reads the trailing 32 bytes of the packed journal,
-    ///      which the SDK places reportHash at. Also exercises the SnpZkProof→ZkProof forward-compat
-    ///      decode (getTeeReportHash decodes as ZkProof and must still read `output`).
+    ///      which the SDK places reportHash at.
     function test_snp_getTeeReportHash_equals_reportHash() public view {
         bytes memory report = _report();
         bytes32 reportHash = keccak256(report);
@@ -358,6 +381,80 @@ contract TeeVerifierSnpTest is Test {
             TeeReport({
                 verificationBackendType: VerificationBackendType.Solidity, teeType: TEEType.IntelTDX, data: quote
             });
+    }
+
+    function _tdxZkReport(bytes memory quote) internal pure returns (TeeReport memory) {
+        uint256 bodyOffset = uint8(quote[0]) == 4 ? 48 : 54;
+        uint16 bodyType = uint8(quote[0]) == 4 ? 2 : 3;
+        uint256 bodyLength = bodyType == 2 ? 584 : 648;
+        bytes memory quoteBody = new bytes(bodyLength);
+        for (uint256 i; i < bodyLength; ++i) {
+            quoteBody[i] = quote[bodyOffset + i];
+        }
+
+        bytes memory verifiedOutput =
+            abi.encodePacked(uint16(uint8(quote[0])), bodyType, uint8(0), bytes6(0), quoteBody);
+        bytes32 fullQuoteHash = keccak256(quote);
+        uint16 variableOutputLength = uint16(verifiedOutput.length + 32);
+        bytes memory journal = abi.encodePacked(variableOutputLength, verifiedOutput, fullQuoteHash, new bytes(200));
+        ZkProof memory proof = ZkProof({output: journal, proofBytes: hex""});
+        return TeeReport({
+            verificationBackendType: VerificationBackendType.ZkSuccinct,
+            teeType: TEEType.IntelTDX,
+            data: abi.encode(proof)
+        });
+    }
+
+    function test_tdx_zk_hash_is_full_quote_hash_and_program_is_pinned() public {
+        bytes memory quote = _td10Quote();
+        TeeReport memory report = _tdxZkReport(quote);
+
+        assertEq(teeVerifier.getTeeReportHash(report), keccak256(quote));
+        TeeVerificationResult memory result = teeVerifier.verifyTeeReport(report);
+
+        assertTrue(result.valid);
+        assertEq(dcap.lastProgramIdentifier(), TDX_PROGRAM_IDENTIFIER);
+        assertEq(dcap.lastTcbEvaluationDataNumber(), 0);
+    }
+
+    function test_tdx_zk_rejects_wrong_collateral_section_length() public {
+        TeeReport memory report = _tdxZkReport(_td10Quote());
+        ZkProof memory proof = abi.decode(report.data, (ZkProof));
+        bytes memory shortJournal = new bytes(proof.output.length - 1);
+        for (uint256 i; i < shortJournal.length; ++i) {
+            shortJournal[i] = proof.output[i];
+        }
+        proof.output = shortJournal;
+        report.data = abi.encode(proof);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TeeVerifier.InvalidDcapZkJournalLength.selector, shortJournal.length, shortJournal.length + 1
+            )
+        );
+        teeVerifier.getTeeReportHash(report);
+    }
+
+    function test_zk_paths_reject_unpinned_backend() public {
+        TeeReport memory tdxReport = _tdxZkReport(_td10Quote());
+        tdxReport.verificationBackendType = VerificationBackendType.ZkRiscZero;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TeeVerifier.UnsupportedBackendType.selector, TEEType.IntelTDX, VerificationBackendType.ZkRiscZero
+            )
+        );
+        teeVerifier.verifyTeeReport(tdxReport);
+
+        bytes memory snpReport = _report();
+        TeeReport memory report =
+            _teeReport(_packedJournal(VerificationResult.Success, keccak256(snpReport)), snpReport);
+        report.verificationBackendType = VerificationBackendType.ZkRiscZero;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TeeVerifier.UnsupportedBackendType.selector, TEEType.AmdSevSnp, VerificationBackendType.ZkRiscZero
+            )
+        );
+        teeVerifier.verifyTeeReport(report);
     }
 
     function _td10Quote() internal pure returns (bytes memory quote) {

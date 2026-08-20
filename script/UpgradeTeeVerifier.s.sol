@@ -50,7 +50,12 @@ contract UpgradeTeeVerifier is Script {
         WorkloadRegistry workloadImpl = new WorkloadRegistry(ISignatureVerifier(SIG_VERIFIER));
         console.log("new WorkloadRegistry impl: ", address(workloadImpl));
 
-        TeeVerifier tee = new TeeVerifier(IDcapAttestation(DCAP), ISnpAttestation(SNP));
+        TeeVerifier tee = new TeeVerifier(
+            IDcapAttestation(DCAP),
+            ISnpAttestation(SNP),
+            vm.envBytes32("TDX_DCAP_PROGRAM_IDENTIFIER"),
+            vm.envBytes32("AMD_SEV_SNP_PROGRAM_IDENTIFIER")
+        );
         console.log("new TeeVerifier:        ", address(tee));
 
         // AkCollateralVerificationResult gained the MAA-authenticated TEE type. The old
