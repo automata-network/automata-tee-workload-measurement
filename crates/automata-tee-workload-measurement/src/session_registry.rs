@@ -546,13 +546,13 @@ pub fn compute_tee_report_hash(tee_report: &TeeReport) -> Result<B256> {
 
 fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidence) -> Result<B256> {
     const JOURNAL_LENGTH: usize = 333;
-    const VERIFIED_OUTPUT_LENGTH: usize = 131;
-    const LEGACY_REJECT_PREFIX_OFFSET: usize = 13;
-    const MAGIC_OFFSET: usize = 29;
-    const FORMAT_TYPE_OFFSET: usize = 33;
-    const FORMAT_VERSION_OFFSET: usize = 35;
-    const FULL_QUOTE_HASH_OFFSET: usize = 37;
-    const QUOTE_BODY_HASH_OFFSET: usize = 69;
+    const COMPACT_OUTPUT_V1_LENGTH: usize = 131;
+    const COMPACT_OUTPUT_FORMAT_GUARD_OFFSET: usize = 13;
+    const COMPACT_OUTPUT_MAGIC_OFFSET: usize = 29;
+    const COMPACT_OUTPUT_TYPE_OFFSET: usize = 33;
+    const COMPACT_OUTPUT_VERSION_OFFSET: usize = 35;
+    const COMPACT_OUTPUT_FULL_QUOTE_HASH_OFFSET: usize = 37;
+    const COMPACT_OUTPUT_QUOTE_BODY_HASH_OFFSET: usize = 69;
 
     let output = evidence.proof.output.as_ref();
     anyhow::ensure!(
@@ -560,32 +560,34 @@ fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidenc
         "Intel TDX DCAP journal must be {JOURNAL_LENGTH} bytes, got {}",
         output.len()
     );
-    let verified_output_length = u16::from_be_bytes([output[0], output[1]]) as usize;
+    let compact_output_length = u16::from_be_bytes([output[0], output[1]]) as usize;
     anyhow::ensure!(
-        verified_output_length == VERIFIED_OUTPUT_LENGTH,
-        "Intel TDX DCAP verified output must be {VERIFIED_OUTPUT_LENGTH} bytes, got {verified_output_length}"
+        compact_output_length == COMPACT_OUTPUT_V1_LENGTH,
+        "Intel TDX DCAP compact output must be {COMPACT_OUTPUT_V1_LENGTH} bytes, got {compact_output_length}"
     );
     anyhow::ensure!(
-        output[LEGACY_REJECT_PREFIX_OFFSET..MAGIC_OFFSET] == [0; 16],
-        "Intel TDX DCAP legacy rejection prefix must be zero"
+        output[COMPACT_OUTPUT_FORMAT_GUARD_OFFSET..COMPACT_OUTPUT_MAGIC_OFFSET] == [0; 16],
+        "Intel TDX DCAP compact output format guard must be zero"
     );
     anyhow::ensure!(
-        output[MAGIC_OFFSET..FORMAT_TYPE_OFFSET] == *b"ATKJ",
-        "Intel TDX DCAP journal magic must be ATKJ"
+        output[COMPACT_OUTPUT_MAGIC_OFFSET..COMPACT_OUTPUT_TYPE_OFFSET] == *b"ATKJ",
+        "Intel TDX DCAP compact output magic must be ATKJ"
     );
-    let format_type =
-        u16::from_be_bytes([output[FORMAT_TYPE_OFFSET], output[FORMAT_TYPE_OFFSET + 1]]);
+    let format_type = u16::from_be_bytes([
+        output[COMPACT_OUTPUT_TYPE_OFFSET],
+        output[COMPACT_OUTPUT_TYPE_OFFSET + 1],
+    ]);
     anyhow::ensure!(
         format_type == 1,
-        "Intel TDX DCAP journal format type must be 1, got {format_type}"
+        "Intel TDX DCAP compact output type must be 1, got {format_type}"
     );
     let format_version = u16::from_be_bytes([
-        output[FORMAT_VERSION_OFFSET],
-        output[FORMAT_VERSION_OFFSET + 1],
+        output[COMPACT_OUTPUT_VERSION_OFFSET],
+        output[COMPACT_OUTPUT_VERSION_OFFSET + 1],
     ]);
     anyhow::ensure!(
         format_version == 1,
-        "Intel TDX DCAP journal format version must be 1, got {format_version}"
+        "Intel TDX DCAP compact output version must be 1, got {format_version}"
     );
     let body_type = u16::from_be_bytes([output[4], output[5]]);
     let body_len = dcap_body_len(body_type)?;
@@ -594,15 +596,16 @@ fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidenc
         "Intel TDX quote body type {body_type} requires {body_len} bytes, got {}",
         evidence.quoteBody.len()
     );
-    let committed_body_hash =
-        B256::from_slice(&output[QUOTE_BODY_HASH_OFFSET..QUOTE_BODY_HASH_OFFSET + 32]);
+    let committed_body_hash = B256::from_slice(
+        &output[COMPACT_OUTPUT_QUOTE_BODY_HASH_OFFSET..COMPACT_OUTPUT_QUOTE_BODY_HASH_OFFSET + 32],
+    );
     let supplied_body_hash = keccak256(&evidence.quoteBody);
     anyhow::ensure!(
         supplied_body_hash == committed_body_hash,
         "Intel TDX quote body hash does not match the ZK journal"
     );
     Ok(B256::from_slice(
-        &output[FULL_QUOTE_HASH_OFFSET..FULL_QUOTE_HASH_OFFSET + 32],
+        &output[COMPACT_OUTPUT_FULL_QUOTE_HASH_OFFSET..COMPACT_OUTPUT_FULL_QUOTE_HASH_OFFSET + 32],
     ))
 }
 

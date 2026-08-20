@@ -25,8 +25,8 @@ struct IntelTdxDcapZkEvidence {
     bytes quoteBody;
 }
 
-/// @notice Verified compact result produced by `intel_tdx_dcap.v1`.
-struct IntelTdxDcapJournalV1 {
+/// @notice Compact Atakit output derived from the full Intel TDX DCAP VerifiedOutput.
+struct IntelTdxDcapCompactOutputV1 {
     uint16 quoteVersion;
     uint16 quoteBodyType;
     uint8 tcbStatus;

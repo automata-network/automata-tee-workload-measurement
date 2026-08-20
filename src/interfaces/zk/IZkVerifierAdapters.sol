@@ -4,13 +4,15 @@ pragma solidity ^0.8.27;
 import {
     AmdSevSnpVerifierJournal,
     AwsNitroTpmJournalV1,
-    IntelTdxDcapJournalV1,
+    IntelTdxDcapCompactOutputV1,
     ProgramBoundZkProof,
     TpmQuoteJournalV1
 } from "../../types/Zk.sol";
 
 interface IIntelTdxDcapZkVerifierAdapter {
-    function verifyProof(ProgramBoundZkProof calldata proof) external returns (IntelTdxDcapJournalV1 memory journal);
+    function verifyProof(ProgramBoundZkProof calldata proof)
+        external
+        returns (IntelTdxDcapCompactOutputV1 memory compactOutput);
 }
 
 interface IAmdSevSnpZkVerifierAdapter {

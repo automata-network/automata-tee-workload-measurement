@@ -10,7 +10,7 @@ import {IAmdSevSnpZkVerifierAdapter, IIntelTdxDcapZkVerifierAdapter} from "./int
 import {
     AmdSevSnpVerifierJournal,
     AmdSevSnpZkEvidence,
-    IntelTdxDcapJournalV1,
+    IntelTdxDcapCompactOutputV1,
     IntelTdxDcapZkEvidence,
     ZkProofType
 } from "./types/Zk.sol";
@@ -593,18 +593,19 @@ contract TeeVerifier is ITeeVerifier {
             address adapter = zkVerifierRegistry.resolveVerifierAdapter(
                 ZkProofType.IntelTdxDcap, teeReport.verificationBackendType, zkEvidence.proof.programIdentifier
             );
-            IntelTdxDcapJournalV1 memory journal = IIntelTdxDcapZkVerifierAdapter(adapter).verifyProof(zkEvidence.proof);
-            uint256 expectedBodyLength = _dcapQuoteBodySize(journal.quoteBodyType);
+            IntelTdxDcapCompactOutputV1 memory compactOutput =
+                IIntelTdxDcapZkVerifierAdapter(adapter).verifyProof(zkEvidence.proof);
+            uint256 expectedBodyLength = _dcapQuoteBodySize(compactOutput.quoteBodyType);
             if (zkEvidence.quoteBody.length != expectedBodyLength) {
                 revert InvalidDcapQuoteBodyLength(zkEvidence.quoteBody.length, expectedBodyLength);
             }
             bytes32 quoteBodyHash = keccak256(zkEvidence.quoteBody);
-            if (quoteBodyHash != journal.quoteBodyHash) {
-                revert DcapQuoteBodyHashMismatch(journal.quoteBodyHash, quoteBodyHash);
+            if (quoteBodyHash != compactOutput.quoteBodyHash) {
+                revert DcapQuoteBodyHashMismatch(compactOutput.quoteBodyHash, quoteBodyHash);
             }
-            tcbStatus = journal.tcbStatus;
+            tcbStatus = compactOutput.tcbStatus;
             quoteBody = zkEvidence.quoteBody;
-            teeReportBytesHash = journal.fullQuoteHash;
+            teeReportBytesHash = compactOutput.fullQuoteHash;
         }
 
         if (

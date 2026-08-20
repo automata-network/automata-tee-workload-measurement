@@ -13,23 +13,23 @@ import {
 import {
     AmdSevSnpVerifierJournal,
     AwsNitroTpmJournalV1,
-    IntelTdxDcapJournalV1,
+    IntelTdxDcapCompactOutputV1,
     ProgramBoundZkProof,
     TpmQuoteJournalV1
 } from "../types/Zk.sol";
 
 contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
     error DcapProofVerificationFailed(bytes output);
-    error InvalidDcapJournalOutputLength(uint256 actual, uint256 expected);
-    error InvalidDcapLegacyRejectPrefix(bytes16 actual);
-    error InvalidDcapJournalMagic(bytes4 actual);
-    error UnsupportedDcapJournalFormatType(uint16 actual);
-    error UnsupportedDcapJournalFormatVersion(uint16 actual);
+    error InvalidDcapCompactOutputLength(uint256 actual, uint256 expected);
+    error InvalidDcapCompactOutputFormatGuard(bytes16 actual);
+    error InvalidDcapCompactOutputMagic(bytes4 actual);
+    error UnsupportedDcapCompactOutputType(uint16 actual);
+    error UnsupportedDcapCompactOutputVersion(uint16 actual);
 
-    uint256 private constant INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH = 131;
-    bytes4 private constant INTEL_TDX_DCAP_JOURNAL_MAGIC = 0x41544b4a; // "ATKJ"
-    uint16 private constant INTEL_TDX_DCAP_FORMAT_TYPE = 1;
-    uint16 private constant INTEL_TDX_DCAP_FORMAT_VERSION = 1;
+    uint256 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_V1_LENGTH = 131;
+    bytes4 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_MAGIC = 0x41544b4a; // "ATKJ"
+    uint16 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_TYPE = 1;
+    uint16 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_VERSION = 1;
 
     IDcapAttestation public immutable dcapAttestation;
     IDcapAttestation.ZkCoProcessorType public immutable zkCoProcessorType;
@@ -45,20 +45,23 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
         tcbEvaluationDataNumber = tcbEvaluationDataNumber_;
     }
 
-    function verifyProof(ProgramBoundZkProof calldata proof) external returns (IntelTdxDcapJournalV1 memory journal) {
+    function verifyProof(ProgramBoundZkProof calldata proof)
+        external
+        returns (IntelTdxDcapCompactOutputV1 memory compactOutput)
+    {
         (bool success, bytes memory output) = dcapAttestation.verifyAndAttestWithZKProof(
             proof.output, zkCoProcessorType, proof.proofBytes, proof.programIdentifier, tcbEvaluationDataNumber
         );
         if (!success) revert DcapProofVerificationFailed(output);
-        if (output.length != INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH) {
-            revert InvalidDcapJournalOutputLength(output.length, INTEL_TDX_DCAP_JOURNAL_OUTPUT_LENGTH);
+        if (output.length != INTEL_TDX_DCAP_COMPACT_OUTPUT_V1_LENGTH) {
+            revert InvalidDcapCompactOutputLength(output.length, INTEL_TDX_DCAP_COMPACT_OUTPUT_V1_LENGTH);
         }
 
         uint16 quoteVersion;
         uint16 quoteBodyType;
         uint8 tcbStatus;
         bytes6 fmspc;
-        bytes16 legacyRejectPrefix;
+        bytes16 formatGuard;
         bytes4 magic;
         uint16 formatType;
         uint16 formatVersion;
@@ -71,7 +74,7 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
             quoteBodyType := and(shr(224, mload(start)), 0xffff)
             tcbStatus := byte(4, mload(start))
             fmspc := mload(add(start, 5))
-            legacyRejectPrefix := mload(add(start, 11))
+            formatGuard := mload(add(start, 11))
             magic := mload(add(start, 27))
             formatType := shr(240, mload(add(start, 31)))
             formatVersion := shr(240, mload(add(start, 33)))
@@ -79,19 +82,19 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
             quoteBodyHash := mload(add(start, 67))
             advisoryIdsHash := mload(add(start, 99))
         }
-        if (legacyRejectPrefix != bytes16(0)) {
-            revert InvalidDcapLegacyRejectPrefix(legacyRejectPrefix);
+        if (formatGuard != bytes16(0)) {
+            revert InvalidDcapCompactOutputFormatGuard(formatGuard);
         }
-        if (magic != INTEL_TDX_DCAP_JOURNAL_MAGIC) {
-            revert InvalidDcapJournalMagic(magic);
+        if (magic != INTEL_TDX_DCAP_COMPACT_OUTPUT_MAGIC) {
+            revert InvalidDcapCompactOutputMagic(magic);
         }
-        if (formatType != INTEL_TDX_DCAP_FORMAT_TYPE) {
-            revert UnsupportedDcapJournalFormatType(formatType);
+        if (formatType != INTEL_TDX_DCAP_COMPACT_OUTPUT_TYPE) {
+            revert UnsupportedDcapCompactOutputType(formatType);
         }
-        if (formatVersion != INTEL_TDX_DCAP_FORMAT_VERSION) {
-            revert UnsupportedDcapJournalFormatVersion(formatVersion);
+        if (formatVersion != INTEL_TDX_DCAP_COMPACT_OUTPUT_VERSION) {
+            revert UnsupportedDcapCompactOutputVersion(formatVersion);
         }
-        return IntelTdxDcapJournalV1({
+        return IntelTdxDcapCompactOutputV1({
             quoteVersion: quoteVersion,
             quoteBodyType: quoteBodyType,
             tcbStatus: tcbStatus,

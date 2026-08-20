@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {IDcapAttestation} from "../src/interfaces/external/IDcapAttestation.sol";
 import {ISnpAttestation, VerificationResult} from "../src/interfaces/external/ISnpAttestation.sol";
-import {AmdSevSnpVerifierJournal, IntelTdxDcapJournalV1, ProgramBoundZkProof} from "../src/types/Zk.sol";
+import {AmdSevSnpVerifierJournal, IntelTdxDcapCompactOutputV1, ProgramBoundZkProof} from "../src/types/Zk.sol";
 import {AmdSevSnpZkVerifierAdapter, IntelTdxDcapZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
 import {MockAutomataDcapAttestation} from "./mocks/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
@@ -17,8 +17,8 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
     MockAutomataDcapAttestation private dcapAttestation;
     IntelTdxDcapZkVerifierAdapter private adapter;
 
-    function _framedOutput(
-        bytes16 legacyRejectPrefix,
+    function _compactOutputV1(
+        bytes16 formatGuard,
         bytes4 magic,
         uint16 formatType,
         uint16 formatVersion,
@@ -31,7 +31,7 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
             uint16(2),
             uint8(5),
             bytes6(0x010203040506),
-            legacyRejectPrefix,
+            formatGuard,
             magic,
             formatType,
             formatVersion,
@@ -60,9 +60,9 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
         bytes32 quoteBodyHash = keccak256("Intel TDX quote body");
         bytes32 advisoryIdsHash = keccak256("canonical Intel advisory IDs");
         bytes memory expectedOutput =
-            _framedOutput(bytes16(0), 0x41544b4a, 1, 1, fullQuoteHash, quoteBodyHash, advisoryIdsHash);
+            _compactOutputV1(bytes16(0), 0x41544b4a, 1, 1, fullQuoteHash, quoteBodyHash, advisoryIdsHash);
 
-        IntelTdxDcapJournalV1 memory actualOutput = adapter.verifyProof(_proof(expectedOutput));
+        IntelTdxDcapCompactOutputV1 memory actualOutput = adapter.verifyProof(_proof(expectedOutput));
 
         assertEq(actualOutput.quoteVersion, 4);
         assertEq(actualOutput.quoteBodyType, 2);
@@ -79,54 +79,57 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
         bytes memory expectedOutput = new bytes(130);
 
         vm.expectRevert(
-            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalOutputLength.selector, 130, 131)
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapCompactOutputLength.selector, 130, 131)
         );
         adapter.verifyProof(_proof(expectedOutput));
     }
 
-    function testFramedAdapterRejectsLegacyOutput() public {
+    function testCompactOutputAdapterRejectsLegacyOutput() public {
         bytes memory legacyOutput = new bytes(75);
 
         vm.expectRevert(
-            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalOutputLength.selector, 75, 131)
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapCompactOutputLength.selector, 75, 131)
         );
         adapter.verifyProof(_proof(legacyOutput));
     }
 
-    function testRejectsNonzeroLegacyRejectPrefix() public {
-        bytes memory output = _framedOutput(bytes16(uint128(1)), 0x41544b4a, 1, 1, bytes32(0), bytes32(0), bytes32(0));
+    function testRejectsNonzeroCompactOutputFormatGuard() public {
+        bytes memory output =
+            _compactOutputV1(bytes16(uint128(1)), 0x41544b4a, 1, 1, bytes32(0), bytes32(0), bytes32(0));
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IntelTdxDcapZkVerifierAdapter.InvalidDcapLegacyRejectPrefix.selector, bytes16(uint128(1))
+                IntelTdxDcapZkVerifierAdapter.InvalidDcapCompactOutputFormatGuard.selector, bytes16(uint128(1))
             )
         );
         adapter.verifyProof(_proof(output));
     }
 
     function testRejectsWrongMagic() public {
-        bytes memory output = _framedOutput(bytes16(0), 0x42414421, 1, 1, bytes32(0), bytes32(0), bytes32(0));
+        bytes memory output = _compactOutputV1(bytes16(0), 0x42414421, 1, 1, bytes32(0), bytes32(0), bytes32(0));
 
         vm.expectRevert(
-            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.InvalidDcapJournalMagic.selector, bytes4(0x42414421))
+            abi.encodeWithSelector(
+                IntelTdxDcapZkVerifierAdapter.InvalidDcapCompactOutputMagic.selector, bytes4(0x42414421)
+            )
         );
         adapter.verifyProof(_proof(output));
     }
 
     function testRejectsUnsupportedFormatType() public {
-        bytes memory output = _framedOutput(bytes16(0), 0x41544b4a, 2, 1, bytes32(0), bytes32(0), bytes32(0));
+        bytes memory output = _compactOutputV1(bytes16(0), 0x41544b4a, 2, 1, bytes32(0), bytes32(0), bytes32(0));
 
         vm.expectRevert(
-            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.UnsupportedDcapJournalFormatType.selector, 2)
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.UnsupportedDcapCompactOutputType.selector, 2)
         );
         adapter.verifyProof(_proof(output));
     }
 
     function testRejectsUnsupportedFormatVersion() public {
-        bytes memory output = _framedOutput(bytes16(0), 0x41544b4a, 1, 2, bytes32(0), bytes32(0), bytes32(0));
+        bytes memory output = _compactOutputV1(bytes16(0), 0x41544b4a, 1, 2, bytes32(0), bytes32(0), bytes32(0));
 
         vm.expectRevert(
-            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.UnsupportedDcapJournalFormatVersion.selector, 2)
+            abi.encodeWithSelector(IntelTdxDcapZkVerifierAdapter.UnsupportedDcapCompactOutputVersion.selector, 2)
         );
         adapter.verifyProof(_proof(output));
     }
