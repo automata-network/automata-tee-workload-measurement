@@ -98,6 +98,14 @@ CPUID `0x190101`. Its launch and current mitigation-vector masks are `0x16`,
 which requires bits 1, 2, and 4. An attestation report with vectors `0x0f`
 fails this policy because it does not contain bit 4.
 
+`policies/amd-snp-milan-b1-cross-cloud.json` is the reviewed cross-cloud
+policy for CPUID `0x190101`. It uses the component-wise Azure, GCP, and AWS
+minimum TCB, platform-information policy `0x20`, and zero launch and current
+mitigation-vector masks. The zero masks are required for the tested Azure
+version-3 report, which does not contain signed mitigation-vector fields. Use
+this file only when the release explicitly intends to support that Azure
+report together with the tested GCP and AWS version-5 reports.
+
 The mask follows AMD-SB-3020 bit 1, AMD-SB-3016 bit 2, and AMD-SB-3030 and
 AMD-SB-3034 bit 4 for Milan. Those bulletins are available from AMD's Product
 Security index at `https://www.amd.com/en/resources/product-security.html`.
