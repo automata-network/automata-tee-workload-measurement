@@ -10,8 +10,9 @@ use tracing::info;
 use crate::base_image_registry::BaseImageRegistry;
 use crate::stubs::SessionRegistry::{CVMSession, SessionRegistryEvents, SessionRegistryInstance};
 use crate::stubs::{
-    AttestationEvidence, PublicIdentity, SessionKeyRotationEvidence, SessionRenewalAuthorization,
-    TeeReport, TpmQuoteReport, ZkProof, op_expires_at, sign_message,
+    AmdSevSnpZkEvidence, AttestationEvidence, IntelTdxDcapZkEvidence, ProgramBoundZkProof,
+    PublicIdentity, SessionKeyRotationEvidence, SessionRenewalAuthorization, TeeReport,
+    TpmQuoteEvidence, TpmQuoteJournalV1, TpmReport, op_expires_at, sign_message,
 };
 use crate::types::{AppRef, LifecycleSessionResponse, RegisterSessionResponse, RotateKeyResponse};
 use crate::workload_registry::WorkloadRegistry;
@@ -75,7 +76,7 @@ impl SessionRegistry {
         // Get chain ID
         let chain_id = self.stub.provider().chain_id();
         let session_id =
-            compute_session_id_from_parts(&evidence.tpm_quote_report.data, &evidence.tee_report)?;
+            compute_session_id_from_parts(&evidence.tpm_quote_report, &evidence.tee_report)?;
         let workload_id = WorkloadRegistry::get_workload_id(&workload_ref);
         let base_image_id = BaseImageRegistry::get_image_id(&base_image_ref);
         // sessionKeyFingerprint = LibKey.computeKeyFingerprint(evidence.sessionKey); the contract
@@ -151,10 +152,8 @@ impl SessionRegistry {
         let chain_id = self.stub.provider().chain_id();
 
         // Pre-compute newSessionId
-        let new_session_id = compute_new_session_id(
-            tee_report_bytes_hash,
-            &rotation_evidence.tpm_quote_report.data,
-        )?;
+        let new_session_id =
+            compute_new_session_id(tee_report_bytes_hash, &rotation_evidence.tpm_quote_report)?;
 
         info!(
             address = %self.stub.address(),
@@ -211,7 +210,9 @@ impl SessionRegistry {
         owner_signature: Bytes,
     ) -> Result<RegisterSessionResponse> {
         let session_id =
-            compute_session_id_from_parts(&evidence.tpm_quote_report.data, &evidence.tee_report)?;
+            compute_session_id_from_parts(&evidence.tpm_quote_report, &evidence.tee_report)?;
+
+        let contract_evidence = evidence.try_into()?;
 
         info!(
             address = %self.stub.address(),
@@ -226,7 +227,7 @@ impl SessionRegistry {
         let pending = self
             .stub
             .registerSession(
-                evidence.into(),
+                contract_evidence,
                 workload_id,
                 base_image_id,
                 platform_profile_id,
@@ -273,10 +274,8 @@ impl SessionRegistry {
         owner_signature: Bytes,
     ) -> Result<RotateKeyResponse> {
         // Pre-compute newSessionId
-        let new_session_id = compute_new_session_id(
-            tee_report_bytes_hash,
-            &rotation_evidence.tpm_quote_report.data,
-        )?;
+        let new_session_id =
+            compute_new_session_id(tee_report_bytes_hash, &rotation_evidence.tpm_quote_report)?;
 
         info!(
             address = %self.stub.address(),
@@ -286,13 +285,15 @@ impl SessionRegistry {
             "Submitting rotateKey (presigned)"
         );
 
+        let contract_rotation_evidence = rotation_evidence.try_into()?;
+
         // Call the contract
         let pending = self
             .stub
             .rotateKey(
                 old_session_id,
                 tee_report_bytes_hash,
-                rotation_evidence.into(),
+                contract_rotation_evidence,
                 op_expires_at,
                 owner_identity.into(),
                 owner_signature,
@@ -334,11 +335,13 @@ impl SessionRegistry {
         owner_identity: PublicIdentity,
         owner_signature: Bytes,
     ) -> Result<LifecycleSessionResponse> {
+        let contract_evidence = new_evidence.try_into()?;
+
         let pending = self
             .stub
             .renewSession(
                 old_session_id,
-                new_evidence.into(),
+                contract_evidence,
                 workload_id,
                 base_image_id,
                 platform_profile_id,
@@ -377,11 +380,13 @@ impl SessionRegistry {
         owner_identity: PublicIdentity,
         owner_signature: Bytes,
     ) -> Result<LifecycleSessionResponse> {
+        let contract_evidence = new_evidence.try_into()?;
+
         let pending = self
             .stub
             .recoverSession(
                 old_session_id,
-                new_evidence.into(),
+                contract_evidence,
                 workload_id,
                 base_image_id,
                 platform_profile_id,
@@ -504,26 +509,135 @@ impl SessionRegistry {
     }
 }
 
-/// Compute the `teeReportBytesHash` exactly as `TeeVerifier.getTeeReportHash`
-/// (src/TeeVerifier.sol) — the value the contract feeds into the sessionId, which is
-/// NOT a plain keccak of the report data for the ZK backends:
-///   - `Solidity` (0)            -> `keccak256(data)`
-///   - `ZkRiscZero` (1) / `ZkSuccinct` (2) -> decode `data` as `ZkProof` and return the
-///     last 32 bytes of `output` (the journal-committed report hash). `SnpZkProof` is
-///     ABI-forward-compatible with `ZkProof`, so decoding it as `ZkProof` still reads
-///     `output` correctly.
-pub fn compute_tee_report_hash(verification_backend_type: u8, data: &Bytes) -> Result<B256> {
-    // VerificationBackendType.Solidity == 0 (Evidence.sol).
-    if verification_backend_type == 0 {
-        return Ok(keccak256(data));
+/// Compute the exact `teeReportBytesHash` stored by `SessionRegistry`.
+pub fn compute_tee_report_hash(tee_report: &TeeReport) -> Result<B256> {
+    match tee_report.tee_type {
+        0 => {
+            let full_quote_hash = match tee_report.verification_backend_type {
+                0 => keccak256(&tee_report.data),
+                1 | 2 => {
+                    let evidence = IntelTdxDcapZkEvidence::abi_decode(&tee_report.data).context(
+                        "Failed to decode IntelTdxDcapZkEvidence from Intel TDX TeeReport.data",
+                    )?;
+                    verify_and_extract_intel_tdx_full_quote_hash(&evidence)?
+                }
+                value => {
+                    anyhow::bail!("Invalid VerificationBackendType value for Intel TDX: {value}")
+                }
+            };
+            Ok(full_quote_hash)
+        }
+        1 => {
+            if tee_report.verification_backend_type == 0 {
+                anyhow::bail!("AMD SEV-SNP does not support VerificationBackendType.Solidity");
+            }
+            let evidence = AmdSevSnpZkEvidence::abi_decode(&tee_report.data)
+                .context("Failed to decode AmdSevSnpZkEvidence from AMD SEV-SNP TeeReport.data")?;
+            anyhow::ensure!(
+                evidence.rawReport.len() == 1184,
+                "AmdSevSnpZkEvidence.rawReport must be 1184 bytes, got {}",
+                evidence.rawReport.len()
+            );
+            Ok(keccak256(evidence.rawReport))
+        }
+        value => anyhow::bail!("Invalid TEEType value: {value}"),
     }
-    let zk_proof =
-        ZkProof::abi_decode(data).context("Failed to decode ZkProof from teeReport.data")?;
-    let output = zk_proof.output;
-    if output.len() < 32 {
-        anyhow::bail!("ZkProof.output too short: {} < 32", output.len());
+}
+
+fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidence) -> Result<B256> {
+    const JOURNAL_LENGTH: usize = 333;
+    const COMPACT_OUTPUT_V1_LENGTH: usize = 131;
+    const COMPACT_OUTPUT_FORMAT_GUARD_OFFSET: usize = 13;
+    const COMPACT_OUTPUT_MAGIC_OFFSET: usize = 29;
+    const COMPACT_OUTPUT_TYPE_OFFSET: usize = 33;
+    const COMPACT_OUTPUT_VERSION_OFFSET: usize = 35;
+    const COMPACT_OUTPUT_FULL_QUOTE_HASH_OFFSET: usize = 37;
+    const COMPACT_OUTPUT_QUOTE_BODY_HASH_OFFSET: usize = 69;
+
+    let output = evidence.proof.output.as_ref();
+    anyhow::ensure!(
+        output.len() == JOURNAL_LENGTH,
+        "Intel TDX DCAP journal must be {JOURNAL_LENGTH} bytes, got {}",
+        output.len()
+    );
+    let compact_output_length = u16::from_be_bytes([output[0], output[1]]) as usize;
+    anyhow::ensure!(
+        compact_output_length == COMPACT_OUTPUT_V1_LENGTH,
+        "Intel TDX DCAP compact output must be {COMPACT_OUTPUT_V1_LENGTH} bytes, got {compact_output_length}"
+    );
+    anyhow::ensure!(
+        output[COMPACT_OUTPUT_FORMAT_GUARD_OFFSET..COMPACT_OUTPUT_MAGIC_OFFSET] == [0; 16],
+        "Intel TDX DCAP compact output format guard must be zero"
+    );
+    anyhow::ensure!(
+        output[COMPACT_OUTPUT_MAGIC_OFFSET..COMPACT_OUTPUT_TYPE_OFFSET] == *b"ATKJ",
+        "Intel TDX DCAP compact output magic must be ATKJ"
+    );
+    let format_type = u16::from_be_bytes([
+        output[COMPACT_OUTPUT_TYPE_OFFSET],
+        output[COMPACT_OUTPUT_TYPE_OFFSET + 1],
+    ]);
+    anyhow::ensure!(
+        format_type == 1,
+        "Intel TDX DCAP compact output type must be 1, got {format_type}"
+    );
+    let format_version = u16::from_be_bytes([
+        output[COMPACT_OUTPUT_VERSION_OFFSET],
+        output[COMPACT_OUTPUT_VERSION_OFFSET + 1],
+    ]);
+    anyhow::ensure!(
+        format_version == 1,
+        "Intel TDX DCAP compact output version must be 1, got {format_version}"
+    );
+    let body_type = u16::from_be_bytes([output[4], output[5]]);
+    let body_len = dcap_body_len(body_type)?;
+    anyhow::ensure!(
+        evidence.quoteBody.len() == body_len,
+        "Intel TDX quote body type {body_type} requires {body_len} bytes, got {}",
+        evidence.quoteBody.len()
+    );
+    let committed_body_hash = B256::from_slice(
+        &output[COMPACT_OUTPUT_QUOTE_BODY_HASH_OFFSET..COMPACT_OUTPUT_QUOTE_BODY_HASH_OFFSET + 32],
+    );
+    let supplied_body_hash = keccak256(&evidence.quoteBody);
+    anyhow::ensure!(
+        supplied_body_hash == committed_body_hash,
+        "Intel TDX quote body hash does not match the ZK journal"
+    );
+    Ok(B256::from_slice(
+        &output[COMPACT_OUTPUT_FULL_QUOTE_HASH_OFFSET..COMPACT_OUTPUT_FULL_QUOTE_HASH_OFFSET + 32],
+    ))
+}
+
+fn dcap_body_len(body_type: u16) -> Result<usize> {
+    match body_type {
+        2 => Ok(584),
+        3 => Ok(648),
+        value => anyhow::bail!("Unsupported Intel TDX DCAP quote body type: {value}"),
     }
-    Ok(B256::from_slice(&output[output.len() - 32..]))
+}
+
+fn compute_tpm_signature_hash(tpm_quote_report: &TpmReport) -> Result<B256> {
+    anyhow::ensure!(
+        tpm_quote_report.tpm_report_type == 0,
+        "Expected TpmReportType.TpmQuote, got {}",
+        tpm_quote_report.tpm_report_type
+    );
+    match tpm_quote_report.verification_backend_type {
+        0 => {
+            let evidence = TpmQuoteEvidence::abi_decode(&tpm_quote_report.data)
+                .context("Failed to decode TpmQuoteEvidence")?;
+            Ok(keccak256(evidence.tpmSignature))
+        }
+        2 => {
+            let proof = ProgramBoundZkProof::abi_decode(&tpm_quote_report.data)
+                .context("Failed to decode ProgramBoundZkProof from TpmReport.data")?;
+            let journal = TpmQuoteJournalV1::abi_decode(&proof.output)
+                .context("Failed to decode TpmQuoteJournalV1 from ProgramBoundZkProof.output")?;
+            Ok(journal.tpmSignatureHash)
+        }
+        value => anyhow::bail!("Unsupported TPM Quote VerificationBackendType value: {value}"),
+    }
 }
 
 /// Compute sessionId from the raw TPM quote report data and the TEE report.
@@ -532,17 +646,11 @@ pub fn compute_tee_report_hash(verification_backend_type: u8, data: &Bytes) -> R
 /// just its `data`) because the report hash is backend-dependent — see
 /// [`compute_tee_report_hash`].
 pub fn compute_session_id_from_parts(
-    tpm_quote_report_data: &Bytes,
+    tpm_quote_report: &TpmReport,
     tee_report: &TeeReport,
 ) -> Result<B256> {
-    // 1. teeReportBytesHash = TeeVerifier.getTeeReportHash(teeReport)
-    let tee_report_bytes_hash =
-        compute_tee_report_hash(tee_report.verification_backend_type, &tee_report.data)?;
-
-    // 2. Decode TpmQuoteReport and hash tpmSignature
-    let quote_report = TpmQuoteReport::abi_decode(tpm_quote_report_data)
-        .context("Failed to decode TpmQuoteReport")?;
-    let tpm_signature_hash = keccak256(&quote_report.tpmSignature);
+    let tee_report_bytes_hash = compute_tee_report_hash(tee_report)?;
+    let tpm_signature_hash = compute_tpm_signature_hash(tpm_quote_report)?;
 
     // 3. Compute sessionId: keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
     let session_domain = keccak256(b"CVM_SESSION_V1");
@@ -552,22 +660,12 @@ pub fn compute_session_id_from_parts(
     Ok(session_id)
 }
 
-/// Compute new sessionId for rotation from teeReportBytesHash and new TPM quote report.
-///
-/// This matches the contract's computation:
-/// ```solidity
-/// TpmQuoteReport memory quoteReport = abi.decode(rotationEvidence.tpmQuoteReport.data, (TpmQuoteReport));
-/// bytes32 newTpmSignatureHash = keccak256(quoteReport.tpmSignature);
-/// newSessionId = keccak256(abi.encode(SESSION_DOMAIN, newTpmSignatureHash, teeReportBytesHash));
-/// ```
+/// Compute the new session identifier for rotation.
 pub fn compute_new_session_id(
     tee_report_bytes_hash: B256,
-    tpm_quote_report_data: &Bytes,
+    tpm_quote_report: &TpmReport,
 ) -> Result<B256> {
-    // Decode TpmQuoteReport and hash tpmSignature
-    let quote_report = TpmQuoteReport::abi_decode(tpm_quote_report_data)
-        .context("Failed to decode TpmQuoteReport for rotation")?;
-    let new_tpm_signature_hash = keccak256(&quote_report.tpmSignature);
+    let new_tpm_signature_hash = compute_tpm_signature_hash(tpm_quote_report)?;
 
     // Compute newSessionId: keccak256(abi.encode(SESSION_DOMAIN, newTpmSignatureHash, teeReportBytesHash))
     let session_domain = keccak256(b"CVM_SESSION_V1");
@@ -585,72 +683,137 @@ pub fn compute_new_session_id(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_tee_report_hash;
-    use alloy::primitives::{Bytes, keccak256};
-    use alloy::sol;
+    use super::{compute_new_session_id, compute_tee_report_hash};
+    use crate::stubs::{
+        AmdSevSnpZkEvidence, IntelTdxDcapZkEvidence, ProgramBoundZkProof, TeeReport,
+        TpmQuoteEvidence, TpmQuoteJournalV1, TpmReport,
+    };
+    use alloy::primitives::{B256, Bytes, keccak256};
     use alloy::sol_types::SolValue;
 
-    sol! {
-        // Same layout as Evidence.sol SnpZkProof (the 3-field SNP container). teeReport.data
-        // for SEV-SNP is `abi.encode(SnpZkProof{output, proofBytes, rawReport})`.
-        struct SnpZkProof {
-            bytes output;
-            bytes proofBytes;
-            bytes rawReport;
-        }
-    }
-
-    /// For the ZK backends, `teeReportBytesHash` is the journal's trailing 32 bytes
-    /// (== keccak256(rawReport) for SNP), NOT `keccak256(teeReport.data)`. This is the
-    /// exact behaviour of `TeeVerifier.getTeeReportHash`, and a regression guard against
-    /// the stale `keccak256(data)` the SDK used to compute — which silently produced a
-    /// wrong sessionId for every ZK (SNP) registration.
     #[test]
-    fn tee_report_hash_zk_uses_journal_tail_not_keccak_of_data() {
-        let raw_report = Bytes::from(vec![0xABu8; 1184]); // SNP report is 1184 bytes
-        let report_hash = keccak256(&raw_report); // journal binds keccak256(report)
-
-        // Journal output: arbitrary prefix, then the trailing 32-byte report hash.
-        let mut output = vec![0x11u8; 96];
-        output.extend_from_slice(report_hash.as_slice());
-
-        // teeReport.data = abi.encode(SnpZkProof{...}) — 3 fields; decoded on-chain as the
-        // 2-field ZkProof (ABI-forward-compatible), so `output` is still read correctly.
-        let data: Bytes = SnpZkProof {
-            output: output.into(),
-            proofBytes: Bytes::from(vec![0x22u8; 260]),
+    fn amd_sev_snp_hashes_the_exact_raw_report() {
+        let raw_report = Bytes::from(vec![0xabu8; 1184]);
+        let data: Bytes = AmdSevSnpZkEvidence {
+            proof: ProgramBoundZkProof {
+                programIdentifier: B256::repeat_byte(0x11),
+                output: Bytes::from(vec![0x22; 32]),
+                proofBytes: Bytes::from(vec![0x33; 64]),
+            },
             rawReport: raw_report.clone(),
         }
         .abi_encode()
         .into();
-
-        // ZkRiscZero (1) and ZkSuccinct (2) both take the journal tail.
-        for backend in [1u8, 2u8] {
-            let h = compute_tee_report_hash(backend, &data).unwrap();
-            assert_eq!(
-                h, report_hash,
-                "ZK backend {backend} must return the journal tail"
-            );
-            assert_ne!(
-                h,
-                keccak256(&data),
-                "ZK hash must NOT be keccak256(teeReport.data)"
-            );
-        }
-
-        // Solidity (0) keeps keccak256(data).
-        assert_eq!(compute_tee_report_hash(0, &data).unwrap(), keccak256(&data));
+        let report = TeeReport {
+            verification_backend_type: 2,
+            tee_type: 1,
+            data,
+        };
+        assert_eq!(
+            compute_tee_report_hash(&report).unwrap(),
+            keccak256(raw_report)
+        );
     }
 
     #[test]
-    fn tee_report_hash_zk_rejects_short_output() {
-        let data: Bytes = SnpZkProof {
-            output: Bytes::from(vec![0u8; 8]), // < 32 bytes
-            proofBytes: Bytes::new(),
-            rawReport: Bytes::new(),
+    fn intel_tdx_solidity_and_zk_hash_the_same_complete_raw_quote() {
+        let quote_body = vec![0x44u8; 584];
+        let mut full_quote = vec![0u8; 48];
+        full_quote[0..2].copy_from_slice(&4u16.to_le_bytes());
+        full_quote.extend_from_slice(&quote_body);
+        full_quote.extend_from_slice(&[0x77; 64]);
+        let full_quote_hash = keccak256(&full_quote);
+
+        let mut output = Vec::with_capacity(333);
+        output.extend_from_slice(&131u16.to_be_bytes());
+        output.extend_from_slice(&4u16.to_be_bytes());
+        output.extend_from_slice(&2u16.to_be_bytes());
+        output.push(0);
+        output.extend_from_slice(&[0x11; 6]);
+        output.extend_from_slice(&[0; 16]);
+        output.extend_from_slice(b"ATKJ");
+        output.extend_from_slice(&1u16.to_be_bytes());
+        output.extend_from_slice(&1u16.to_be_bytes());
+        output.extend_from_slice(full_quote_hash.as_slice());
+        output.extend_from_slice(keccak256(&quote_body).as_slice());
+        output.extend_from_slice(&[0x99; 32]);
+        output.extend_from_slice(&[0u8; 8 + 6 * 32]);
+        let data: Bytes = IntelTdxDcapZkEvidence {
+            proof: ProgramBoundZkProof {
+                programIdentifier: B256::repeat_byte(0x55),
+                output: output.into(),
+                proofBytes: Bytes::from(vec![0x66; 64]),
+            },
+            quoteBody: quote_body.into(),
         }
         .abi_encode()
         .into();
-        assert!(compute_tee_report_hash(2, &data).is_err());
+        let zk_report = TeeReport {
+            verification_backend_type: 2,
+            tee_type: 0,
+            data,
+        };
+        let solidity_report = TeeReport {
+            verification_backend_type: 0,
+            tee_type: 0,
+            data: full_quote.into(),
+        };
+        assert_eq!(
+            compute_tee_report_hash(&zk_report).unwrap(),
+            full_quote_hash
+        );
+        assert_eq!(
+            compute_tee_report_hash(&solidity_report).unwrap(),
+            full_quote_hash
+        );
+    }
+
+    #[test]
+    fn raw_tpm_quote_and_zk_tpm_quote_use_the_current_evidence_formats() {
+        let signature = Bytes::from(vec![0x77u8; 64]);
+        let raw_data: Bytes = TpmQuoteEvidence {
+            tpmsAttest: Bytes::from(vec![0x88; 32]),
+            tpmSignature: signature.clone(),
+            pcr0StartupLocality: 0xff,
+            pcrValues256: Vec::new(),
+            pcrValues384: Vec::new(),
+        }
+        .abi_encode()
+        .into();
+        let raw_report = TpmReport {
+            verification_backend_type: 0,
+            tpm_report_type: 0,
+            data: raw_data,
+        };
+        let tee_hash = B256::repeat_byte(0x99);
+        let raw_session_id = compute_new_session_id(tee_hash, &raw_report).unwrap();
+
+        let signature_hash = keccak256(signature);
+        let journal = TpmQuoteJournalV1 {
+            akPubFingerprint: B256::ZERO,
+            qualifyingData: B256::ZERO,
+            tpmSignatureHash: signature_hash,
+            pcrCommitment: crate::stubs::PcrCommitment {
+                pcrSelect: B256::ZERO,
+                pcrDigest: B256::ZERO,
+            },
+            policyCommitment: B256::ZERO,
+        };
+        let zk_data: Bytes = ProgramBoundZkProof {
+            programIdentifier: B256::repeat_byte(0xaa),
+            output: journal.abi_encode().into(),
+            proofBytes: Bytes::from(vec![0xbb; 64]),
+        }
+        .abi_encode()
+        .into();
+        let zk_report = TpmReport {
+            verification_backend_type: 2,
+            tpm_report_type: 0,
+            data: zk_data,
+        };
+        assert_eq!(
+            raw_session_id,
+            compute_new_session_id(tee_hash, &zk_report).unwrap()
+        );
     }
 }

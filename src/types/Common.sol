@@ -5,16 +5,6 @@ pragma solidity ^0.8.27;
 // Verification & Access Control
 // ============================================================================
 
-/// @notice PCR verification strategy for attestation measurement validation
-enum PcrVerifyType {
-    /// @dev Exact match: PCR final value must equal matchData[0]
-    STATIC,
-    /// @dev Required subset: matchData must occur in PCR events (any order)
-    DYNAMIC_SUBSET,
-    /// @dev Event subsequence: PCR events must contain matchData as an ordered subsequence
-    DYNAMIC_SUBSEQUENCE
-}
-
 /// @notice Access control mode for workload base image policies
 enum AccessMode {
     /// @dev No restrictions: all base images allowed
@@ -38,19 +28,48 @@ struct PublicIdentity {
 }
 
 /// @notice Platform Configuration Register (PCR) specification for verification
-struct PcrSpec {
+struct PcrSpec256 {
     /// @dev PCR index (0-23 per TPM 2.0 specification)
     uint8 pcrIndex;
-    /// @dev Verification strategy: STATIC (exact match), DYNAMIC_SUBSET (required unordered landmarks), DYNAMIC_SUBSEQUENCE (ordered landmarks)
-    PcrVerifyType verifyType;
-    /// @dev Match data interpretation depends on verifyType:
-    ///      - STATIC: exactly one entry, matchData[0] = expected PCR final value
-    ///      - DYNAMIC_SUBSET: matchData = set of required event hashes. Every matchData entry must
-    ///        occur in the non-empty reported event log in any order; additional events are
-    ///        permitted. Empty logs are rejected because no cumulative-hash verification occurs.
-    ///      - DYNAMIC_SUBSEQUENCE: matchData = required event sequence (must appear in order in
-    ///        a non-empty event log; empty event log is rejected for the same reason).
-    bytes32[] matchData;
+    /// @dev Canonical ABI encoding selected and interpreted only by the TPM verifier.
+    ///      The first ABI word is the uint16 comparison type. Remaining words use the
+    ///      exact type-specific encoding defined by the canonical PCR policy specification.
+    bytes comparison;
+}
+
+/// @notice SHA-384 PCR policy rule. Digest bytes use normal byte order.
+struct PcrSpec384 {
+    uint8 pcrIndex;
+    /// @dev Canonical ABI encoding selected and interpreted only by the TPM verifier.
+    bytes comparison;
+}
+
+/// @notice One named block of PCR policy comparison specifications.
+/// @dev Policy specifications are kept distinct from measured PcrValue256 and
+///      PcrValue384 evidence. Both arrays are strictly sorted by pcrIndex.
+struct PcrPolicyBlock {
+    PcrSpec256[] pcrSpecs256;
+    PcrSpec384[] pcrSpecs384;
+}
+
+/// @notice Stored commitment and exact TPM selection bitmaps for one policy block.
+struct PcrPolicyBlockMetadata {
+    bytes32 blockHash;
+    bytes3 pcrSelectBitmap256;
+    bytes3 pcrSelectBitmap384;
+}
+
+/// @notice Normalized TPM Quote PCR selection and its exact signed digest.
+struct PcrCommitment {
+    bytes32 pcrSelect;
+    bytes32 pcrDigest;
+}
+
+/// @notice PCR policy bank or banks evaluated for one platform profile.
+enum PcrBankSelection {
+    Sha256,
+    Sha384,
+    Sha256AndSha384
 }
 
 /// @notice Generic key-value attribute for metadata
@@ -70,12 +89,8 @@ struct Attribute {
 struct MeasurementVariant {
     /// @dev Human-readable machine type name (e.g., "n2d-standard-16", "Standard_D4s_v4")
     string name;
-    /// @dev PCR specifications for indices the parent PlatformProfile leaves unpinned.
-    ///      `overridePcrs` is a historical name kept for ABI/SDK compatibility: entries MUST be
-    ///      disjoint from `PlatformProfile.invariants`. A profile invariant always holds — an
-    ///      overlapping entry is rejected at registration (VariantOverridesInvariantPcr) and
-    ///      again at session evaluation (PcrVariantOverridesInvariant), never applied.
-    PcrSpec[] overridePcrs;
+    /// @dev Rules for indices the parent profile leaves unpinned.
+    PcrPolicyBlock variantPcrPolicy;
     /// @dev Machine-type-specific attributes (e.g., "machine_series": "n2d", "gpu": "nvidia-t4")
     Attribute[] attributes;
 }
@@ -86,8 +101,10 @@ struct MeasurementVariant {
 struct PlatformProfile {
     /// @dev Human-readable platform profile name (e.g., "azure-tdx-westus2")
     string name;
-    /// @dev PCRs constant across all machine types in this platform (e.g., BIOS, bootloader, OS kernel)
-    PcrSpec[] invariants;
+    /// @dev Policy bank or banks evaluated for this platform.
+    PcrBankSelection pcrBankSelection;
+    /// @dev PCR rules constant across all machine types in this platform.
+    PcrPolicyBlock invariantPcrPolicy;
     /// @dev Platform-wide attributes (e.g., "cloud": "Azure", "tee": "IntelTDX")
     Attribute[] attributes;
 }
@@ -136,8 +153,29 @@ struct WorkloadSpec {
     bytes32[] baseImageIds;
     /// @dev Attribute requirements (ALL must be satisfied for session registration)
     AttributeRequirement[] requirements;
-    /// @dev PCR specifications for workload measurements (typically PCR 20-23)
-    PcrSpec[] pcrs;
+    /// @dev Workload PCR policy rules.
+    PcrPolicyBlock workloadPcrPolicy;
+}
+
+struct ResolvedPcrPolicy {
+    bytes32 workloadId;
+    bytes32 baseImageId;
+    bytes32 platformProfileId;
+    bytes32 measurementVariantId;
+    PcrBankSelection pcrBankSelection;
+    PcrPolicyBlock invariantPcrPolicy;
+    PcrPolicyBlock variantPcrPolicy;
+    PcrPolicyBlock workloadPcrPolicy;
+}
+
+/// @notice Exact named PCR policy blocks evaluated for one TPM Quote verification.
+/// @dev Duplicate PCR indexes across blocks are allowed. Every rule is evaluated.
+struct TpmVerificationRequest {
+    PcrBankSelection pcrBankSelection;
+    PcrPolicyBlock invariantPcrPolicy;
+    PcrPolicyBlock variantPcrPolicy;
+    PcrPolicyBlock workloadPcrPolicy;
+    PcrPolicyBlock providerPcrPolicy;
 }
 
 // ============================================================================

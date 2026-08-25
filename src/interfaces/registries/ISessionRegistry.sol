@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {CVMSession, PublicIdentity} from "../../types/Common.sol";
+import {CVMSession, PublicIdentity, ResolvedPcrPolicy} from "../../types/Common.sol";
 import {
     AttestationEvidence,
     TpmReport,
     SessionKeyRotationEvidence,
     SessionRenewalAuthorization
 } from "../../types/Evidence.sol";
+import {ITeeSecurityPolicyVerifier} from "../ITeeSecurityPolicyVerifier.sol";
 
 struct CVMSessionStorage {
     bool exists;
@@ -77,6 +78,9 @@ interface ISessionRegistry {
     // Functions
     // ============================================================================
 
+    /// @notice Return the verifier used for ordinary and reserved TEE security policy.
+    function teeSecurityPolicyVerifier() external view returns (ITeeSecurityPolicyVerifier);
+
     /// @notice Register a new CVM session after attestation verification
     /// @param evidence The attestation evidence bundle (contains TEE type and backend type)
     /// @param workloadId The workload identifier
@@ -135,10 +139,17 @@ interface ISessionRegistry {
     /// @return nonce The current nonce value
     function getNonce(bytes32 ownerFingerprint) external view returns (uint256 nonce);
 
+    function getPcrPolicy(
+        bytes32 workloadId,
+        bytes32 baseImageId,
+        bytes32 platformProfileId,
+        bytes32 measurementVariantId
+    ) external view returns (ResolvedPcrPolicy memory policy);
+
     /// @notice Rotate a session's TPM signing key and session key without extending its lifetime
     /// @param oldSessionId The session to rotate
-    /// @param teeReportBytesHash Canonical ITeeVerifier.getTeeReportHash result
-    ///        from the original attestation
+    /// @param teeReportBytesHash Canonical teeReportBytesHash from the original
+    ///        TeeVerificationResult
     /// @param rotationEvidence The key-rotation evidence bundle (TPM reports, signatures, keys)
     /// @param opExpiresAt Operation-signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The session owner's public key

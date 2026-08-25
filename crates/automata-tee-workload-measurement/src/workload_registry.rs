@@ -49,7 +49,11 @@ impl WorkloadRegistry {
 
         let op_expires_at = op_expires_at(op_expiry_seconds);
 
-        let workload_id = Self::get_workload_id(&AppRef::new(&spec.name, &spec.version));
+        let workload_id = Self::get_workload_id(&AppRef::new(
+            owner_identity.fingerprint(),
+            &spec.name,
+            &spec.version,
+        ));
 
         info!(
             address = %self.stub.address(),

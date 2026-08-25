@@ -5,9 +5,10 @@ import {
     WorkloadSpec,
     PublicIdentity,
     AccessMode,
-    PcrSpec,
-    PcrVerifyType,
-    AttributeRequirement
+    PcrSpec256,
+    PcrSpec384,
+    AttributeRequirement,
+    PcrPolicyBlockMetadata
 } from "./types/Common.sol";
 import {
     WORKLOAD_DOMAIN,
@@ -27,6 +28,7 @@ import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IW
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
+import {PcrPolicy} from "./lib/PcrPolicy.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -50,8 +52,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     ///         prevIndex sits at i-1 and thisIndex at i in the input array.
     error InvalidPcrOrder(uint8 prevIndex, uint8 thisIndex);
     error PcrIndexOutOfRange(uint8 pcrIndex);
-    error EmptyMatchData(uint8 pcrIndex);
-    error InvalidStaticMatchDataLength(uint8 pcrIndex, uint256 actualLength);
+    error EmptyPcrComparison(uint8 pcrIndex);
     error DuplicateRequirementKey(bytes32 key);
     error InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
     error InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue);
@@ -77,7 +78,6 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     mapping(bytes32 => WorkloadSpecStorage) private _workloads;
     mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageSet;
     mapping(bytes32 => bool) private _whitelist;
-    /// @dev Storage gap for future upgrades (3 existing mappings → 47-slot gap)
     uint256[47] private __gap;
 
     // ============================================================================
@@ -114,7 +114,8 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
         }
 
-        _validatePcrSpecsSorted(spec.pcrs);
+        _validatePcrSpecs256Sorted(spec.workloadPcrPolicy.pcrSpecs256);
+        _validatePcrSpecs384Sorted(spec.workloadPcrPolicy.pcrSpecs384);
         _validateRequirements(spec.requirements);
 
         // An empty whitelist denies every base image, so isBaseImageAllowed always returns false
@@ -125,16 +126,19 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
             revert EmptyBaseImageWhitelist();
         }
 
-        // Compute workload ID
-        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version));
+        // The owner fingerprint is an input to the identifier, so it must be
+        // computed before it. See the note in BaseImageRegistry.registerBaseImage:
+        // the duplicate-revert path now pays one extra keccak256.
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
-        // Check for duplicate
+        // Compute workload ID, qualified by the publisher
+        workloadId = keccak256(abi.encode(WORKLOAD_DOMAIN, ownerFingerprint, spec.name, spec.version));
+
+        // Check for duplicate. This now means "you have already registered this
+        // name and version", not "someone has claimed this name".
         if (_workloads[workloadId].exists) {
             revert WorkloadAlreadyExists(workloadId);
         }
-
-        // Compute owner fingerprint after duplicate check
-        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
 
         // Check whitelist if paused
         _checkRegistrationAllowed(ownerFingerprint);
@@ -151,7 +155,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         _workloads[workloadId].exists = true;
         _workloads[workloadId].isRevoked = false;
         _workloads[workloadId].owner = ownerFingerprint;
-        _workloads[workloadId].workloadSpec = spec;
+        _storeWorkload(workloadId, spec);
 
         // Populate base image set
         for (uint256 i = 0; i < spec.baseImageIds.length; i++) {
@@ -207,7 +211,24 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         if (!_workloads[workloadId].exists) {
             revert WorkloadNotFound(workloadId);
         }
-        return _workloads[workloadId].workloadSpec;
+        return _loadWorkload(workloadId);
+    }
+
+    /// @inheritdoc IWorkloadRegistry
+    function getWorkloadPolicyMetadata(bytes32 workloadId)
+        external
+        view
+        returns (
+            uint64 sessionTtl,
+            AttributeRequirement[] memory requirements,
+            PcrPolicyBlockMetadata memory workloadPcrPolicyMetadata
+        )
+    {
+        if (!_workloads[workloadId].exists) {
+            revert WorkloadNotFound(workloadId);
+        }
+        WorkloadSpecStorage storage stored = _workloads[workloadId];
+        return (stored.workloadSpec.sessionTtl, stored.workloadSpec.requirements, stored.workloadPcrPolicyMetadata);
     }
 
     /// @inheritdoc IWorkloadRegistry
@@ -295,28 +316,45 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         }
     }
 
-    function _validatePcrSpecsSorted(PcrSpec[] calldata pcrs) private pure {
+    function _validatePcrSpecs256Sorted(PcrSpec256[] calldata pcrs) private pure {
         uint256 len = pcrs.length;
         uint256 prevIdx;
         for (uint256 i = 0; i < len; i++) {
             uint8 idx = pcrs[i].pcrIndex;
-            if (idx >= 24) {
+            if (idx > 16 && idx != 23) {
                 revert PcrIndexOutOfRange(idx);
             }
             if (i > 0 && idx <= prevIdx) {
                 revert InvalidPcrOrder(uint8(prevIdx), idx);
             }
-            PcrVerifyType vt = pcrs[i].verifyType;
-            uint256 matchDataLength = pcrs[i].matchData.length;
-            if (vt == PcrVerifyType.STATIC && matchDataLength != 1) {
-                revert InvalidStaticMatchDataLength(idx, matchDataLength);
-            }
-            if ((vt == PcrVerifyType.DYNAMIC_SUBSET || vt == PcrVerifyType.DYNAMIC_SUBSEQUENCE) && matchDataLength == 0)
-            {
-                revert EmptyMatchData(idx);
-            }
+            if (pcrs[i].comparison.length == 0) revert EmptyPcrComparison(idx);
             prevIdx = idx;
         }
+    }
+
+    function _validatePcrSpecs384Sorted(PcrSpec384[] calldata pcrs) private pure {
+        uint256 len = pcrs.length;
+        uint256 prevIdx;
+        for (uint256 i = 0; i < len; i++) {
+            uint8 idx = pcrs[i].pcrIndex;
+            if (idx > 16 && idx != 23) {
+                revert PcrIndexOutOfRange(idx);
+            }
+            if (i > 0 && idx <= prevIdx) {
+                revert InvalidPcrOrder(uint8(prevIdx), idx);
+            }
+            if (pcrs[i].comparison.length == 0) revert EmptyPcrComparison(idx);
+            prevIdx = idx;
+        }
+    }
+
+    function _storeWorkload(bytes32 workloadId, WorkloadSpec calldata spec) private {
+        _workloads[workloadId].workloadSpec = spec;
+        _workloads[workloadId].workloadPcrPolicyMetadata = PcrPolicy.metadataCalldata(spec.workloadPcrPolicy);
+    }
+
+    function _loadWorkload(bytes32 workloadId) private view returns (WorkloadSpec memory spec) {
+        spec = _workloads[workloadId].workloadSpec;
     }
 
     function _validateRequirements(AttributeRequirement[] calldata requirements) private pure {

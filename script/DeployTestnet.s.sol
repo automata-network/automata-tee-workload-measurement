@@ -7,6 +7,7 @@ import {DeployWorkloadRegistry} from "./DeployWorkloadRegistry.s.sol";
 import {DeployMaaKeyRegistry} from "./DeployMaaKeyRegistry.s.sol";
 import {DeployMock} from "./DeployMock.s.sol";
 import {DeployAmdSnpSecurityPolicyRegistry} from "./DeployAmdSnpSecurityPolicyRegistry.s.sol";
+import {DeployTeeSecurityPolicyVerifier} from "./DeployTeeSecurityPolicyVerifier.s.sol";
 import "forge-std/console.sol";
 
 /// @title DeployTestnet
@@ -28,6 +29,7 @@ contract DeployTestnet is
     DeployWorkloadRegistry,
     DeployMaaKeyRegistry,
     DeployAmdSnpSecurityPolicyRegistry,
+    DeployTeeSecurityPolicyVerifier,
     DeployMock
 {
     function run()
@@ -38,6 +40,7 @@ contract DeployTestnet is
             DeployWorkloadRegistry,
             DeployMaaKeyRegistry,
             DeployAmdSnpSecurityPolicyRegistry,
+            DeployTeeSecurityPolicyVerifier,
             DeployMock
         )
     {
@@ -52,6 +55,7 @@ contract DeployTestnet is
         deployWorkloadRegistryProxy(address(0));
         deployMaaKeyRegistryProxy(address(0));
         deployAmdSnpSecurityPolicyRegistryProxy(address(0));
+        deployTeeSecurityPolicyVerifier();
 
         // 3. Mock attestation + SessionRegistry (depends on all of the above)
         deployMock();

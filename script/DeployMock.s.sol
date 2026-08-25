@@ -5,17 +5,25 @@ import {Script, console} from "forge-std/Script.sol";
 import {DeploymentConfig} from "./utils/DeploymentConfig.sol";
 import {MockAutomataDcapAttestation} from "../test/mocks/MockAutomataDcapAttestation.sol";
 import {MockAutomataSnpAttestation} from "../test/mocks/MockAutomataSnpAttestation.sol";
+import {ISnpAttestation} from "../src/interfaces/external/ISnpAttestation.sol";
 import {MockTpmAttestation} from "../test/mocks/MockTpmAttestation.sol";
 import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
+import {ZkVerifierRegistry} from "../src/ZkVerifierRegistry.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
+import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
 import {IAkCollateralVerifier} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {IBaseImageRegistry} from "../src/interfaces/registries/IBaseImageRegistry.sol";
 import {IWorkloadRegistry} from "../src/interfaces/registries/IWorkloadRegistry.sol";
-import {IAmdSnpSecurityPolicyRegistry} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ITeeSecurityPolicyVerifier} from "../src/interfaces/ITeeSecurityPolicyVerifier.sol";
+import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {IMaaKeyRegistry} from "../src/interfaces/registries/IMaaKeyRegistry.sol";
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {SessionRegistry, AttestationEvidence} from "../src/SessionRegistry.sol";
+import {VerificationBackendType} from "../src/types/Evidence.sol";
+import {ZkProofType} from "../src/types/Zk.sol";
+import {AmdSevSnpZkVerifierAdapter} from "../src/zk/ZkVerifierAdapters.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /// @title DeployMock
 /// @notice Deploys SessionRegistry with mock TEE/TPM verifiers for development/testing.
@@ -26,6 +34,8 @@ import {SessionRegistry, AttestationEvidence} from "../src/SessionRegistry.sol";
 ///        - SignatureVerifier (stateless, shared across environments)
 ///        - BaseImageRegistry
 ///        - WorkloadRegistry
+///        - MaaKeyRegistry
+///        - TeeSecurityPolicyVerifier, deployed after AmdSnpSecurityPolicyRegistry
 ///
 /// Usage as standalone script:
 ///   forge script script/DeployMock.s.sol:DeployMock --rpc-url $RPC_URL --broadcast
@@ -44,15 +54,19 @@ contract DeployMock is Script, DeploymentConfig {
         SessionRegistry sessionRegistry;
         TeeVerifier teeVerifier;
         MockTpmAttestation tpmAttestation;
+        TpmVerifier tpmVerifier;
         AkCollateralVerifier akCollateralVerifier;
         MockAutomataDcapAttestation dcapAttestation;
         MockAutomataSnpAttestation snpAttestation;
+        ZkVerifierRegistry zkVerifierRegistry;
     }
 
     /// @notice Deploy mock infrastructure and return addresses.
     /// @dev Must be called within a broadcast context (vm.startBroadcast).
-    ///      Reads SignatureVerifier, BaseImageRegistry and WorkloadRegistry
-    ///      from deployment JSON (deploy them first via their individual scripts).
+    ///      Reads SignatureVerifier, BaseImageRegistry, WorkloadRegistry,
+    ///      MaaKeyRegistry, and TeeSecurityPolicyVerifier from deployment JSON.
+    ///      Deploy all five first. TeeSecurityPolicyVerifier itself requires an
+    ///      already-deployed AmdSnpSecurityPolicyRegistry.
     function _deployMock() internal returns (MockDeployment memory d) {
         // 1. Mock TEE attestation
         d.dcapAttestation = new MockAutomataDcapAttestation();
@@ -65,38 +79,70 @@ contract DeployMock is Script, DeploymentConfig {
         d.tpmAttestation = new MockTpmAttestation();
         console.log("MockTpmAttestation deployed at:", address(d.tpmAttestation));
 
+        ZkVerifierRegistry zkImplementation = new ZkVerifierRegistry();
+        d.zkVerifierRegistry = ZkVerifierRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(zkImplementation), abi.encodeCall(ZkVerifierRegistry.initialize, (vm.envAddress("OWNER")))
+                )
+            )
+        );
+        AmdSevSnpZkVerifierAdapter amdAdapter =
+            new AmdSevSnpZkVerifierAdapter(d.snpAttestation, ISnpAttestation.ZkCoProcessorType.Succinct);
+        d.zkVerifierRegistry
+            .setZkProgramConfig(
+                ZkProofType.AmdSevSnp,
+                VerificationBackendType.ZkSuccinct,
+                0x007589387c69b403fe8d2b0e1c7db05175155daff7125fc981ac6ecd1985d18c,
+                address(amdAdapter),
+                true
+            );
+
         // 3. TeeVerifier with mock backends
-        d.teeVerifier = new TeeVerifier(d.dcapAttestation, d.snpAttestation);
+        d.teeVerifier = new TeeVerifier(d.dcapAttestation, d.zkVerifierRegistry);
         console.log("TeeVerifier deployed at:", address(d.teeVerifier));
 
         // 4. Read existing shared contract addresses
         address signatureVerifierAddr = readContractAddress("SignatureVerifier");
         address baseImageRegistryAddr = readContractAddress("BaseImageRegistry");
         address workloadRegistryAddr = readContractAddress("WorkloadRegistry");
-        address amdSnpSecurityPolicyRegistryAddr = readContractAddress("AmdSnpSecurityPolicyRegistry");
+        address teeSecurityPolicyVerifierAddr = readContractAddress("TeeSecurityPolicyVerifier");
         address maaKeyRegistryAddr = readContractAddress("MaaKeyRegistry");
         console.log("Using SignatureVerifier at:", signatureVerifierAddr);
         console.log("Using BaseImageRegistry at:", baseImageRegistryAddr);
         console.log("Using WorkloadRegistry at:", workloadRegistryAddr);
-        console.log("Using AmdSnpSecurityPolicyRegistry at:", amdSnpSecurityPolicyRegistryAddr);
+        console.log("Using TeeSecurityPolicyVerifier at:", teeSecurityPolicyVerifierAddr);
         console.log("Using MaaKeyRegistry at:", maaKeyRegistryAddr);
 
         d.akCollateralVerifier = new AkCollateralVerifier(
             IMaaKeyRegistry(maaKeyRegistryAddr),
             ISignatureVerifier(signatureVerifierAddr),
-            ITpmAttestation(address(d.tpmAttestation))
+            ITpmAttestation(address(d.tpmAttestation)),
+            IZkVerifierRegistry(address(d.zkVerifierRegistry))
         );
         console.log("AkCollateralVerifier deployed at:", address(d.akCollateralVerifier));
+
+        TpmVerifier tpmVerifierImplementation = new TpmVerifier(
+            ITpmAttestation(address(d.tpmAttestation)), IZkVerifierRegistry(address(d.zkVerifierRegistry))
+        );
+        d.tpmVerifier = TpmVerifier(
+            address(
+                new ERC1967Proxy(
+                    address(tpmVerifierImplementation), abi.encodeCall(TpmVerifier.initialize, (vm.envAddress("OWNER")))
+                )
+            )
+        );
+        console.log("TpmVerifier deployed at:", address(d.tpmVerifier));
 
         // 5. SessionRegistry with mock TEE/TPM but real signature verification
         d.sessionRegistry = new SessionRegistry(
             ITeeVerifier(address(d.teeVerifier)),
-            ITpmAttestation(address(d.tpmAttestation)),
+            d.tpmVerifier,
             ISignatureVerifier(signatureVerifierAddr),
             IAkCollateralVerifier(address(d.akCollateralVerifier)),
             IBaseImageRegistry(baseImageRegistryAddr),
             IWorkloadRegistry(workloadRegistryAddr),
-            IAmdSnpSecurityPolicyRegistry(amdSnpSecurityPolicyRegistryAddr)
+            ITeeSecurityPolicyVerifier(teeSecurityPolicyVerifierAddr)
         );
         console.log("Mock SessionRegistry deployed at:", address(d.sessionRegistry));
     }
@@ -124,6 +170,7 @@ contract DeployMock is Script, DeploymentConfig {
     /// @notice Write deployed addresses to deployment JSON.
     function _writeMockAddresses(MockDeployment memory d) internal {
         writeToJson("TeeVerifierMock", address(d.teeVerifier));
+        writeToJson("ZkVerifierRegistryMock", address(d.zkVerifierRegistry));
         writeToJson("AkCollateralVerifierMock", address(d.akCollateralVerifier));
         writeToJson("SessionRegistryMock", address(d.sessionRegistry));
     }

@@ -1,21 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {Attribute, AttributeRequirement} from "../../types/Common.sol";
-import {TEEType} from "../../types/Evidence.sol";
-
-struct VerifiedTeePolicyInputs {
-    TEEType teeType;
-    uint256 enabledTeeAttributes;
-    uint256 intelTdxTcbStatusBit;
-    bytes32 amdSevSnpTcbValues;
-    uint64 amdSevSnpPlatformInfo;
-    uint24 amdSevSnpCpuid;
-    uint32 amdSevSnpReportVersion;
-    uint64 amdSevSnpLaunchMitigationVector;
-    uint64 amdSevSnpCurrentMitigationVector;
-}
-
 struct AmdSnpSecurityPolicy {
     bytes32 minimumTcb;
     bytes32 platformInfoPolicy;
@@ -57,11 +42,4 @@ interface IAmdSnpSecurityPolicyRegistry {
     function getPolicy(uint24 cpuid) external view returns (AmdSnpSecurityPolicy memory policy);
 
     function getActivePolicy(uint24 cpuid) external view returns (AmdSnpSecurityPolicy memory policy);
-
-    function verifyTeePolicy(
-        VerifiedTeePolicyInputs calldata inputs,
-        Attribute[] calldata profileAttributes,
-        Attribute[] calldata variantAttributes,
-        AttributeRequirement[] calldata requirements
-    ) external view;
 }

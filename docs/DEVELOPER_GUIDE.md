@@ -43,8 +43,9 @@ The system is composed of six contract groups with strict separation of concerns
 - **BaseImageRegistry** — Defines platform images and their expected PCR measurement specifications. Managed by base image publishers.
 - **WorkloadRegistry** — Defines application-level policies including base image access control, attribute requirements, and PCR constraints. Managed by workload developers.
 - **SessionRegistry** — Orchestrates the full attestation verification workflow, creates on-chain session identities, and manages session lifecycle.
-- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults plus mandatory mitigation-vector masks for each exact supported CPUID. It evaluates ordinary attributes and the reserved policy for either verified TEE type.
-- **AkCollateralVerifier** — Separately deployed Azure MAA JWT and GCP AK certificate-chain verifier.
+- **AmdSnpSecurityPolicyRegistry** — Stores the active AMD SEV-SNP TCB and `PLATFORM_INFO` defaults plus mandatory mitigation-vector masks for each exact supported CPUID.
+- **TeeSecurityPolicyVerifier** — Evaluates ordinary attributes and the reserved policy for either verified TEE type. It reads `AmdSnpSecurityPolicyRegistry` only for AMD SEV-SNP evidence.
+- **AkCollateralVerifier** — Separately deployed Azure MAA JWT, GCP Attestation Key certificate-chain, and AWS NitroTPM proof verifier.
 - **MaaKeyRegistry** — Stores the owner-managed Microsoft Azure Attestation signing keys used by `AkCollateralVerifier`.
 - **TeeVerifier** — Stateless dispatcher for TEE attestation reports. Routes to DCAP (Intel TDX) or SNP (AMD SEV-SNP) verifiers. Supports ZK proof backends (RiscZero, SP1).
 - **SignatureVerifier** — Validates cryptographic signatures from any `PublicIdentity` key. Supports RS256, ES256 (P-256), and ES256K (secp256k1).
@@ -56,14 +57,15 @@ The system is composed of six contract groups with strict separation of concerns
 ```
 SessionRegistry
 ├── ISessionRegistry
-├── TpmVerifier (TPM Quote + TPM Certify verification)
 ├── OwnableUpgradeable
 └── UUPSUpgradeable
 ```
 
-`SessionRegistry` calls the separately deployed `IAkCollateralVerifier`.
-Its immutable registry references are `IBaseImageRegistry`,
-`IWorkloadRegistry`, and `IAmdSnpSecurityPolicyRegistry`.
+`SessionRegistry` calls the immutable `TpmVerifier` proxy address and a
+separately deployed `IAkCollateralVerifier`. The `TpmVerifier` implementation
+is upgradeable. Its other immutable references are
+`ITeeVerifier`, `ISignatureVerifier`, `IBaseImageRegistry`,
+`IWorkloadRegistry`, and `ITeeSecurityPolicyVerifier`.
 
 **BaseImageRegistry / WorkloadRegistry:**
 ```
@@ -264,14 +266,15 @@ The **central orchestrator** that ties everything together. It verifies attestat
 
 ### Dependencies (Immutable)
 
-The SessionRegistry holds immutable references to:
+The SessionRegistry holds immutable addresses for:
 - `ITeeVerifier` — TEE attestation verification
+- `TpmVerifier` proxy — TPM Quote, TPM Certify, PCR policy, and proof verification
 - `ISignatureVerifier` — Cryptographic signature verification
-- `IAkCollateralVerifier` — Azure MAA JWT and GCP AK collateral verification
+- `IAkCollateralVerifier` — Azure MAA JWT, GCP Attestation Key collateral, and AWS NitroTPM proof verification
 - `IBaseImageRegistry` — Platform policy lookup
 - `IWorkloadRegistry` — Application policy lookup
-- `IAmdSnpSecurityPolicyRegistry` — AMD SEV-SNP policy defaults plus ordinary and reserved TEE attribute evaluation
-- `ITpmAttestation` — TPM Quote and Certify verification through the inherited `TpmBase`
+- `ITeeSecurityPolicyVerifier` — Ordinary and reserved TEE attribute
+  evaluation; it holds the AMD SEV-SNP policy registry reference
 
 ### Key Operations
 
@@ -390,11 +393,9 @@ TCB status, and the AMD SEV-SNP TCB, `PLATFORM_INFO`, CPUID, report-version,
 
 ### Step 2a: Verified TEE and Attribute Policy
 
-`SessionRegistry` calls
-`AmdSnpSecurityPolicyRegistry.verifyTeePolicy` before AK and TPM
-verification. Despite the component name, this call handles all ordinary
-attribute requirements plus the reserved attributes for the verified
-`TeeVerificationResult.teeType`.
+`SessionRegistry` calls `TeeSecurityPolicyVerifier.verifyTeePolicy` before AK
+and TPM verification. This call handles all ordinary attribute requirements
+plus the reserved attributes for the verified `TeeVerificationResult.teeType`.
 
 The call evaluates ordinary metadata first. It then applies the profile and
 measurement-variant lookup to custom attributes and every reserved TEE
@@ -414,13 +415,14 @@ Verifies the Attestation Key (AK) and its binding to the TEE instance:
   `sha256(hclVarData) || bytes32(0)`. `SessionRegistry` then requires the
   independently verified TDX or SNP report's `REPORT_DATA` to contain the same
   value.
-- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. Also computes `expectedPcr15 = sha256(bytes32(0) || bytes16(0) || UUID)`. The 16-byte UUID is left-padded with zeros to fill each bank's register width (no intermediate hash).
-- **GCP (SNP)**: AK from X.509 chain. Binding via `report_id` at SNP report offset `0x140`. Computes `expectedPcr15 = sha256(0x00 || report_id)`.
+- **GCP (TDX)**: AK extracted from X.509 certificate chain. Binding verified via RTMR3 containing `sha384(bytes48(0) || bytes32(0) || UUID)`, where UUID is from `reportData[520:536]`. `TeeVerifier.deriveGcpPcr15ExtendValue` returns `bytes16(0) || UUID`. `SessionRegistry` encodes that value in an in-memory SHA-256 PCR15 `EXTEND_FROM_ZERO` rule.
+- **GCP (SNP)**: AK from X.509 chain. Binding uses `REPORT_ID` at SNP report offset `0x140`. `TeeVerifier.deriveGcpPcr15ExtendValue` returns that exact 32-byte value. `SessionRegistry` encodes it in an in-memory SHA-256 PCR15 `EXTEND_FROM_ZERO` rule.
 
 ### Step 4: TPM Quote Verification
 
 Verifies the TPM Quote report:
-- Validates the AK signature over the marshalled `TPMS_ATTEST` (carried in the `tpm2bAttest` field; the historical name is preserved but the bytes have **no** `TPM2B` 2-byte size prefix — see `Evidence.sol`)
+- Validates the Attestation Key signature over `TpmQuoteEvidence.tpmsAttest`,
+  or verifies the exact `tpm_quote.v1` proof
 - Checks nonce binding: `extraData == keccak256(abi.encode(SESSION_NONCE_DOMAIN, block.chainid, address(this), ownerFingerprint, currentNonce))`
 - Extracts measured PCR values from the quote
 - Writes the owner nonce increment immediately after successful Quote
@@ -440,8 +442,8 @@ Verifies the TPM2_Certify report:
 
 Computes the session ID:
 ```
-tpmSignatureHash = keccak256(tpmQuoteReport.tpmSignature)
-teeReportBytesHash = teeVerifier.getTeeReportHash(evidence.teeReport)
+tpmSignatureHash = tpmQuoteVerificationResult.tpmSignatureHash
+teeReportBytesHash = teeVerificationResult.teeReportBytesHash
 sessionId = keccak256(abi.encode(SESSION_DOMAIN, tpmSignatureHash, teeReportBytesHash))
 ```
 
@@ -501,33 +503,32 @@ Active CVMSession
 
 ---
 
-## PCR Verification Types
+## PCR Comparison Types
 
-Three strategies for matching measured PCR values against policy specifications:
+Four comparison types are encoded inside one opaque `comparison` blob:
 
 ### STATIC — Exact Value Match
 
-```
-`matchData` must contain exactly one entry, and `matchData[0]` must exactly equal the PCR final value
-```
+The encoded expected value must exactly equal the PCR final value.
 
 Use for deterministic measurements that never change (e.g., firmware hash, bootloader hash). The PCR value is computed as a sequential hash chain of events, producing a single final value that must match exactly.
 
 ### DYNAMIC_SUBSET — Required Unordered Landmarks
 
-```
-All matchData hashes must occur in the measured PCR events (any order)
-```
-
-Use for configurations with required landmarks whose order is not stable. Extra measured events are permitted, but every required `matchData` hash must occur at least once.
+Use for configurations with required landmarks whose order is not stable. Extra measured events are permitted, but every required landmark must occur at least once.
 
 ### DYNAMIC_SUBSEQUENCE — Ordered Event Sequence
 
-```
-matchData must appear as an ordered subsequence within the measured event hashes
-```
-
 Use for boot sequences where event order matters but additional events may be interspersed. The required events must appear in the correct order, though other events can appear between them.
+
+### DYNAMIC_INDEXED_EVENT_SETS — Checked Event Positions
+
+Require the exact event count. Each listed event index must match one digest in
+its sorted allowed set. Unlisted indexes are skipped. The complete event log is
+still replayed to the quoted PCR value.
+
+The canonical blob encoding is
+`abi.encode(uint16 comparisonType, comparison-specific fields...)`.
 
 ---
 
@@ -616,13 +617,17 @@ struct PublicIdentity {
 }
 ```
 
-### PcrSpec
+### PCR Specifications
 
 ```solidity
-struct PcrSpec {
-    uint8 pcrIndex;           // PCR index (0-23)
-    PcrVerifyType verifyType; // STATIC, DYNAMIC_SUBSET, or DYNAMIC_SUBSEQUENCE
-    bytes32[] matchData;      // Interpretation depends on verifyType
+struct PcrSpec256 {
+    uint8 pcrIndex;
+    bytes comparison;
+}
+
+struct PcrSpec384 {
+    uint8 pcrIndex;
+    bytes comparison;
 }
 ```
 

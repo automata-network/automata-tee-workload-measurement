@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {WorkloadSpec, PublicIdentity} from "../../types/Common.sol";
+import {AttributeRequirement, PcrPolicyBlockMetadata, PublicIdentity, WorkloadSpec} from "../../types/Common.sol";
 
 /// @notice Storage wrapper for workload specifications
 struct WorkloadSpecStorage {
@@ -13,6 +13,8 @@ struct WorkloadSpecStorage {
     bytes32 owner;
     /// @dev The workload specification
     WorkloadSpec workloadSpec;
+    /// @dev Registration-time commitment and PCR-selection bitmaps for workloadPcrPolicy.
+    PcrPolicyBlockMetadata workloadPcrPolicyMetadata;
 }
 
 interface IWorkloadRegistry {
@@ -38,7 +40,9 @@ interface IWorkloadRegistry {
 
     /// @notice Register a new workload with policy and PCR specifications (immutable after registration)
     /// @dev Workload ID is computed as:
-    ///      keccak256(abi.encode(WORKLOAD_DOMAIN, spec.name, spec.version))
+    ///      keccak256(abi.encode(WORKLOAD_DOMAIN, ownerFingerprint, spec.name, spec.version))
+    ///      The owner fingerprint qualifies the name, so each publisher has its own
+    ///      name space and a name cannot be squatted across publishers.
     /// @param spec Complete workload specification (name, version, policy, pcrs)
     /// @param opExpiresAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the workload owner
@@ -67,6 +71,17 @@ interface IWorkloadRegistry {
     /// @param workloadId The workload identifier
     /// @return spec The complete workload specification
     function getWorkload(bytes32 workloadId) external view returns (WorkloadSpec memory spec);
+
+    /// @notice Get the lightweight workload policy data needed by SessionRegistry.
+    /// @dev This function does not return the stored PCR comparison blobs.
+    function getWorkloadPolicyMetadata(bytes32 workloadId)
+        external
+        view
+        returns (
+            uint64 sessionTtl,
+            AttributeRequirement[] memory requirements,
+            PcrPolicyBlockMetadata memory workloadPcrPolicyMetadata
+        );
 
     /// @notice Get the owner fingerprint of a registered workload
     /// @dev Returns the keccak256 fingerprint computed from the owner's PublicIdentity

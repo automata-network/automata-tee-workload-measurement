@@ -7,16 +7,16 @@ Core data structures shared across all registries.
 ### Enums
 
 ```solidity
-enum PcrVerifyType {
-    STATIC,               // Exact match: actual == expected
-    DYNAMIC_SUBSET,       // matchData must occur in events (unordered)
-    DYNAMIC_SUBSEQUENCE   // matchData must appear as subsequence in events (ordered)
-}
-
 enum AccessMode {
     ANY,        // All base images allowed
     BLACKLIST,  // Listed base images blocked
     WHITELIST   // Only listed base images allowed
+}
+
+enum PcrBankSelection {
+    Sha256,
+    Sha384,
+    Sha256AndSha384
 }
 ```
 
@@ -28,10 +28,30 @@ struct PublicIdentity {
     bytes key;       // Raw public key bytes (format depends on typeId)
 }
 
-struct PcrSpec {
-    uint8 pcrIndex;              // PCR register index (0-23)
-    PcrVerifyType verifyType;    // How to evaluate this PCR
-    bytes32[] matchData;         // Expected values (interpretation depends on verifyType)
+struct PcrSpec256 {
+    uint8 pcrIndex;
+    bytes comparison;
+}
+
+struct PcrSpec384 {
+    uint8 pcrIndex;
+    bytes comparison;
+}
+
+struct PcrPolicyBlock {
+    PcrSpec256[] pcrSpecs256;
+    PcrSpec384[] pcrSpecs384;
+}
+
+struct PcrPolicyBlockMetadata {
+    bytes32 blockHash;
+    bytes3 pcrSelectBitmap256;
+    bytes3 pcrSelectBitmap384;
+}
+
+struct PcrCommitment {
+    bytes32 pcrSelect;
+    bytes32 pcrDigest;
 }
 
 struct Attribute {
@@ -45,6 +65,10 @@ struct AttributeRequirement {
 }
 ```
 
+`comparison` is one opaque canonical ABI blob. Its first field is a `uint16`
+comparison type. `TpmVerifier` owns all type-specific decoding. Registries only
+reject an empty `comparison`.
+
 ### BaseImageRegistry Structs
 
 ```solidity
@@ -55,15 +79,16 @@ struct BaseImageSpec {
 }
 
 struct PlatformProfile {
-    string name;               // e.g. "gcp-tdx", "azure-snp"
-    PcrSpec[] invariants;      // Typically platform baseline measurements
-    Attribute[] attributes;    // Platform metadata (cloud, TEE type, etc.)
+    string name;
+    PcrBankSelection pcrBankSelection;
+    PcrPolicyBlock invariantPcrPolicy;
+    Attribute[] attributes;
 }
 
 struct MeasurementVariant {
-    string name;                // e.g. "n2d-standard-2", "c3-standard-4"
-    PcrSpec[] overridePcrs;     // Indices the profile leaves unpinned; MUST be disjoint from invariants
-    Attribute[] attributes;     // Replaces platform attributes at matching key
+    string name;
+    PcrPolicyBlock variantPcrPolicy;
+    Attribute[] attributes;
 }
 ```
 
@@ -77,7 +102,7 @@ struct WorkloadSpec {
     AccessMode baseImageMode;                // ANY / WHITELIST / BLACKLIST
     bytes32[] baseImageIds;                  // For whitelist/blacklist filtering
     AttributeRequirement[] requirements;     // Demanded platform attributes
-    PcrSpec[] pcrs;                          // Typically workload PCR specs
+    PcrPolicyBlock workloadPcrPolicy;
 }
 ```
 
@@ -137,15 +162,37 @@ enum AkPubCollateralType {
 ### TEE Structs
 
 ```solidity
-struct ZkProof {
-    bytes output;       // ZK circuit output
-    bytes proofBytes;   // ZK proof
+enum ZkProofType {
+    IntelTdxDcap,
+    AmdSevSnp,
+    TpmQuote,
+    AwsNitroTpm
 }
 
-struct SnpZkProof {
-    bytes output;       // VerifierJournal public output
-    bytes proofBytes;   // ZK proof
-    bytes rawReport;    // Exact 1,184-byte report bound by reportHash
+struct ProgramBoundZkProof {
+    bytes32 programIdentifier;
+    bytes output;
+    bytes proofBytes;
+}
+
+struct IntelTdxDcapZkEvidence {
+    ProgramBoundZkProof proof;
+    bytes quoteBody;
+}
+
+struct IntelTdxDcapJournalV1 {
+    uint16 quoteVersion;
+    uint16 quoteBodyType;
+    uint8 tcbStatus;
+    bytes6 fmspc;
+    bytes32 fullQuoteHash;
+    bytes32 quoteBodyHash;
+    bytes32 advisoryIdsHash;
+}
+
+struct AmdSevSnpZkEvidence {
+    ProgramBoundZkProof proof;
+    bytes rawReport;
 }
 
 struct TeeReport {
@@ -166,13 +213,28 @@ struct TeeVerificationResult {
     uint32 amdSevSnpReportVersion;
     uint64 amdSevSnpLaunchMitigationVector;
     uint64 amdSevSnpCurrentMitigationVector;
+    bytes32 teeReportBytesHash;
 }
 ```
 
-Intel TDX ZK evidence uses `ZkProof`. AMD SEV-SNP uses `SnpZkProof` because
-the verifier needs the full report body after checking
-`keccak256(rawReport) == VerifierJournal.reportHash`. The first two fields
-remain ABI-compatible with `ZkProof`.
+The proved DCAP journal uses a 131-byte internal body. After the 11-byte
+Automata header, it contains 16 zero bytes, `ATKJ`, `uint16(1)` format type,
+`uint16(1)` format version, `fullQuoteHash`, `quoteBodyHash`, and
+`advisoryIdsHash`. The full journal is 333 bytes after adding the two-byte
+length and 200-byte collateral commitment suffix.
+
+`advisoryIdsHash` is
+`keccak256(abi.encode(bytes32("ATKJ_ADVISORY_IDS_V1"), sortedUniqueAdvisoryIds))`.
+The identifiers use strict ascending UTF-8 byte order.
+
+Intel TDX uses `IntelTdxDcapZkEvidence`. The proof commits to both
+`keccak256(fullRawQuote)` and `keccak256(quoteBody)`. The call supplies only
+the exact TD10 or TD15 quote body. `TeeVerifier` checks the body hash and
+returns the proof-bound exact signed quote hash as `teeReportBytesHash`.
+Provider buffer padding is not part of the Intel TDX quote. AMD
+SEV-SNP uses `AmdSevSnpZkEvidence` because the verifier needs the full report
+body after checking
+`keccak256(rawReport) == AmdSevSnpVerifierJournal.reportHash`.
 
 The stable bits represent Intel TDX debug (`1 << 0`), AMD SEV-SNP debug
 (`1 << 1`), and AMD SEV-SNP `MIGRATE_MA` (`1 << 2`). Their canonical keys are
@@ -204,34 +266,33 @@ Their layouts are documented in
 struct TpmReport {
     VerificationBackendType verificationBackendType;
     TpmReportType tpmReportType;
-    bytes data;   // ABI-encoded TpmQuoteReport or TpmCertifyReport
+    bytes data;   // TpmQuoteEvidence, TpmCertifyEvidence, or ProgramBoundZkProof
 }
 
-struct TpmQuoteReport {
-    bytes tpm2bAttest;       // Marshalled TPMS_ATTEST (no TPM2B size prefix). See note below.
-    bytes tpmSignature;      // TPM signature over tpm2bAttest
-    PcrValue[] pcrValues;    // PCR register values
+struct TpmQuoteEvidence {
+    bytes tpmsAttest;
+    bytes tpmSignature;
+    uint8 pcr0StartupLocality;
+    PcrValue256[] pcrValues256;
+    PcrValue384[] pcrValues384;
 }
 
-struct TpmCertifyReport {
-    bytes tpm2bAttest;       // Marshalled TPMS_ATTEST (no TPM2B size prefix). See note below.
-    bytes tpmSignature;      // TPM signature over tpm2bAttest
-    bytes tpmtPublic;        // TPMT_PUBLIC of certified key
+struct TpmCertifyEvidence {
+    bytes tpmsAttest;
+    bytes tpmSignature;
+    bytes tpmtPublic;
 }
 
-// Note on `tpm2bAttest`: despite the field name, the bytes are the bare
-// marshalled `TPMS_ATTEST` — i.e. they start with the TPM2.0 magic
-// `0xFF544347` at offset 0. The 2-byte `TPM2B_ATTEST` size prefix the TPM
-// ABI returns MUST be stripped before populating this field. TPM2.0
-// signatures are computed over `TPMS_ATTEST` (not the size-prefixed
-// `TPM2B_ATTEST`), and `LibTpm.parseAttestHeaders` reverts with
-// `InvalidTpmMagic()` if the prefix is present.
-
-// PcrValue imported from @automata-network/automata-tpm-attestation/types/Types.sol
-struct PcrValue {
+struct PcrValue256 {
     uint8 pcrIndex;
-    bytes32 value;              // Static PCR value
-    bytes32[] eventLogHashes;   // Dynamic event log hashes (used by DYNAMIC_SUBSET/SUBSEQUENCE)
+    bytes32 value;
+    bytes32[] eventLogHashes;
+}
+
+struct PcrValue384 {
+    uint8 pcrIndex;
+    Bytes48 value;
+    Bytes48[] eventLogHashes;
 }
 ```
 
@@ -240,8 +301,10 @@ struct PcrValue {
 ```solidity
 struct AkPubCollateral {
     AkPubCollateralType akPubCollateralType;
+    VerificationBackendType verificationBackendType;
     bytes data;   // Azure: abi.encode((bytes jwt, bytes hclVarData));
-                  // GCP: ABI-encoded bytes[] certs
+                  // GCP: ABI-encoded bytes[] certs;
+                  // AWS: abi.encode(ProgramBoundZkProof)
 }
 ```
 
@@ -250,6 +313,7 @@ struct AkPubCollateral {
 ```solidity
 struct AttestationEvidence {
     TeeReport teeReport;
+    PublicIdentity akPub;
     TpmReport tpmQuoteReport;
     TpmReport tpmCertifyReport;
     AkPubCollateral akPubCollateral;
@@ -277,8 +341,11 @@ struct SessionRenewalAuthorization {
 
 ```solidity
 struct TpmQuoteVerificationResult {
-    bool valid;
-    PcrValue[] pcrValues;
+    bytes32 akPubFingerprint;
+    bytes32 qualifyingData;
+    bytes32 tpmSignatureHash;
+    PcrCommitment pcrCommitment;
+    bytes32 policyCommitment;
 }
 
 struct TpmCertifyVerificationResult {
@@ -292,15 +359,14 @@ struct TpmCertifyVerificationResult {
 
 ```solidity
 struct AkCollateralVerificationResult {
-    bool valid;
-    PublicIdentity akPub;
     bytes32 akPubFingerprint;
-    TEEType teeType;       // Azure: authenticated x-ms-attestation-type; ignored for GCP
-    bytes32 bindingHash;   // Azure: sha256(hclVarData) (asserted equal to MAA JWT's
-                           //   tdx_report_data / x-ms-sevsnpvm-reportdata claim prefix
-                           //   inside verifyAkCollateral, then matched against the
-                           //   verified raw TEE report by SessionRegistry)
-                           // GCP: bytes32(0) (binding via PCR15 in SessionRegistry step 7)
+    TEEType teeType;
+    bytes32 bindingHash;
+    bytes32 amdSevSnpReportHash;
+    bytes32 awsNitroRootCertHash;
+    bytes32 qualifyingData;
+    uint64 documentTimestampSeconds;
+    PcrCommitment pcrCommitment;
 }
 ```
 
@@ -324,6 +390,9 @@ All are `bytes32 constant = keccak256("...")`:
 | `PLATFORM_VARIANT_DOMAIN` | `"CVM_PLATFORM_VARIANT_V1"` | Variant ID |
 | `WORKLOAD_DOMAIN` | `"CVM_WORKLOAD_V1"` | Workload ID |
 | `SESSION_NONCE_DOMAIN` | `"CVM_SESSION_REG_NONCE_V1"` | Nonce-based replay protection |
+| `PCR_POLICY_BLOCK_DOMAIN` | `"CVM_PCR_POLICY_BLOCK_V1"` | One named PCR policy block |
+| `TPM_POLICY_COMMITMENT_DOMAIN` | `"CVM_TPM_POLICY_COMMITMENT_V1"` | Four named policy block hashes |
+| `AWS_REPORT_DATA_PCR_COMMITMENT_DOMAIN` | `"CVM_AWS_REPORT_DATA_PCR_COMMITMENT_V1"` | AWS `REPORT_DATA[32:64]` binding |
 
 ### Operation Message Separators
 
@@ -376,8 +445,8 @@ function publicIdentityToCertPubkey(PublicIdentity memory identity) → CertPubk
 ### AmdSnpPolicy.sol (`src/lib/AmdSnpPolicy.sol`)
 
 The single definition of the packed AMD SEV-SNP policy formats and of the
-supported-silicon window. `TeeVerifier` and `AmdSnpSecurityPolicyRegistry` both
-depend on it so the two never drift.
+supported-silicon window. `TeeVerifier`, `TeeSecurityPolicyVerifier`, and
+`AmdSnpSecurityPolicyRegistry` depend on it so the definitions do not drift.
 
 ```solidity
 function validateTcb(bytes32 packedTcb)
@@ -398,7 +467,7 @@ function isSupportedCpuid(uint24 cpuid) → bool
 
 `tryMergePlatformInfoPolicies` does not revert. It returns `ok = false` when
 one side requires a bit set that the other requires cleared, leaving the caller
-to report the conflict in its own terms — `AmdSnpSecurityPolicyRegistry` raises
+to report the conflict in its own terms — `TeeSecurityPolicyVerifier` raises
 `TeeAttributePolicyConflict(key, baseValue, workloadValue)`, which names the
 attribute and both contributing values. `merged` is only meaningful when `ok`
 is true.
@@ -496,7 +565,9 @@ function verifyAndAttestOnChain(bytes calldata input) → (bool, bytes memory)
 function verifyAndAttestWithZKProof(
     bytes calldata output,
     ZkCoProcessorType zkCoprocessor,
-    bytes calldata proofBytes
+    bytes calldata proofBytes,
+    bytes32 programIdentifier,
+    uint32 tcbEvaluationDataNumber
 ) → (bool, bytes memory)
 ```
 
@@ -516,6 +587,7 @@ struct VerifierJournal {
 function verifyAndAttestWithZKProof(
     bytes calldata output,
     ZkCoProcessorType zkCoprocessor,
+    bytes32 identifier,
     bytes calldata proofBytes
 ) → VerifierJournal memory
 ```

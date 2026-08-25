@@ -11,7 +11,7 @@
 | Variable | Type | Purpose |
 |---|---|---|
 | `dcapAttestation` | `IDcapAttestation` | Intel DCAP verification backend |
-| `snpAttestation` | `ISnpAttestation` | AMD SNP verification backend |
+| `zkVerifierRegistry` | `IZkVerifierRegistry` | Exact ZK program and verifier-adapter routes |
 
 ### Constants
 
@@ -36,17 +36,17 @@ uint256 constant SNP_REPORT_SIZE = 1184;
 ### Version
 
 ```solidity
-string public constant TEE_VERIFIER_VERSION = "1.4.0";
+string public constant TEE_VERIFIER_VERSION = "2.1.0";
 ```
 
 ### Functions
 
-#### `getTeeReportHash`
+#### `deriveGcpPcr15ExtendValue`
 ```solidity
-function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32)
+function deriveGcpPcr15ExtendValue(TeeVerificationResult memory result) external pure returns (bytes32 extendValue)
 ```
-- Solidity backend: `keccak256(teeReport.data)`
-- ZK backend: decodes `ZkProof` from data, extracts last 32 bytes of `zkProof.output`
+- Intel TDX: validates RTMR3, then returns `bytes16(0) || UUID`.
+- AMD SEV-SNP: returns the verified `REPORT_ID`.
 
 #### `verifyTeeReport`
 ```solidity
@@ -55,18 +55,29 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
 
 **TDX (Intel) flow**:
 1. Dispatch based on `VerificationBackendType`:
-   - Solidity: `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
-   - ZK RiscZero/Succinct: `dcapAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
+   - Solidity: require `teeReport.data` to end exactly after its declared DCAP
+     signature data, then call
+     `dcapAttestation.verifyAndAttestOnChain(teeReport.data)`
+   - ZK Succinct: decode `IntelTdxDcapZkEvidence` and resolve the exact
+     `intel_tdx_dcap.v1` adapter through `ZkVerifierRegistry`
 2. Accept raw DCAP TCB statuses 0 through 5, 8, and 9. Reject 6, 7, and unknown values.
 3. Return the accepted status as `intelTdxTcbStatusBit = 1 << rawStatus`.
-4. Extract the quote body from DCAP output.
+4. For Solidity, extract the quote body from verified DCAP output. For ZK,
+   require the exact 131-byte framed output, zero legacy rejection prefix,
+   `ATKJ` magic, format type 1, and format version 1. Then require the supplied
+   quote body to have the verified TD10 or TD15 length and require
+   `keccak256(quoteBody) == journal.quoteBodyHash`.
 5. Require valid reserved attribute bits and `SEPT_VE_DISABLE`.
 6. Reject nonzero Intel TDX 1.5 `MR_SERVICETD`.
 7. Extract `DEBUG` into `enabledTeeAttributes`.
-8. Return the quote body with `valid=true`.
+8. Return the quote body with `valid=true`. Return the exact quote hash
+   as `teeReportBytesHash`: `keccak256(teeReport.data)` for Solidity or
+   `journal.fullQuoteHash` for ZK. Both paths reject every trailing byte,
+   including zero, and never truncate verifier input.
 
 **SNP (AMD) flow**:
-1. ZK only: `snpAttestation.verifyAndAttestWithZKProof(output, zkCoprocessor, proofBytes)`
+1. ZK only: resolve the exact `amd_sev_snp.v1` adapter through
+   `ZkVerifierRegistry`.
 2. Check the proof-bound report hash before reading report fields
 3. Require an exact 1,184-byte report and version 3 through 5
 4. Validate signature selection, key settings, policy, `VMPL`, raw TCB,
@@ -83,9 +94,10 @@ function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerifi
    Earlier versions return zero for both vectors.
 9. Return the raw report with `valid=true`.
 
-`AmdSnpSecurityPolicyRegistry` checks the extracted AMD state against the
-resolved base-image and workload policies. Its active exact-CPUID record
-supplies any missing packed value. See
+`TeeSecurityPolicyVerifier` checks the extracted AMD state against the resolved
+base-image and workload policies. It reads the active exact-CPUID
+`AmdSnpSecurityPolicyRegistry` record for any missing packed value. See
+[TeeSecurityPolicyVerifier](cvm-registry-tee-security-policy.md) and
 [AmdSnpSecurityPolicyRegistry](cvm-registry-amd-snp-policy.md).
 
 #### Runbook: vendor firmware introduces a new bit or version
@@ -119,14 +131,14 @@ operation, not a policy edit:
 3. Only then relax the corresponding policy, if any.
 
 `script/UpgradeTeeVerifier.s.sol` performs both steps and asserts the rewiring
-afterwards. Note the ordering constraint already encoded there: upgrade
-`AmdSnpSecurityPolicyRegistry` **first**, because `SessionRegistry` calls
-`verifyTeePolicy` with the current `VerifiedTeePolicyInputs` layout.
+afterwards.
 
-`AmdSnpSecurityPolicyRegistry` is a UUPS proxy and *is* upgradeable, so
-`isSupportedCpuid` is shared between the two contracts to keep the supported
-window defined once. Widening it in the registry alone still has no effect —
-`TeeVerifier` rejects the report before the registry is ever consulted.
+`TeeSecurityPolicyVerifier` is also immutable. A change to
+`VerifiedTeePolicyInputs` or its evaluation rules requires a new
+`TeeSecurityPolicyVerifier` and a new `SessionRegistry` implementation that
+references it. `AmdSnpSecurityPolicyRegistry` remains a UUPS proxy. Widening
+its `isSupportedCpuid` window alone still has no effect because `TeeVerifier`
+rejects the report before `TeeSecurityPolicyVerifier` reads the registry.
 
 #### Helper Functions
 
@@ -150,6 +162,11 @@ Additional constant: `DCAP_QUOTE_BODY_OFFSET = 11` (header: 2+2+1+6 bytes before
 | `DcapReportDataOob(uint256 length, uint256 minRequired)` | DCAP report-data slice is out of bounds |
 | `DcapVerificationFailed(bytes output)` | Upstream DCAP verification failed |
 | `DcapTcbStatusNotAccepted(uint8 actual)` | DCAP trusted computing base status is 6, 7, or an unknown non-configurable value |
+| `InvalidDcapQuoteBodyLength(uint256 actual, uint256 expected)` | Intel TDX quote body length does not match its body type |
+| `DcapQuoteBodyHashMismatch(bytes32 expected, bytes32 actual)` | Supplied Intel TDX quote body does not match the proof journal |
+| `UnsupportedDcapQuoteVersion(uint16 actual)` | Raw Intel TDX quote version is not 4 or 5 |
+| `InvalidDcapTeeType(uint32 actual)` | Raw Intel TDX quote does not declare Intel TDX TEE type `0x81` |
+| `InvalidDcapQuoteLength(uint256 actual, uint256 expected)` | Raw Intel TDX quote is truncated or has trailing bytes |
 | `InvalidTdxAttributes(bytes8 actual)` | Intel TDX reserved attribute bits are invalid |
 | `TdxSeptVeDisableRequired()` | Intel TDX `SEPT_VE_DISABLE` is absent |
 | `TdxMigrationServiceTdNotSupported()` | Intel TDX 1.5 `MR_SERVICETD` is nonzero |
@@ -237,8 +254,15 @@ function verify(
 ## TpmVerifier
 
 **File**: `src/bases/TpmVerifier.sol`
-**Inheritance**: `TpmBase` (abstract)
-**Role**: TPM quote and certify verification
+**Inheritance**: `TpmBase`, `OwnableUpgradeable`, `UUPSUpgradeable`
+**Role**: Separately deployed TPM Quote and Certify verifier
+
+The implementation constructor receives immutable `ITpmAttestation` and
+`IZkVerifierRegistry` references. `TpmVerifier` runs behind an `ERC1967Proxy`.
+The proxy initializer sets the owner, and only the owner can authorize an
+implementation upgrade. `SessionRegistry` holds the proxy address as its
+immutable `TpmVerifier` reference and passes opaque PCR `comparison` bytes
+without decoding them.
 
 ### Constants
 
@@ -260,46 +284,52 @@ uint32 constant TPMA_OBJECT_REQUIRED_CLEAR = 0xFFFBFB8D;
 function verifyTpmQuote(
     TpmReport memory tpmReport,
     PublicIdentity memory akPub,
-    bytes memory expectedExtraData       // NOTE: bytes, not bytes32
-) internal returns (TpmQuoteVerificationResult memory)
+    bytes32 expectedQualifyingData,
+    TpmVerificationRequest memory request
+) public returns (TpmQuoteVerificationResult memory result)
 ```
 
-1. Validate `tpmReportType == TpmQuote`
-2. Validate `verificationBackendType == Solidity` (ZK not yet supported)
-3. Decode `TpmQuoteReport` from `tpmReport.data`
-4. Convert `PublicIdentity` → `CertPubkey` for TPM library compatibility
-5. Call `tpmAttestation.verifyTpmQuoteWithTrustedAkPub(tpm2bAttest, tpmSignature, akCertPubkey)`
-6. Verify `keccak256(extractedExtraData) == keccak256(expectedExtraData)`
-7. Call `tpmAttestation.checkPcrMeasurements(tpm2bAttest, pcrValues)`
-8. Return: `{ valid: true, pcrValues }`
+1. Require `tpmReportType == TpmQuote`.
+2. Use raw `TpmQuoteEvidence` for `VerificationBackendType.Solidity`, or
+   resolve the exact `tpm_quote.v1` adapter for
+   `VerificationBackendType.ZkSuccinct`.
+3. Require the Attestation Key fingerprint and `qualifyingData`.
+4. Require the proof's `policyCommitment` and normalized signed `pcrSelect` to
+   equal the exact current policy and selection.
+5. The Solidity path verifies the signed Quote selection and `pcrDigest`, then
+   evaluates static and dynamic SHA-256 policy plus static SHA-384 policy.
+   Every non-`STATIC` SHA-384 rule requires `tpm_quote.v1`.
 
 #### `verifyTpmCertify`
 ```solidity
 function verifyTpmCertify(
     TpmReport memory tpmReport,
     PublicIdentity memory akPub
-) internal view returns (TpmCertifyVerificationResult memory)
+) public view returns (TpmCertifyVerificationResult memory result)
 ```
 
 1. Validate `tpmReportType == TpmCertify`
-2. Decode `TpmCertifyReport` from `tpmReport.data`
-3. Validate CLEAR bits on `tpmtPublic[4:8]` (via `_validateClearBits`)
-4. Call `tpmAttestation.verifyTpmKeyCertification(tpm2bAttest, tpmSignature, tpmtPublic, akCertPubkey, TPMA_OBJECT_REQUIRED_SET)`
-5. Validate `TPMA_OBJECT` bits on `tpmtPublic`:
+2. Require `verificationBackendType == Solidity`.
+3. Decode `TpmCertifyEvidence` from `tpmReport.data`.
+4. Validate CLEAR bits on `tpmtPublic[4:8]` (via `_validateClearBits`)
+5. Call `tpmAttestation.verifyTpmKeyCertification(tpmsAttest, tpmSignature, tpmtPublic, akCertPubkey, TPMA_OBJECT_REQUIRED_SET)`
+6. Validate `TPMA_OBJECT` bits on `tpmtPublic`:
    - All `REQUIRED_SET` bits must be set
    - All `REQUIRED_CLEAR` bits must be clear
-5. Convert certified key (`CertPubkey`) back to `PublicIdentity`
-6. Return: `{ valid: true, certifiedKey, certifiedKeyFingerprint }`
+7. Convert certified key (`CertPubkey`) back to `PublicIdentity`
+8. Return: `{ valid: true, certifiedKey, certifiedKeyFingerprint }`
 
 ### Errors
 
 | Error | Condition |
 |---|---|
 | `UnexpectedTpmReportType()` | Wrong report type for operation |
-| `UnsupportedTpmBackendType()` | ZK backends not yet implemented |
+| `TpmReportBackendNotConfigured()` | The selected report backend is not configured |
+| `TpmQuoteBackendDoesNotSatisfyPolicy()` | A raw Solidity Quote cannot evaluate the selected policy |
 | `TpmQuoteExtraDataMismatch()` | Nonce binding check failed |
-| `TpmQuotePcrCheckFailed()` | TPM PCR integrity check failed |
 | `TpmQuoteLibraryFailed()` | TPM attestation library returned error |
+| `PolicyCommitmentMismatch()` | The proof evaluated different policy block bytes |
+| `PcrSelectCommitmentMismatch()` | The proof used a different signed PCR selection |
 | `TpmaObjectForbiddenBitsSet()` | Certified key has forbidden attributes |
 | `TpmtPublicTooShort()` | tpmtPublic data too short to extract attributes |
 
@@ -308,16 +338,16 @@ function verifyTpmCertify(
 ## AkCollateralVerifier
 
 **File**: `src/bases/AkCollateralVerifier.sol`
-**Inheritance**: `TpmBase` (abstract)
-**Role**: AK (Attestation Key) certificate chain / collateral validation
+**Type**: separately deployed concrete verifier
+**Role**: Attestation Key algorithm, encoding, certificate-chain, Microsoft Azure Attestation, and AWS NitroTPM proof validation
 
 ### Function
 
 ```solidity
 function verifyAkCollateral(
-    AkPubCollateral memory collateral
-) internal returns (AkCollateralVerificationResult memory)
-// Returns: { valid, akPub, akPubFingerprint, bindingHash }
+    AkPubCollateral calldata collateral
+) external returns (AkCollateralVerificationResult memory)
+// Returns the Attestation Key fingerprint and provider-specific commitments.
 ```
 
 Dispatches based on `collateral.akPubCollateralType`:
@@ -367,6 +397,17 @@ GCP provides X.509 certificate chain:
 
 Binding: `bindingHash = bytes32(0)`. AK is bound to TEE via PCR15 computation (verified in SessionRegistry step 7).
 
+#### AwsNitroTpmProof
+
+AWS provides a `ProgramBoundZkProof` for `aws_nitrotpm.v1`.
+`AkCollateralVerifier` resolves the exact proof type, backend, and program
+identifier through `ZkVerifierRegistry`. The selected adapter verifies the
+proof and returns the Attestation Key fingerprint, exact AMD SEV-SNP report
+hash, trusted-root hash, qualifying data, document timestamp, and complete
+`PcrCommitment`. `SessionRegistry` checks those values against
+the common TEE result, current nonce, trusted-root configuration, freshness
+window, and TPM Quote result.
+
 ### Errors
 
 | Error | Condition |
@@ -406,7 +447,7 @@ abstract contract TpmBase {
 ```
 
 `TpmVerifier` and `AkCollateralVerifier` each inherit `TpmBase`.
-`SessionRegistry` inherits `TpmVerifier` and calls a separately deployed
-`IAkCollateralVerifier`; it does not inherit `AkCollateralVerifier`. Each
-constructor receives its own immutable `ITpmAttestation` reference. A
-deployment may point both references at the same `ITpmAttestation` contract.
+`SessionRegistry` calls separately deployed `TpmVerifier` and
+`IAkCollateralVerifier` contracts. Each verifier constructor receives its own
+immutable `ITpmAttestation` reference. A deployment may point both references
+at the same `ITpmAttestation` contract.

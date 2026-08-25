@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {PublicIdentity} from "./Common.sol";
-import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
+import {Bytes48} from "../lib/LibBytes.sol";
 
 /// @notice Trusted Execution Environment type supported by the platform
 enum TEEType {
@@ -30,31 +30,6 @@ enum TpmReportType {
     TpmCertify
 }
 
-/// @notice Generic zero-knowledge proof container
-/// @dev Used by TeeReport.data and TpmReport.data when verification backend is ZK
-struct ZkProof {
-    /// @dev Public outputs (journal/public values) - visible on-chain
-    bytes output;
-    /// @dev Cryptographic proof blob (SNARK/STARK proof bytes)
-    bytes proofBytes;
-}
-
-/// @notice SEV-SNP zero-knowledge proof container
-/// @dev Used by TeeReport.data for AMD SEV-SNP. The SNP verifier journal only commits to
-///      keccak256(report) (see ISnpAttestation.VerifierJournal.reportHash), so the full report
-///      body — needed on-chain to extract REPORT_DATA / report_id — must be supplied alongside
-///      the proof. TeeVerifier asserts keccak256(rawReport) == journal.reportHash before use.
-///      Layout is ABI-forward-compatible with ZkProof (same first two fields), so getTeeReportHash
-///      can decode it as ZkProof and still read `output` correctly.
-struct SnpZkProof {
-    /// @dev Public outputs (journal/public values) - visible on-chain
-    bytes output;
-    /// @dev Cryptographic proof blob (SNARK/STARK proof bytes)
-    bytes proofBytes;
-    /// @dev Full SEV-SNP attestation report (1184 bytes); bound to the proof via reportHash
-    bytes rawReport;
-}
-
 /// @notice Attestation Key (AK) public key collateral format
 enum AkPubCollateralType {
     /// @dev Azure: abi.encode((bytes jwt, bytes hclVarData))
@@ -66,7 +41,9 @@ enum AkPubCollateralType {
     ///      See on-chain-registry-design.md §8.3.1, §14.9.
     AzureMaaJwt,
     /// @dev GCP: X.509 certificate chain from vTPM endorsement
-    GcpCertChain
+    GcpCertChain,
+    /// @dev AWS: abi.encode(ProgramBoundZkProof) for aws_nitrotpm.v1.
+    AwsNitroTpmProof
 }
 
 /// @notice TEE attestation report with polymorphic verification data
@@ -118,45 +95,51 @@ struct TeeVerificationResult {
     /// @dev Verified AMD SEV-SNP version-5 CURRENT_MIT_VECTOR.
     ///      Zero for report versions before 5 and for non-AMD SEV-SNP reports.
     uint64 amdSevSnpCurrentMitigationVector;
+    /// @dev Keccak-256 of the exact verified reportData bytes.
+    bytes32 teeReportBytesHash;
 }
 
 /// @notice TPM report for platform binding verification
 struct TpmReport {
-    /// @dev Verification backend (currently only Solidity supported; ZK support planned for event matching)
+    /// @dev Verification backend for raw Solidity evidence or a program-bound ZK proof
     VerificationBackendType verificationBackendType;
     /// @dev TPM report format (Quote or Certify)
     TpmReportType tpmReportType;
     /// @dev Polymorphic data field:
-    ///      - Solidity: TpmQuoteReport or TpmCertifyReport
-    ///      - ZkSuccinct: SP1 ZK proof (future)
-    ///      - ZkRiscZero: RISC Zero ZK proof (future)
+    ///      - Solidity: TpmQuoteEvidence or TpmCertifyEvidence
+    ///      - ZkSuccinct: ProgramBoundZkProof
+    ///      - ZkRiscZero: ProgramBoundZkProof
     bytes data;
 }
 
-/// @notice TPM Quote report containing PCR measurements and signature
-struct TpmQuoteReport {
-    /// @dev Marshalled `TPMS_ATTEST` (TPM 2.0 spec Part 2, Section 10.12.8) —
-    ///      type field = TPM2_ST_ATTEST_QUOTE. The bytes start with the TPM2.0
-    ///      magic `0xFF544347` at offset 0; callers MUST strip the 2-byte
-    ///      `TPM2B_ATTEST` size prefix that the TPM ABI returns. TPM2.0
-    ///      signatures are computed over `TPMS_ATTEST` (not the size-prefixed
-    ///      `TPM2B_ATTEST`), and `LibTpm.parseAttestHeaders` reverts with
-    ///      `InvalidTpmMagic()` if the prefix is present. The historical
-    ///      `tpm2bAttest` name is preserved for backwards compat.
-    bytes tpm2bAttest;
-    /// @dev TPMT_SIGNATURE structure over tpm2bAttest (TPM 2.0 spec Part 2, Section 11.2.3)
-    bytes tpmSignature;
-    /// @dev Decoded PCR values with event replay logs (for DYNAMIC verification)
-    PcrValue[] pcrValues;
+struct PcrValue256 {
+    uint8 pcrIndex;
+    bytes32 value;
+    bytes32[] eventLogHashes;
 }
 
-/// @notice TPM Certify report for key certification
-struct TpmCertifyReport {
-    /// @dev Marshalled `TPMS_ATTEST` for TPM2_Certify (type = TPM2_ST_ATTEST_CERTIFY).
-    ///      Same wire-format rule as `TpmQuoteReport.tpm2bAttest`: no `TPM2B`
-    ///      size prefix.
-    bytes tpm2bAttest;
-    /// @dev TPMT_SIGNATURE structure over tpm2bAttest
+struct PcrValue384 {
+    uint8 pcrIndex;
+    Bytes48 value;
+    Bytes48[] eventLogHashes;
+}
+
+/// @notice Bank-aware TPM Quote evidence.
+struct TpmQuoteEvidence {
+    /// @dev Bare marshalled TPMS_ATTEST with no TPM2B size prefix.
+    bytes tpmsAttest;
+    /// @dev Exact marshalled TPMT_SIGNATURE.
+    bytes tpmSignature;
+    /// @dev 0xff means no StartupLocality record; 0 through 4 are accepted localities.
+    uint8 pcr0StartupLocality;
+    PcrValue256[] pcrValues256;
+    PcrValue384[] pcrValues384;
+}
+
+/// @notice Raw TPM Certify evidence.
+struct TpmCertifyEvidence {
+    bytes tpmsAttest;
+    /// @dev Exact marshalled TPMT_SIGNATURE over tpmsAttest.
     bytes tpmSignature;
     /// @dev TPMT_PUBLIC structure of the certified key (attributes at offset 4)
     bytes tpmtPublic;
@@ -164,8 +147,10 @@ struct TpmCertifyReport {
 
 /// @notice Attestation Key public key collateral for AK authentication
 struct AkPubCollateral {
-    /// @dev Format of the collateral data (Azure MAA JWT bundle or GCP cert chain)
+    /// @dev Format of the collateral data.
     AkPubCollateralType akPubCollateralType;
+    /// @dev Backend selected for this exact collateral format.
+    VerificationBackendType verificationBackendType;
     /// @dev Polymorphic data field:
     ///      - AzureMaaJwt: abi.encode((bytes jwt, bytes hclVarData))
     ///      - GcpCertChain: X.509 certificate chain (DER-encoded, abi.encoded bytes[])
@@ -176,6 +161,8 @@ struct AkPubCollateral {
 struct AttestationEvidence {
     /// @dev TEE attestation report (TDX quote or SEV-SNP report)
     TeeReport teeReport;
+    /// @dev One full Attestation Key used by collateral, Quote, and Certify verification.
+    PublicIdentity akPub;
     /// @dev TPM Quote report for PCR measurements
     TpmReport tpmQuoteReport;
     /// @dev TPM Certify report for TPM signing key certification

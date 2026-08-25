@@ -12,7 +12,10 @@ import {
     BaseImageSpec,
     PlatformProfile,
     MeasurementVariant,
-    PcrSpec,
+    PcrBankSelection,
+    PcrPolicyBlock,
+    PcrSpec256,
+    PcrSpec384,
     Attribute,
     PublicIdentity
 } from "../src/types/Common.sol";
@@ -69,44 +72,29 @@ contract BaseImageRegistryHierarchyTest is Test {
         BaseImageSpec memory spec = BaseImageSpec({name: name, version: ver, uri: ""});
 
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] = PlatformProfile({name: profileName, invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: profileName,
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
 
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: variantName, overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        variants[0][0] = MeasurementVariant({
+            name: variantName,
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
 
         baseImageId =
             registry.registerBaseImage(spec, profiles, variants, uint64(block.timestamp + 1000), ownerIdentity, "");
 
-        // Domain constants are private; recover the IDs by walking storage instead.
-        bytes32[] memory profileIds = _platformProfileIdsOf(baseImageId);
+        bytes32[] memory profileIds = registry.getPlatformProfileIds(baseImageId);
         platformProfileId = profileIds[0];
 
-        bytes32[] memory variantIds = _variantIdsOf(platformProfileId);
+        bytes32[] memory variantIds = registry.getMeasurementVariantIds(platformProfileId);
         variantId = variantIds[0];
-    }
-
-    function _platformProfileIdsOf(bytes32 baseImageId) internal view returns (bytes32[] memory) {
-        // Slot offset +5 from per-entry storage base, per the load-bearing comment in
-        // IBaseImageRegistry.sol on BaseImageSpecStorage.
-        bytes32 base = keccak256(abi.encode(baseImageId, uint256(0))); // _baseImages mapping at slot 0
-        return _readBytes32Array(address(registry), uint256(base) + 5);
-    }
-
-    function _variantIdsOf(bytes32 platformProfileId) internal view returns (bytes32[] memory) {
-        // _platformProfiles mapping at slot 1; variantIds at sub-slot +4.
-        bytes32 base = keccak256(abi.encode(platformProfileId, uint256(1)));
-        return _readBytes32Array(address(registry), uint256(base) + 4);
-    }
-
-    function _readBytes32Array(address store, uint256 slot) internal view returns (bytes32[] memory out) {
-        uint256 len = uint256(vm.load(store, bytes32(slot)));
-        out = new bytes32[](len);
-        uint256 dataSlot = uint256(keccak256(abi.encode(slot)));
-        for (uint256 i = 0; i < len; i++) {
-            out[i] = vm.load(store, bytes32(dataSlot + i));
-        }
     }
 
     // ─── Tests ──────────────────────────────────────────────────────────────
@@ -130,26 +118,42 @@ contract BaseImageRegistryHierarchyTest is Test {
         BaseImageSpec memory spec = BaseImageSpec({name: "img-c", version: "v1", uri: ""});
 
         PlatformProfile[] memory profiles = new PlatformProfile[](2);
-        profiles[0] = PlatformProfile({name: "gcp-tdx", invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
-        profiles[1] = PlatformProfile({name: "gcp-snp", invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: "gcp-tdx",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
+        profiles[1] = PlatformProfile({
+            name: "gcp-snp",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
 
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](2);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: "tdx-var", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        variants[0][0] = MeasurementVariant({
+            name: "tdx-var",
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
         variants[1] = new MeasurementVariant[](1);
-        variants[1][0] =
-            MeasurementVariant({name: "snp-var", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        variants[1][0] = MeasurementVariant({
+            name: "snp-var",
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
 
         bytes32 baseImageId =
             registry.registerBaseImage(spec, profiles, variants, uint64(block.timestamp + 1000), ownerIdentity, "");
 
-        bytes32[] memory profileIds = _platformProfileIdsOf(baseImageId);
+        bytes32[] memory profileIds = registry.getPlatformProfileIds(baseImageId);
         bytes32 pTdx = profileIds[0];
         bytes32 pSnp = profileIds[1];
 
-        bytes32[] memory tdxVariants = _variantIdsOf(pTdx);
-        bytes32[] memory snpVariants = _variantIdsOf(pSnp);
+        bytes32[] memory tdxVariants = registry.getMeasurementVariantIds(pTdx);
+        bytes32[] memory snpVariants = registry.getMeasurementVariantIds(pSnp);
         bytes32 vTdx = tdxVariants[0];
         bytes32 vSnp = snpVariants[0];
 

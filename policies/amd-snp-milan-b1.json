@@ -1,0 +1,14 @@
+{
+  "policies": [
+    {
+      "active": true,
+      "cpuid": 1638657,
+      "expectedRevision": 0,
+      "minimumTcb": "0x00000000db18000400000000db18000400000000db18000400000000db180004",
+      "platformInfoPolicy": "0x0000000000000000000000000000000000000000000000000000000000000020",
+      "requiredCurrentMitigationVector": 22,
+      "requiredLaunchMitigationVector": 22,
+      "revision": 1
+    }
+  ]
+}

@@ -1,32 +1,20 @@
 {
-  "contracts/lib/forge-std": {
-    "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
-  },
-  "contracts/lib/openzeppelin-contracts": {
-    "rev": "c64a1edb67b6e3f4a15cca8909c9482ad33a02b0"
-  },
-  "contracts/lib/openzeppelin-contracts-upgradeable": {
-    "rev": "e725abddf1e01cf05ace496e950fc8e243cc7cab"
-  },
-  "contracts/lib/solady": {
-    "rev": "a5bb996e91aae5b0c068087af7594d92068b12f1"
-  },
   "lib/automata-tpm-attestation": {
     "branch": {
       "name": "DEV-4523/tpm2_certify",
-      "rev": "ff40a24cb2a941bd39bf0d55c670f82dd4210573"
+      "rev": "5e7ec97f57dd9c55cacfe7b9b9ac4462947ae7c2"
     }
   },
   "lib/forge-std": {
-    "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
+    "rev": "27ba11c86ac93d8d4a50437ae26621468fe63c20"
   },
   "lib/openzeppelin-contracts": {
-    "rev": "c64a1edb67b6e3f4a15cca8909c9482ad33a02b0"
+    "rev": "353f564d1db53c1d30cfa8a631771c205e41107b"
   },
   "lib/openzeppelin-contracts-upgradeable": {
-    "rev": "e725abddf1e01cf05ace496e950fc8e243cc7cab"
+    "rev": "c1f5d81e2f53599bc9e4653bbc7c126032c96bd1"
   },
   "lib/solady": {
-    "rev": "a5bb996e91aae5b0c068087af7594d92068b12f1"
+    "rev": "cbcfe0009477aa329574f17e8db0a05703bb8bdd"
   }
 }

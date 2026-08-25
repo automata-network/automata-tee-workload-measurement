@@ -108,6 +108,7 @@ SessionRegistry (orchestrator)
 ├── WorkloadRegistry (application)
 │   └── WorkloadSpec (application PCR and attribute policy)
 ├── AmdSnpSecurityPolicyRegistry (AMD policy defaults by exact CPUID)
+├── TeeSecurityPolicyVerifier (TEE and metadata policy evaluation)
 ├── TeeVerifier (TEE attestation)
 ├── AkCollateralVerifier (Azure MAA and GCP AK collateral)
 └── SignatureVerifier (owner authentication)
@@ -115,7 +116,7 @@ SessionRegistry (orchestrator)
 
 **Key Principles:**
 - **Separation of Concerns**: BaseImage (privileged), Workload (unprivileged), Session (runtime)
-- **Immutable Verifiers**: TeeVerifier is stateless and can be reused across registries
+- **Immutable Verifiers**: TeeVerifier and TeeSecurityPolicyVerifier can be reused across registries
 - **Upgradeable Registries**: BaseImageRegistry, WorkloadRegistry,
   SessionRegistry, AmdSnpSecurityPolicyRegistry, MaaKeyRegistry, and
   KeyResolver use UUPS proxies
@@ -127,7 +128,7 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 
 1. **Policy lookup** - Resolve the workload, base image, platform profile, and measurement variant.
 2. **TEE attestation** - Verify the Intel TDX quote or AMD SEV-SNP report.
-3. **Verified TEE and attribute policy** - Call `AmdSnpSecurityPolicyRegistry.verifyTeePolicy`. It evaluates ordinary attributes first, then the applicable reserved TEE attributes. The active exact-CPUID record supplies missing AMD packed values.
+3. **Verified TEE and attribute policy** - Call `TeeSecurityPolicyVerifier.verifyTeePolicy`. It evaluates ordinary attributes first, then the applicable reserved TEE attributes. The active exact-CPUID `AmdSnpSecurityPolicyRegistry` record supplies missing AMD packed values.
 4. **AK collateral and TEE-AK binding** - Verify the TPM Attestation Key and bind it to the verified TEE report.
 5. **TPM Quote** - Verify the Quote signature, nonce, and PCR values.
 6. **TPM Certify** - Verify that the TPM signing key is certified by the AK.
@@ -137,8 +138,9 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 
 **PCR Verification Types:**
 - `STATIC` - Exact PCR value match (fixed measurement)
-- `DYNAMIC_SUBSET` - required `matchData` hashes must occur in PCR events (any order; extra events permitted)
+- `DYNAMIC_SUBSET` - required landmarks must occur in PCR events (any order; extra events permitted)
 - `DYNAMIC_SUBSEQUENCE` - PCR events must contain required sequence (ordered)
+- `DYNAMIC_INDEXED_EVENT_SETS` - exact event count plus checked indexes with allowed digest sets
 
 ### Contract Inheritance Hierarchy
 
@@ -146,13 +148,14 @@ When a CVM registers a session via `SessionRegistry.registerSession()`, the syst
 ```
 SessionRegistry
 ├── ISessionRegistry
-├── TpmVerifier (TPM quote + TPM2_Certify verification logic)
 ├── OwnableUpgradeable (admin control)
 └── UUPSUpgradeable (upgradeability pattern)
 ```
 
-`SessionRegistry` calls the separately deployed `IAkCollateralVerifier` and
-holds an immutable `IAmdSnpSecurityPolicyRegistry` reference.
+`SessionRegistry` calls separately deployed `TpmVerifier` and
+`IAkCollateralVerifier` contracts. It also holds immutable
+`ITeeVerifier`, `ISignatureVerifier`, `IBaseImageRegistry`,
+`IWorkloadRegistry`, and `ITeeSecurityPolicyVerifier` references.
 
 **BaseImageRegistry / WorkloadRegistry**:
 ```
@@ -174,8 +177,7 @@ holds an immutable `IAmdSnpSecurityPolicyRegistry` reference.
 
 **PcrSpec** - PCR measurement policy:
 - `pcrIndex` - PCR slot (0-23)
-- `verifyType` - Verification strategy (STATIC, DYNAMIC_SUBSET, DYNAMIC_SUBSEQUENCE)
-- `matchData` - Expected values or event hashes
+- `comparison` - Opaque canonical ABI comparison bytes decoded only by `TpmVerifier`
 
 **CVMSession** - Registered CVM identity:
 - `sessionKeyFingerprint` - Current operational key
@@ -189,14 +191,16 @@ they are not fields in `CVMSession`.
 
 **Solidity (`src/`)**:
 - `SessionRegistry.sol` - Attestation verification and session lifecycle
+- `ZkVerifierRegistry.sol` - exact proof type, backend, program identifier, and verifier adapter routes
 - `BaseImageRegistry.sol` - OS/platform policy management
 - `WorkloadRegistry.sol` - Application policy management
 - `AmdSnpSecurityPolicyRegistry.sol` - AMD SEV-SNP policy defaults by exact CPUID
+- `TeeSecurityPolicyVerifier.sol` - Ordinary metadata and reserved TEE security-policy evaluation
 - `MaaKeyRegistry.sol` - Microsoft Azure Attestation signing-key directory
 - `TeeVerifier.sol` - TEE attestation dispatcher
 - `SignatureVerifier.sol` - ECDSA/RSA signature verification
 - `KeyResolver.sol` - Future: ENS-style key resolution (not yet integrated)
-- `bases/` - Base contracts for verification logic (TpmVerifier, AkCollateralVerifier)
+- `bases/` - Separately deployed TPM and Attestation Key collateral verifiers plus shared TPM code
 - `interfaces/` - Contract interfaces and storage structs
 - `types/` - Common data structures (Common.sol, Evidence.sol, Constants.sol)
 - `lib/` - Utility libraries (LibKey, LibBytes, Sha2Ext, Asn1Decode, BytesUtils)

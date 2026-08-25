@@ -8,15 +8,11 @@
 ## Purpose
 
 `AmdSnpSecurityPolicyRegistry` stores AMD SEV-SNP policy defaults for each
-exact processor family, model, and stepping. `SessionRegistry` calls it after
-`TeeVerifier` verifies and extracts the signed report. The record supplies a
-missing base-image or workload TCB or `PLATFORM_INFO` value. Those values are
-not independent mandatory floors. The record also carries mandatory
-version-5 mitigation-vector masks.
-
-The registry also evaluates reserved TEE attributes and ordinary metadata
-requirements. This keeps `SessionRegistry` below the EIP-170 deployed-code
-size limit.
+exact processor family, model, and stepping. `TeeSecurityPolicyVerifier` reads
+the active record when it evaluates an AMD SEV-SNP report. The record supplies
+a missing base-image or workload TCB or `PLATFORM_INFO` value. Those values are
+not independent mandatory floors. The record also carries mandatory version-5
+mitigation-vector masks.
 
 ## Storage
 
@@ -63,7 +59,6 @@ as zero after the implementation upgrade.
 | `updatePolicies(updates, sourceDigest)` | Applies an owner-authorized, CPUID-sorted update batch. |
 | `getPolicy(cpuid)` | Returns an existing active or inactive policy. |
 | `getActivePolicy(cpuid)` | Returns an existing active policy. |
-| `verifyTeePolicy(inputs, profileAttributes, variantAttributes, requirements)` | Evaluates ordinary metadata and the reserved policy for `inputs.teeType`. |
 
 ## Updates
 
@@ -88,19 +83,37 @@ emit an event.
 implementation and proxy. `script/DeployProd.s.sol` includes the same step in
 a fresh complete deployment.
 
+Every fresh `SessionRegistry` deployment also requires
+`AWS_NITRO_ROOT_CERT_HASH`. The value is the Keccak-256 hash of the exact
+trusted AWS NitroTPM root certificate DER. The deployment records that trust
+before it reports success.
+
 `script/UpdateAmdSnpSecurityPolicies.s.sol` reads the proxy address from
 `AMD_SNP_SECURITY_POLICY_REGISTRY` and a JSON `policies` array from
 `AMD_SNP_SECURITY_POLICY_FILE`. It stores the Keccak-256 hash of the exact file
 text as `sourceDigest`.
 
-## Session evaluation
+`policies/amd-snp-milan-b1.json` is the reviewed fresh-deployment policy for
+CPUID `0x190101`. Its launch and current mitigation-vector masks are `0x16`,
+which requires bits 1, 2, and 4. An attestation report with vectors `0x0f`
+fails this policy because it does not contain bit 4.
 
-`verifyTeePolicy` first applies ordinary attribute requirements. It then
-evaluates only the reserved attributes for the verified TEE type.
+`policies/amd-snp-milan-b1-cross-cloud.json` is the reviewed cross-cloud
+policy for CPUID `0x190101`. It uses the component-wise Azure, GCP, and AWS
+minimum TCB, platform-information policy `0x20`, and zero launch and current
+mitigation-vector masks. The zero masks are required for the tested Azure
+version-3 report, which does not contain signed mitigation-vector fields. Use
+this file only when the release explicitly intends to support that Azure
+report together with the tested GCP and AWS version-5 reports.
 
-For Intel TDX, it checks debug and Intel DCAP TCB status.
+The mask follows AMD-SB-3020 bit 1, AMD-SB-3016 bit 2, and AMD-SB-3030 and
+AMD-SB-3034 bit 4 for Milan. Those bulletins are available from AMD's Product
+Security index at `https://www.amd.com/en/resources/product-security.html`.
 
-For AMD SEV-SNP, it:
+## Use by TeeSecurityPolicyVerifier
+
+`TeeSecurityPolicyVerifier.verifyTeePolicy` calls `getActivePolicy` only for
+AMD SEV-SNP evidence. It then:
 
 1. requires an active record for the verified exact CPUID;
 2. requires report version 5 when either mitigation-vector mask is nonzero;
@@ -152,32 +165,6 @@ Two consequences worth carrying into integration:
 - Raising a registry record does not retroactively tighten a base image or
   workload that already declares its own explicit value.
 
-### Reserved attribute matching rules
-
-- Boolean keys (`debug.enabled`, `migrate-ma.enabled`) are matched **by value**.
-  The base image must declare exactly the verified state, and a workload
-  requirement must list that state among its allowed values.
-  `WorkloadRegistry` writes the canonical `[false]` or `[false, true]`
-  encoding, but `verifyTeePolicy` inspects the values themselves rather than
-  inferring intent from the array's length, so a caller that assembles
-  requirements another way gets the same answer.
-- Packed keys (`tcb.minimum`, `platform-info.policy`,
-  `tcb.status.allowed`) read `allowedValues[0]`.
-- A requirement stated on **any** reserved key must name the value it requires.
-  An empty allowed set reverts `EmptyTeeAttributeRequirement(key)`. The
-  "empty array = any value accepted" convention on `AttributeRequirement`
-  applies to ordinary metadata keys only, where an empty set still asserts that
-  the attribute is present. Omitting the requirement entirely is how a workload
-  defers to the registry default — the two are deliberately not the same thing,
-  so a caller cannot end up believing it pinned a value it never supplied.
-  `WorkloadRegistry` already rejects this shape at registration; the check
-  protects direct callers of `verifyTeePolicy`.
-- A reserved key belonging to the other TEE type is neither evaluated nor
-  rejected. A workload that targets both technologies may carry requirements
-  for both; each platform enforces only its own. A reserved-key requirement
-  therefore does not pin the TEE type — assert `teeType` separately if that
-  matters.
-
 The complete packed formats are defined in the canonical
 AMD SEV-SNP security policy specification in the atakit suite.
 
@@ -216,12 +203,3 @@ an identical update at the already-stored revision remains a no-op.
 | `InvalidInactivePolicy(cpuid, minimumTcb, platformInfoPolicy, requiredLaunchMitigationVector, requiredCurrentMitigationVector)` | A deactivation supplies a nonzero policy field. |
 | `InvalidAmdSnpTcbValue(actual)` | An active update supplies a TCB value with a nonzero unsupported or reserved byte. |
 | `InvalidAmdSnpPlatformInfoPolicy(actual)` | An active update supplies unsupported, overlapping, or nonzero reserved `PLATFORM_INFO` policy bits. |
-| `SnpMitigationPolicyRequiresReportVersion(actualVersion, requiredVersion)` | A nonzero mitigation-vector mask is active, but the report version is not 5. |
-| `SnpLaunchMitigationVectorMissing(requiredMask, actual)` | The signed `LAUNCH_MIT_VECTOR` is missing a required bit. |
-| `SnpCurrentMitigationVectorMissing(requiredMask, actual)` | The signed `CURRENT_MIT_VECTOR` is missing a required bit. |
-| `TeeAttributeBaseImageMismatch(key, declaredValue, verifiedValue)` | An effective base-image declaration does not accept the verified TEE state. |
-| `TeeAttributeValueNotAllowed(key, actualValue)` | A workload requirement does not accept the verified TEE state. |
-| `TeeAttributePolicyConflict(key, baseValue, workloadValue)` | Combined `PLATFORM_INFO` masks require a bit to be both set and clear. |
-| `EmptyTeeAttributeRequirement(key)` | A workload requirement on a reserved key carries no allowed values. Omit the requirement to defer to the registry default. |
-| `AttributeNotFound(key)` | An ordinary workload attribute has no effective profile or variant value. |
-| `AttributeValueNotAllowed(key, actualValue)` | An ordinary effective attribute value is not allowed. |

@@ -2,9 +2,8 @@
 
 use alloy::ext::{CallBuilderEx, NetworkProvider, PendingTxAccum, ProviderEx};
 use alloy::primitives::{Address, B256, U256, keccak256};
-use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::sol_types::{SolType, SolValue, sol_data};
+use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use tracing::{debug, info};
 
@@ -13,9 +12,6 @@ use crate::stubs::{
     BaseImageSpec, MeasurementVariant, PlatformProfile, PublicIdentity, op_expires_at, sign_message,
 };
 use crate::types::AppRef;
-
-type MappingSlotArgs = (sol_data::FixedBytes<32>, sol_data::Uint<256>);
-type StorageSlotArg = (sol_data::Uint<256>,);
 
 #[derive(Debug, Clone)]
 pub struct BaseImageRegistry {
@@ -81,52 +77,22 @@ impl BaseImageRegistry {
     }
 
     /// Get the complete hierarchy for a base image: spec + all profiles + all variants.
-    ///
-    /// Since `platformProfileIds` and `variantIds` are private arrays in the contract,
-    /// we read them via `eth_getStorageAt` by computing their storage slots directly.
-    ///
-    /// Storage layout (OZ upgradeable contracts use namespaced storage, so our
-    /// mappings start at slot 0):
-    ///
-    /// ```text
-    /// slot 0: mapping(bytes32 => BaseImageSpecStorage) _baseImages
-    ///   base = keccak256(key ++ slot)
-    ///   base+5: platformProfileIds.length
-    ///   keccak256(base+5)+i: platformProfileIds[i]
-    ///
-    /// slot 1: mapping(bytes32 => PlatformProfileStorage) _platformProfiles
-    ///   base = keccak256(key ++ slot)
-    ///   base+4: variantIds.length
-    ///   keccak256(base+4)+i: variantIds[i]
-    /// ```
     pub async fn get_hierarchy(&self, base_image_id: B256) -> Result<BaseImageHierarchy> {
-        let provider = self.stub.provider();
-        let addr = *self.stub.address();
-
-        // 1. Fetch spec via public getter
         let spec = self.stub.getBaseImage(base_image_id).call().await?;
+        let profile_ids = self
+            .stub
+            .getPlatformProfileIds(base_image_id)
+            .call()
+            .await?;
 
-        // 2. Read platformProfileIds from storage
-        let profile_ids = read_bytes32_array(
-            provider,
-            addr,
-            mapping_struct_slot(base_image_id, U256::from(0)),
-            5, // platformProfileIds offset in BaseImageSpecStorage
-        )
-        .await?;
-
-        // 3. For each profile, read variantIds and fetch data
         let mut profiles = Vec::with_capacity(profile_ids.len());
         for profile_id in &profile_ids {
             let profile = self.stub.getPlatformProfile(*profile_id).call().await?;
-
-            let variant_ids = read_bytes32_array(
-                provider,
-                addr,
-                mapping_struct_slot(*profile_id, U256::from(1)),
-                4, // variantIds offset in PlatformProfileStorage
-            )
-            .await?;
+            let variant_ids = self
+                .stub
+                .getMeasurementVariantIds(*profile_id)
+                .call()
+                .await?;
 
             let mut variants = Vec::with_capacity(variant_ids.len());
             for variant_id in &variant_ids {
@@ -162,7 +128,14 @@ impl BaseImageRegistry {
         measurement_variants: Vec<Vec<MeasurementVariant>>,
         op_expiry_seconds: u64,
     ) -> Result<BaseImageResult> {
-        let image_id = Self::get_image_id(&AppRef::new(&spec.name, &spec.version));
+        // The publisher is part of the identifier, so the owner identity has to
+        // be computed before it rather than after the duplicate check.
+        let owner_identity = PublicIdentity::secp256k1(signer);
+        let image_id = Self::get_image_id(&AppRef::new(
+            owner_identity.fingerprint(),
+            &spec.name,
+            &spec.version,
+        ));
         for item in &platform_profiles {
             let profile_id = Self::get_platform_profile_id(image_id, &item.name);
             for variant in measurement_variants.iter().flatten() {
@@ -470,99 +443,5 @@ impl BaseImageRegistry {
     pub async fn is_whitelisted(&self, fingerprint: B256) -> Result<bool> {
         let whitelisted = self.stub.isWhitelisted(fingerprint).call_ex().await?;
         Ok(whitelisted)
-    }
-}
-
-// ============================================================================
-// Storage layout helpers for reading private arrays via eth_getStorageAt
-// ============================================================================
-
-/// Compute the base storage slot for `mapping[key]` where the mapping is at `slot`.
-///
-/// Solidity storage: `keccak256(abi.encode(key, slot))`
-fn mapping_struct_slot(key: B256, slot: U256) -> U256 {
-    U256::from_be_bytes(keccak256(MappingSlotArgs::abi_encode_params(&(key, slot))).0)
-}
-
-fn storage_array_data_start(length_slot: U256) -> U256 {
-    U256::from_be_bytes(keccak256(StorageSlotArg::abi_encode_params(&(length_slot,))).0)
-}
-
-/// Read a `bytes32[]` dynamic array from contract storage.
-///
-/// - `struct_base`: base slot of the struct within the mapping
-/// - `array_offset`: field offset of the `bytes32[]` within the struct
-///
-/// The array length is at slot `struct_base + array_offset`.
-/// Element `i` is at slot `keccak256(struct_base + array_offset) + i`.
-async fn read_bytes32_array(
-    provider: &NetworkProvider,
-    addr: Address,
-    struct_base: U256,
-    array_offset: u64,
-) -> Result<Vec<B256>> {
-    let length_slot = struct_base + U256::from(array_offset);
-
-    // Read array length
-    let length_raw = provider
-        .get_storage_at(addr, length_slot)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to read array length from storage at slot: {}",
-                length_slot
-            )
-        })?;
-    let length = length_raw.to::<u64>();
-
-    if length == 0 {
-        return Ok(vec![]);
-    }
-
-    // Compute data start slot: keccak256(abi.encode(length_slot))
-    let data_start = storage_array_data_start(length_slot);
-
-    // Read each element
-    let mut result = Vec::with_capacity(length as usize);
-    for i in 0..length {
-        let element_slot = data_start + U256::from(i);
-        let value = provider
-            .get_storage_at(addr, element_slot)
-            .await
-            .context("Failed to read array element from storage")?;
-        result.push(B256::from(value));
-    }
-
-    Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{mapping_struct_slot, storage_array_data_start};
-    use alloy::primitives::{B256, U256, keccak256};
-
-    #[test]
-    fn mapping_struct_slot_matches_solidity_storage_formula() {
-        let key = B256::repeat_byte(0xAB);
-        let slot = U256::from(7);
-
-        let mut encoded = [0u8; 64];
-        encoded[..32].copy_from_slice(key.as_slice());
-        encoded[32..].copy_from_slice(&slot.to_be_bytes::<32>());
-
-        assert_eq!(
-            mapping_struct_slot(key, slot),
-            U256::from_be_bytes(keccak256(encoded).0)
-        );
-    }
-
-    #[test]
-    fn storage_array_data_start_matches_solidity_storage_formula() {
-        let length_slot = U256::from(0x1234);
-
-        assert_eq!(
-            storage_array_data_start(length_slot),
-            U256::from_be_bytes(keccak256(length_slot.to_be_bytes::<32>()).0)
-        );
     }
 }

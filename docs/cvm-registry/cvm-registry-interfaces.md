@@ -8,6 +8,7 @@
 src/interfaces/
 ├── IAkCollateralVerifier.sol
 ├── ISignatureVerifier.sol
+├── ITeeSecurityPolicyVerifier.sol
 ├── ITeeVerifier.sol
 ├── registries/
 │   ├── IAmdSnpSecurityPolicyRegistry.sol
@@ -216,6 +217,9 @@ event SessionRecovered(
 ### Function Signatures
 
 ```solidity
+function teeSecurityPolicyVerifier()
+    external view returns (ITeeSecurityPolicyVerifier);
+
 function registerSession(
     AttestationEvidence calldata evidence,
     bytes32 workloadId,
@@ -286,10 +290,9 @@ function verifySessionSignature(
 
 ---
 
-## IAmdSnpSecurityPolicyRegistry
+## ITeeSecurityPolicyVerifier
 
-**File**:
-`src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol`
+**File**: `src/interfaces/ITeeSecurityPolicyVerifier.sol`
 
 ```solidity
 struct VerifiedTeePolicyInputs {
@@ -304,6 +307,25 @@ struct VerifiedTeePolicyInputs {
     uint64 amdSevSnpCurrentMitigationVector;
 }
 
+function amdSnpSecurityPolicyRegistry()
+    external view returns (IAmdSnpSecurityPolicyRegistry);
+
+function verifyTeePolicy(
+    VerifiedTeePolicyInputs calldata inputs,
+    Attribute[] calldata profileAttributes,
+    Attribute[] calldata variantAttributes,
+    AttributeRequirement[] calldata requirements
+) external view;
+```
+
+---
+
+## IAmdSnpSecurityPolicyRegistry
+
+**File**:
+`src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol`
+
+```solidity
 struct AmdSnpSecurityPolicy {
     bytes32 minimumTcb;
     bytes32 platformInfoPolicy;
@@ -335,13 +357,6 @@ function getPolicy(uint24 cpuid)
 
 function getActivePolicy(uint24 cpuid)
     external view returns (AmdSnpSecurityPolicy memory policy);
-
-function verifyTeePolicy(
-    VerifiedTeePolicyInputs calldata inputs,
-    Attribute[] calldata profileAttributes,
-    Attribute[] calldata variantAttributes,
-    AttributeRequirement[] calldata requirements
-) external view;
 ```
 
 ---
@@ -352,12 +367,18 @@ function verifyTeePolicy(
 
 ```solidity
 struct AkCollateralVerificationResult {
-    bool valid;
-    PublicIdentity akPub;
     bytes32 akPubFingerprint;
     TEEType teeType;
     bytes32 bindingHash;
+    bytes32 amdSevSnpReportHash;
+    bytes32 awsNitroRootCertHash;
+    bytes32 qualifyingData;
+    uint64 documentTimestampSeconds;
+    PcrCommitment pcrCommitment;
 }
+
+function validateAkPub(AkPubCollateralType collateralType, PublicIdentity calldata akPub)
+    external pure returns (bytes32 fingerprint);
 
 function verifyAkCollateral(AkPubCollateral calldata collateral)
     external returns (AkCollateralVerificationResult memory result);
@@ -367,6 +388,9 @@ For Azure, `teeType` is authenticated by the MAA JWT's
 `x-ms-attestation-type` claim and `bindingHash` is the MAA-verified
 `sha256(hclVarData)`. For GCP, `teeType` is ignored and `bindingHash` is zero
 because `SessionRegistry` applies the TEE-to-vTPM PCR15 binding.
+For AWS, `amdSevSnpReportHash`, `awsNitroRootCertHash`, `qualifyingData`,
+`documentTimestampSeconds`, and `pcrCommitment` come from the verified
+`aws_nitrotpm.v1` journal.
 
 ---
 
@@ -459,8 +483,8 @@ NatDoc: "Foundation of the owner-auth model - allows TEE-managed keys (RSA, ECDS
 
 ```solidity
 interface ITeeVerifier {
-    function getTeeReportHash(TeeReport memory teeReport) external pure returns (bytes32);
     function verifyTeeReport(TeeReport memory teeReport) external returns (TeeVerificationResult memory result);
+    function deriveGcpPcr15ExtendValue(TeeVerificationResult memory result) external pure returns (bytes32 extendValue);
     function extractDcapReportData(bytes memory quoteBody) external pure returns (bytes memory reportData);
     function extractSnpReportData(bytes memory rawReport) external pure returns (bytes memory reportData);
 }
@@ -484,12 +508,14 @@ interface IDcapAttestation {
     function verifyAndAttestWithZKProof(
         bytes calldata output,
         ZkCoProcessorType zkCoprocessor,
-        bytes calldata proofBytes
+        bytes calldata proofBytes,
+        bytes32 programIdentifier,
+        uint32 tcbEvaluationDataNumber
     ) external payable returns (bool success, bytes memory verifiedOutput);
 }
 ```
 
-Note: `verifyAndAttestOnChain` and `verifyAndAttestWithZKProof` are both `payable` (fee-based verification). `getBp()` returns the base price in basis points.
+Note: `verifyAndAttestOnChain` and `verifyAndAttestWithZKProof` are both `payable` (fee-based verification). The ZK path passes the exact program identifier and Intel TCB evaluation data number used to create the proof. `getBp()` returns the base price in basis points.
 
 ---
 
@@ -522,12 +548,13 @@ interface ISnpAttestation {
     function verifyAndAttestWithZKProof(
         bytes calldata output,
         ZkCoProcessorType zkCoprocessor,
+        bytes32 identifier,
         bytes calldata proofBytes
     ) external returns (VerifierJournal memory verifiedOutput);
 }
 ```
 
-Note: SNP only supports ZK proof verification (no on-chain equivalent of `verifyAndAttestOnChain`).
+Note: SNP only supports ZK proof verification (no on-chain equivalent of `verifyAndAttestOnChain`). The consumer passes the exact program identifier selected by `ZkVerifierRegistry`; it does not ask the external verifier to substitute its latest identifier.
 
 ---
 

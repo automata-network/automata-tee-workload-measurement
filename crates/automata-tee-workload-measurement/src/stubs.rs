@@ -3,7 +3,7 @@ use alloy::{
     signers::{Signer, local::PrivateKeySigner},
     sol_types::{SolType, SolValue, sol_data},
 };
-use anyhow::Context;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
@@ -20,29 +20,65 @@ alloy::contract! {
     TpmAttestation => "./contract_artifacts/TpmAttestation.sol/TpmAttestation.json",
     TpmVerifier => "./contract_artifacts/TpmVerifier.sol/TpmVerifier.json",
     TeeVerifier => "./contract_artifacts/TeeVerifier.sol/TeeVerifier.json",
+    TeeSecurityPolicyVerifier => "./contract_artifacts/TeeSecurityPolicyVerifier.sol/TeeSecurityPolicyVerifier.json",
     AkCollateralVerifier => "./contract_artifacts/AkCollateralVerifier.sol/AkCollateralVerifier.json",
     AmdSnpSecurityPolicyRegistry => "./contract_artifacts/AmdSnpSecurityPolicyRegistry.sol/AmdSnpSecurityPolicyRegistry.json",
+    ZkVerifierRegistry => "./contract_artifacts/ZkVerifierRegistry.sol/ZkVerifierRegistry.json",
 }
 
-// Define TpmQuoteReport for ABI decoding (not exported in SessionRegistry ABI)
 alloy::sol! {
-    struct TpmQuoteReport {
-        bytes tpm2bAttest;
-        bytes tpmSignature;
-        PcrValue[] pcrValues;
+    struct Bytes48 {
+        bytes32 first;
+        bytes16 second;
     }
 
-    struct PcrValue {
+    struct PcrValue256 {
         uint8 pcrIndex;
         bytes32 value;
         bytes32[] eventLogHashes;
     }
 
-    // Mirrors Evidence.sol `ZkProof`. SnpZkProof is ABI-forward-compatible (same first
-    // two fields), so this decodes both and `output` is read correctly either way.
-    struct ZkProof {
+    struct PcrValue384 {
+        uint8 pcrIndex;
+        Bytes48 value;
+        Bytes48[] eventLogHashes;
+    }
+
+    struct TpmQuoteEvidence {
+        bytes tpmsAttest;
+        bytes tpmSignature;
+        uint8 pcr0StartupLocality;
+        PcrValue256[] pcrValues256;
+        PcrValue384[] pcrValues384;
+    }
+
+    struct ProgramBoundZkProof {
+        bytes32 programIdentifier;
         bytes output;
         bytes proofBytes;
+    }
+
+    struct IntelTdxDcapZkEvidence {
+        ProgramBoundZkProof proof;
+        bytes quoteBody;
+    }
+
+    struct AmdSevSnpZkEvidence {
+        ProgramBoundZkProof proof;
+        bytes rawReport;
+    }
+
+    struct TpmQuoteJournalV1 {
+        bytes32 akPubFingerprint;
+        bytes32 qualifyingData;
+        bytes32 tpmSignatureHash;
+        PcrCommitment pcrCommitment;
+        bytes32 policyCommitment;
+    }
+
+    struct PcrCommitment {
+        bytes32 pcrSelect;
+        bytes32 pcrDigest;
     }
 }
 
@@ -114,6 +150,24 @@ impl PublicIdentity {
             self.key.clone(),
         )))
     }
+}
+
+/// Fingerprint of an ES256K private key given as hex, with or without `0x`.
+///
+/// This is the publisher component of every identifier the key can register, so
+/// every tool that holds a key derives its name space through here. It lives
+/// beside the fingerprint definition rather than in each caller: two
+/// implementations that drifted would give one key two publishers, and the
+/// resulting identifiers would be registered to nobody.
+///
+/// The key is borrowed and never retained; only the public fingerprint is
+/// returned.
+pub fn es256k_fingerprint(private_key_hex: &str) -> Result<B256> {
+    let raw = private_key_hex
+        .strip_prefix("0x")
+        .unwrap_or(private_key_hex);
+    let signer: PrivateKeySigner = raw.parse().context("not a valid es256k private key")?;
+    Ok(PublicIdentity::secp256k1(&signer).fingerprint())
 }
 
 #[cfg(test)]
@@ -263,6 +317,7 @@ pub fn op_expires_at(offset_secs: u64) -> u64 {
 #[serde(rename_all = "camelCase")]
 pub struct AttestationEvidence {
     pub tee_report: TeeReport,
+    pub ak_pub: PublicIdentity,
     pub tpm_quote_report: TpmReport,
     pub tpm_certify_report: TpmReport,
     pub ak_pub_collateral: AkPubCollateral,
@@ -270,9 +325,19 @@ pub struct AttestationEvidence {
     pub session_key: PublicIdentity,
 }
 
-impl From<AttestationEvidence> for SessionRegistry::AttestationEvidence {
-    fn from(data: AttestationEvidence) -> Self {
-        unsafe { std::mem::transmute(data) }
+impl TryFrom<AttestationEvidence> for SessionRegistry::AttestationEvidence {
+    type Error = anyhow::Error;
+
+    fn try_from(data: AttestationEvidence) -> Result<Self> {
+        Ok(Self {
+            teeReport: data.tee_report.try_into()?,
+            akPub: data.ak_pub.into(),
+            tpmQuoteReport: data.tpm_quote_report.try_into()?,
+            tpmCertifyReport: data.tpm_certify_report.try_into()?,
+            akPubCollateral: data.ak_pub_collateral.try_into()?,
+            sessionKeySignature: data.session_key_signature,
+            sessionKey: data.session_key.into(),
+        })
     }
 }
 
@@ -285,9 +350,15 @@ pub struct TeeReport {
     pub data: Bytes,
 }
 
-impl From<TeeReport> for SessionRegistry::TeeReport {
-    fn from(data: TeeReport) -> Self {
-        unsafe { std::mem::transmute(data) }
+impl TryFrom<TeeReport> for SessionRegistry::TeeReport {
+    type Error = anyhow::Error;
+
+    fn try_from(data: TeeReport) -> Result<Self> {
+        Ok(Self {
+            verificationBackendType: verification_backend_type(data.verification_backend_type)?,
+            teeType: tee_type(data.tee_type)?,
+            data: data.data,
+        })
     }
 }
 
@@ -300,9 +371,15 @@ pub struct TpmReport {
     pub data: Bytes,
 }
 
-impl From<TpmReport> for SessionRegistry::TpmReport {
-    fn from(data: TpmReport) -> Self {
-        unsafe { std::mem::transmute(data) }
+impl TryFrom<TpmReport> for SessionRegistry::TpmReport {
+    type Error = anyhow::Error;
+
+    fn try_from(data: TpmReport) -> Result<Self> {
+        Ok(Self {
+            verificationBackendType: verification_backend_type(data.verification_backend_type)?,
+            tpmReportType: tpm_report_type(data.tpm_report_type)?,
+            data: data.data,
+        })
     }
 }
 
@@ -311,12 +388,19 @@ impl From<TpmReport> for SessionRegistry::TpmReport {
 #[serde(rename_all = "camelCase")]
 pub struct AkPubCollateral {
     pub ak_pub_collateral_type: u8,
+    pub verification_backend_type: u8,
     pub data: Bytes,
 }
 
-impl From<AkPubCollateral> for SessionRegistry::AkPubCollateral {
-    fn from(data: AkPubCollateral) -> Self {
-        unsafe { std::mem::transmute(data) }
+impl TryFrom<AkPubCollateral> for SessionRegistry::AkPubCollateral {
+    type Error = anyhow::Error;
+
+    fn try_from(data: AkPubCollateral) -> Result<Self> {
+        Ok(Self {
+            akPubCollateralType: ak_pub_collateral_type(data.ak_pub_collateral_type)?,
+            verificationBackendType: verification_backend_type(data.verification_backend_type)?,
+            data: data.data,
+        })
     }
 }
 
@@ -333,9 +417,19 @@ pub struct SessionKeyRotationEvidence {
     pub ak_pub: PublicIdentity,
 }
 
-impl From<SessionKeyRotationEvidence> for SessionRegistry::SessionKeyRotationEvidence {
-    fn from(data: SessionKeyRotationEvidence) -> Self {
-        unsafe { std::mem::transmute(data) }
+impl TryFrom<SessionKeyRotationEvidence> for SessionRegistry::SessionKeyRotationEvidence {
+    type Error = anyhow::Error;
+
+    fn try_from(data: SessionKeyRotationEvidence) -> Result<Self> {
+        Ok(Self {
+            tpmQuoteReport: data.tpm_quote_report.try_into()?,
+            tpmCertifyReport: data.tpm_certify_report.try_into()?,
+            sessionKeySignature: data.session_key_signature,
+            sessionKey: data.session_key.into(),
+            rotationSignature: data.rotation_signature,
+            oldTpmSigningKey: data.old_tpm_signing_key.into(),
+            akPub: data.ak_pub.into(),
+        })
     }
 }
 
@@ -349,7 +443,38 @@ pub struct SessionRenewalAuthorization {
 
 impl From<SessionRenewalAuthorization> for SessionRegistry::SessionRenewalAuthorization {
     fn from(data: SessionRenewalAuthorization) -> Self {
-        unsafe { std::mem::transmute(data) }
+        Self {
+            signature: data.signature,
+            oldTpmSigningKey: data.old_tpm_signing_key.into(),
+        }
+    }
+}
+
+fn verification_backend_type(value: u8) -> Result<u8> {
+    match value {
+        0..=2 => Ok(value),
+        _ => anyhow::bail!("Invalid VerificationBackendType value: {value}"),
+    }
+}
+
+fn tee_type(value: u8) -> Result<u8> {
+    match value {
+        0..=1 => Ok(value),
+        _ => anyhow::bail!("Invalid TEEType value: {value}"),
+    }
+}
+
+fn tpm_report_type(value: u8) -> Result<u8> {
+    match value {
+        0..=1 => Ok(value),
+        _ => anyhow::bail!("Invalid TpmReportType value: {value}"),
+    }
+}
+
+fn ak_pub_collateral_type(value: u8) -> Result<u8> {
+    match value {
+        0..=2 => Ok(value),
+        _ => anyhow::bail!("Invalid AkPubCollateralType value: {value}"),
     }
 }
 

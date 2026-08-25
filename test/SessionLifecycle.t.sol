@@ -6,17 +6,21 @@ import {Vm} from "forge-std/Vm.sol";
 
 import {ITpmAttestation} from "@automata-network/automata-tpm-attestation/interfaces/ITpmAttestation.sol";
 import {CertPubkey} from "@automata-network/automata-tpm-attestation/lib/LibX509.sol";
-import {PcrValue} from "@automata-network/automata-tpm-attestation/types/Types.sol";
 
 import {BaseImageRegistry} from "../src/BaseImageRegistry.sol";
 import {SessionRegistry} from "../src/SessionRegistry.sol";
+import {TpmVerifier} from "../src/bases/TpmVerifier.sol";
 import {WorkloadRegistry} from "../src/WorkloadRegistry.sol";
 import {AmdSnpSecurityPolicyRegistry} from "../src/AmdSnpSecurityPolicyRegistry.sol";
+import {TeeSecurityPolicyVerifier} from "../src/TeeSecurityPolicyVerifier.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAkCollateralVerifier, AkCollateralVerificationResult} from "../src/interfaces/IAkCollateralVerifier.sol";
 import {ISignatureVerifier} from "../src/interfaces/ISignatureVerifier.sol";
+import {ITeeSecurityPolicyVerifier} from "../src/interfaces/ITeeSecurityPolicyVerifier.sol";
 import {ITeeVerifier} from "../src/interfaces/ITeeVerifier.sol";
 import {AmdSnpSecurityPolicyUpdate} from "../src/interfaces/registries/IAmdSnpSecurityPolicyRegistry.sol";
+import {ISessionRegistry} from "../src/interfaces/registries/ISessionRegistry.sol";
+import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {LibKey} from "../src/lib/LibKey.sol";
 import {MockSignatureVerifier} from "./mocks/MockSignatureVerifier.sol";
 import {
@@ -26,7 +30,11 @@ import {
     BaseImageSpec,
     CVMSession,
     MeasurementVariant,
-    PcrSpec,
+    PcrBankSelection,
+    PcrCommitment,
+    PcrPolicyBlock,
+    PcrSpec256,
+    PcrSpec384,
     PlatformProfile,
     PublicIdentity,
     WorkloadSpec
@@ -35,13 +43,15 @@ import {
     AkPubCollateral,
     AkPubCollateralType,
     AttestationEvidence,
+    PcrValue256,
+    PcrValue384,
     SessionKeyRotationEvidence,
     SessionRenewalAuthorization,
     TEEType,
     TeeReport,
     TeeVerificationResult,
-    TpmCertifyReport,
-    TpmQuoteReport,
+    TpmCertifyEvidence,
+    TpmQuoteEvidence,
     TpmReport,
     TpmReportType,
     VerificationBackendType
@@ -49,6 +59,7 @@ import {
 import {
     ALGO_ID_ES256,
     ALGO_ID_ES256K,
+    ALGO_ID_RS256,
     DELEGATION_DOMAIN,
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
@@ -109,6 +120,7 @@ contract SessionLifecycleTest is Test {
     BaseImageRegistry private baseImageRegistry;
     WorkloadRegistry private workloadRegistry;
     AmdSnpSecurityPolicyRegistry private amdSnpSecurityPolicyRegistry;
+    TpmVerifier private tpmVerifier;
     SessionRegistry private sessionRegistry;
 
     PublicIdentity private ownerIdentity;
@@ -123,7 +135,7 @@ contract SessionLifecycleTest is Test {
         vm.warp(1_800_000_000);
 
         ownerIdentity = _identity(ALGO_ID_ES256K, 0x01);
-        oldAk = _identity(ALGO_ID_ES256, 0x02);
+        oldAk = _identity(ALGO_ID_RS256, 0x02);
         oldTpmSigningKey = _identity(ALGO_ID_ES256, 0x03);
         oldSessionKey = _identity(ALGO_ID_ES256K, 0x04);
 
@@ -142,18 +154,26 @@ contract SessionLifecycleTest is Test {
         AmdSnpSecurityPolicyUpdate[] memory amdPolicies = new AmdSnpSecurityPolicyUpdate[](1);
         amdPolicies[0] = AmdSnpSecurityPolicyUpdate(0x191101, 0, 1, true, bytes32(0), bytes32(0), 0, 0);
         amdSnpSecurityPolicyRegistry.updatePolicies(amdPolicies, keccak256("test-policy"));
+        tpmVerifier = new TpmVerifier(ITpmAttestation(TPM_ATTESTATION), IZkVerifierRegistry(address(0)));
         sessionRegistry = new SessionRegistry(
             ITeeVerifier(TEE_VERIFIER),
-            ITpmAttestation(TPM_ATTESTATION),
+            tpmVerifier,
             ISignatureVerifier(address(signatureVerifier)),
             IAkCollateralVerifier(AK_COLLATERAL_VERIFIER),
             baseImageRegistry,
             workloadRegistry,
-            amdSnpSecurityPolicyRegistry
+            new TeeSecurityPolicyVerifier(amdSnpSecurityPolicyRegistry)
         );
 
         oldPolicy = _registerPolicy("base-v1", "workload-v1", 1 days);
         newPolicy = _registerPolicy("base-v2", "workload-v2", 7 days);
+    }
+
+    function testSecurityPolicyDependencyGraphIsPublic() public view {
+        ITeeSecurityPolicyVerifier policyVerifier =
+            ISessionRegistry(address(sessionRegistry)).teeSecurityPolicyVerifier();
+        assertEq(address(policyVerifier), address(sessionRegistry.teeSecurityPolicyVerifier()));
+        assertEq(address(policyVerifier.amdSnpSecurityPolicyRegistry()), address(amdSnpSecurityPolicyRegistry));
     }
 
     function testIsSessionExpiredRejectsUnknownSession() public {
@@ -323,7 +343,7 @@ contract SessionLifecycleTest is Test {
             oldPolicy
         );
 
-        PublicIdentity memory differentAk = _identity(ALGO_ID_ES256, 0x13);
+        PublicIdentity memory differentAk = _identity(ALGO_ID_RS256, 0x13);
         SessionKeyRotationEvidence memory evidence =
             _rotationEvidence(0x22, differentAk, oldTpmSigningKey, _identity(ALGO_ID_ES256K, 0x14));
 
@@ -353,7 +373,7 @@ contract SessionLifecycleTest is Test {
             oldPolicy
         );
 
-        PublicIdentity memory newAk = _identity(ALGO_ID_ES256, 0x31);
+        PublicIdentity memory newAk = _identity(ALGO_ID_RS256, 0x31);
         PublicIdentity memory newTpmSigningKey = _identity(ALGO_ID_ES256, 0x32);
         PublicIdentity memory newSessionKey = _identity(ALGO_ID_ES256K, 0x33);
         AttestationEvidence memory evidence = _fullEvidence(0x34, newSessionKey);
@@ -424,7 +444,7 @@ contract SessionLifecycleTest is Test {
             oldPolicy
         );
 
-        PublicIdentity memory newAk = _identity(ALGO_ID_ES256, 0x41);
+        PublicIdentity memory newAk = _identity(ALGO_ID_RS256, 0x41);
         PublicIdentity memory newTpmSigningKey = _identity(ALGO_ID_ES256, 0x42);
         AttestationEvidence memory substitutedEvidence = _fullEvidence(0x44, _identity(ALGO_ID_ES256K, 0x43));
         bytes32 teeReportHash = keccak256(substitutedEvidence.teeReport.data);
@@ -532,7 +552,7 @@ contract SessionLifecycleTest is Test {
             oldPolicy
         );
 
-        PublicIdentity memory newAk = _identity(ALGO_ID_ES256, 0x61);
+        PublicIdentity memory newAk = _identity(ALGO_ID_RS256, 0x61);
         PublicIdentity memory newTpmSigningKey = _identity(ALGO_ID_ES256, 0x62);
         PublicIdentity memory newSessionKey = _identity(ALGO_ID_ES256K, 0x63);
         AttestationEvidence memory evidence = _fullEvidence(0x64, newSessionKey);
@@ -594,7 +614,7 @@ contract SessionLifecycleTest is Test {
             oldPolicy
         );
 
-        PublicIdentity memory newAk = _identity(ALGO_ID_ES256, 0x71);
+        PublicIdentity memory newAk = _identity(ALGO_ID_RS256, 0x71);
         PublicIdentity memory newTpmSigningKey = _identity(ALGO_ID_ES256, 0x72);
         AttestationEvidence memory evidence = _fullEvidence(0x74, _identity(ALGO_ID_ES256K, 0x73));
         bytes32 teeReportHash = keccak256(evidence.teeReport.data);
@@ -630,7 +650,7 @@ contract SessionLifecycleTest is Test {
             oldPolicy
         );
 
-        PublicIdentity memory firstAk = _identity(ALGO_ID_ES256, 0x91);
+        PublicIdentity memory firstAk = _identity(ALGO_ID_RS256, 0x91);
         PublicIdentity memory firstTpmSigningKey = _identity(ALGO_ID_ES256, 0x92);
         AttestationEvidence memory firstEvidence = _fullEvidence(0x94, _identity(ALGO_ID_ES256K, 0x93));
         _mockFullEvidence(
@@ -652,7 +672,7 @@ contract SessionLifecycleTest is Test {
         assertFalse(sessionRegistry.isSessionActive(oldSessionId));
 
         // Fresh, independently valid evidence against the now-consumed predecessor.
-        PublicIdentity memory secondAk = _identity(ALGO_ID_ES256, 0x95);
+        PublicIdentity memory secondAk = _identity(ALGO_ID_RS256, 0x95);
         PublicIdentity memory secondTpmSigningKey = _identity(ALGO_ID_ES256, 0x96);
         AttestationEvidence memory secondEvidence = _fullEvidence(0x98, _identity(ALGO_ID_ES256K, 0x97));
         _mockFullEvidence(
@@ -687,7 +707,7 @@ contract SessionLifecycleTest is Test {
             oldPolicy
         );
 
-        PublicIdentity memory newAk = _identity(ALGO_ID_ES256, 0x81);
+        PublicIdentity memory newAk = _identity(ALGO_ID_RS256, 0x81);
         PublicIdentity memory newTpmSigningKey = _identity(ALGO_ID_ES256, 0x82);
         PublicIdentity memory newSessionKey = _identity(ALGO_ID_ES256K, 0x83);
         AttestationEvidence memory evidence = _fullEvidence(0x84, newSessionKey);
@@ -738,23 +758,6 @@ contract SessionLifecycleTest is Test {
         sessionRegistry.getSession(newSessionId);
     }
 
-    function testExistingStorageLayoutRemainsReadable() public {
-        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
-        bytes32 sessionId = keccak256("pre-upgrade-storage-row");
-        uint64 expiry = uint64(block.timestamp + 9 days);
-        _seedSession(sessionId, false, expiry, ownerFingerprint, oldAk, oldTpmSigningKey, oldSessionKey, oldPolicy);
-
-        CVMSession memory session = sessionRegistry.getSession(sessionId);
-        assertEq(sessionRegistry.getSessionOwner(sessionId), ownerFingerprint);
-        assertEq(session.akPubKeyFingerprint, LibKey.computeKeyFingerprint(oldAk));
-        assertEq(session.tpmSigningKeyFingerprint, LibKey.computeKeyFingerprint(oldTpmSigningKey));
-        assertEq(session.sessionKeyFingerprint, LibKey.computeKeyFingerprint(oldSessionKey));
-        _assertPolicy(session, oldPolicy);
-        assertEq(session.registeredAt, uint64(block.timestamp));
-        assertEq(session.sessionExpiresAt, expiry);
-        assertTrue(sessionRegistry.isSessionActive(sessionId));
-    }
-
     function testTeeAttributePolicyMatrices() public {
         bytes32[3] memory keys =
             [TEE_ATTRIBUTE_INTEL_TDX_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG, TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA];
@@ -795,7 +798,8 @@ contract SessionLifecycleTest is Test {
                                 amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
                                 amdSevSnpReportVersion: teeType == TEEType.AmdSevSnp ? 3 : 0,
                                 amdSevSnpLaunchMitigationVector: 0,
-                                amdSevSnpCurrentMitigationVector: 0
+                                amdSevSnpCurrentMitigationVector: 0,
+                                teeReportBytesHash: bytes32(0)
                             })
                         );
 
@@ -805,7 +809,7 @@ contract SessionLifecycleTest is Test {
                             bytes32 declaredValue = baseMode == 2 ? TEE_ATTRIBUTE_TRUE : bytes32(0);
                             vm.expectRevert(
                                 abi.encodeWithSelector(
-                                    SessionRegistry.TeeAttributeBaseImageMismatch.selector,
+                                    TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector,
                                     keys[keyIndex],
                                     declaredValue,
                                     actual ? TEE_ATTRIBUTE_TRUE : bytes32(0)
@@ -814,7 +818,7 @@ contract SessionLifecycleTest is Test {
                         } else if (!workloadPermits) {
                             vm.expectRevert(
                                 abi.encodeWithSelector(
-                                    SessionRegistry.TeeAttributeValueNotAllowed.selector,
+                                    TeeSecurityPolicyVerifier.TeeAttributeValueNotAllowed.selector,
                                     keys[keyIndex],
                                     TEE_ATTRIBUTE_TRUE
                                 )
@@ -868,7 +872,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: 0,
                 amdSevSnpReportVersion: 0,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             })
         );
 
@@ -941,7 +946,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: 0,
                 amdSevSnpReportVersion: 0,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             })
         );
 
@@ -986,7 +992,8 @@ contract SessionLifecycleTest is Test {
                             amdSevSnpCpuid: 0,
                             amdSevSnpReportVersion: 0,
                             amdSevSnpLaunchMitigationVector: 0,
-                            amdSevSnpCurrentMitigationVector: 0
+                            amdSevSnpCurrentMitigationVector: 0,
+                            teeReportBytesHash: bytes32(0)
                         })
                     );
 
@@ -995,7 +1002,7 @@ contract SessionLifecycleTest is Test {
                     if (!basePermits) {
                         vm.expectRevert(
                             abi.encodeWithSelector(
-                                SessionRegistry.TeeAttributeBaseImageMismatch.selector,
+                                TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector,
                                 TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
                                 bytes32(TDX_TCB_STATUS_OK),
                                 bytes32(actualStatus)
@@ -1004,7 +1011,7 @@ contract SessionLifecycleTest is Test {
                     } else if (!workloadPermits) {
                         vm.expectRevert(
                             abi.encodeWithSelector(
-                                SessionRegistry.TeeAttributeValueNotAllowed.selector,
+                                TeeSecurityPolicyVerifier.TeeAttributeValueNotAllowed.selector,
                                 TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
                                 bytes32(actualStatus)
                             )
@@ -1052,7 +1059,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: 0x191101,
                 amdSevSnpReportVersion: 3,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             })
         );
 
@@ -1089,7 +1097,8 @@ contract SessionLifecycleTest is Test {
             amdSevSnpCpuid: 0x191101,
             amdSevSnpReportVersion: 3,
             amdSevSnpLaunchMitigationVector: 0,
-            amdSevSnpCurrentMitigationVector: 0
+            amdSevSnpCurrentMitigationVector: 0,
+            teeReportBytesHash: bytes32(0)
         });
         _mockFullEvidenceWithResult(
             evidence,
@@ -1127,7 +1136,7 @@ contract SessionLifecycleTest is Test {
         );
         vm.expectRevert(
             abi.encodeWithSelector(
-                SessionRegistry.TeeAttributeBaseImageMismatch.selector,
+                TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector,
                 TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
                 minimumTcb,
                 result.amdSevSnpTcbValues
@@ -1170,54 +1179,12 @@ contract SessionLifecycleTest is Test {
                     amdSevSnpCpuid: 0,
                     amdSevSnpReportVersion: 0,
                     amdSevSnpLaunchMitigationVector: 0,
-                    amdSevSnpCurrentMitigationVector: 0
+                    amdSevSnpCurrentMitigationVector: 0,
+                    teeReportBytesHash: bytes32(0)
                 })
             );
 
             vm.expectRevert(SessionRegistry.TeeVerificationFailed.selector);
-            sessionRegistry.registerSession(
-                evidence,
-                oldPolicy.workloadId,
-                oldPolicy.baseImageId,
-                oldPolicy.platformProfileId,
-                oldPolicy.measurementVariantId,
-                uint64(block.timestamp + 5 minutes),
-                ownerIdentity,
-                hex"01"
-            );
-        }
-    }
-
-    function testAkCollateralValidFalseFailsForAzureAndGcpRegistration() public {
-        for (uint256 collateralType = 0; collateralType < 2; collateralType++) {
-            AttestationEvidence memory evidence =
-                _fullEvidence(uint8(0xe0 + collateralType), _identity(ALGO_ID_ES256K, uint8(0xe2 + collateralType)));
-            evidence.akPubCollateral.akPubCollateralType =
-                collateralType == 0 ? AkPubCollateralType.AzureMaaJwt : AkPubCollateralType.GcpCertChain;
-            bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
-            _mockFullEvidence(
-                evidence,
-                ownerFingerprint,
-                sessionRegistry.getNonce(ownerFingerprint),
-                oldAk,
-                oldTpmSigningKey,
-                keccak256(evidence.teeReport.data)
-            );
-            vm.mockCall(
-                AK_COLLATERAL_VERIFIER,
-                abi.encodeCall(IAkCollateralVerifier.verifyAkCollateral, (evidence.akPubCollateral)),
-                abi.encode(
-                    AkCollateralVerificationResult({
-                        valid: false,
-                        akPub: oldAk,
-                        akPubFingerprint: LibKey.computeKeyFingerprint(oldAk),
-                        teeType: evidence.teeReport.teeType,
-                        bindingHash: bytes32(0)
-                    })
-                )
-            );
-
-            vm.expectRevert(SessionRegistry.AkCollateralVerificationFailed.selector);
             sessionRegistry.registerSession(
                 evidence,
                 oldPolicy.workloadId,
@@ -1259,7 +1226,8 @@ contract SessionLifecycleTest is Test {
                     amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
                     amdSevSnpReportVersion: teeType == TEEType.AmdSevSnp ? 3 : 0,
                     amdSevSnpLaunchMitigationVector: 0,
-                    amdSevSnpCurrentMitigationVector: 0
+                    amdSevSnpCurrentMitigationVector: 0,
+                    teeReportBytesHash: bytes32(0)
                 }),
                 expectedBindingHash
             );
@@ -1311,7 +1279,8 @@ contract SessionLifecycleTest is Test {
                     amdSevSnpCpuid: teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
                     amdSevSnpReportVersion: teeType == TEEType.AmdSevSnp ? 3 : 0,
                     amdSevSnpLaunchMitigationVector: 0,
-                    amdSevSnpCurrentMitigationVector: 0
+                    amdSevSnpCurrentMitigationVector: 0,
+                    teeReportBytesHash: bytes32(0)
                 }),
                 bindingHash
             );
@@ -1353,7 +1322,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: 0,
                 amdSevSnpReportVersion: 0,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             }),
             bindingHash
         );
@@ -1362,11 +1332,14 @@ contract SessionLifecycleTest is Test {
             abi.encodeCall(IAkCollateralVerifier.verifyAkCollateral, (evidence.akPubCollateral)),
             abi.encode(
                 AkCollateralVerificationResult({
-                    valid: true,
-                    akPub: oldAk,
                     akPubFingerprint: LibKey.computeKeyFingerprint(oldAk),
                     teeType: TEEType.AmdSevSnp,
-                    bindingHash: bindingHash
+                    bindingHash: bindingHash,
+                    amdSevSnpReportHash: bytes32(0),
+                    awsNitroRootCertHash: bytes32(0),
+                    qualifyingData: bytes32(0),
+                    documentTimestampSeconds: 0,
+                    pcrCommitment: PcrCommitment({pcrSelect: bytes32(0), pcrDigest: bytes32(0)})
                 })
             )
         );
@@ -1411,7 +1384,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: 0,
                 amdSevSnpReportVersion: 0,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             }),
             bindingHash
         );
@@ -1454,7 +1428,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: 0,
                 amdSevSnpReportVersion: 0,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             }),
             bytes32(0)
         );
@@ -1497,7 +1472,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: 0,
                 amdSevSnpReportVersion: 0,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             })
         );
 
@@ -1522,12 +1498,17 @@ contract SessionLifecycleTest is Test {
         BaseImageSpec memory baseImage = BaseImageSpec({name: "tee-policy-base", version: version, uri: ""});
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
         profiles[0] = PlatformProfile({
-            name: "test-platform", invariants: new PcrSpec[](0), attributes: _teeAttributes(key, profileMode)
+            name: "test-platform",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _staticPcr23Policy(), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: _teeAttributes(key, profileMode)
         });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         variants[0][0] = MeasurementVariant({
-            name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: _teeAttributes(key, variantMode)
+            name: "test-variant",
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: _teeAttributes(key, variantMode)
         });
         ids.baseImageId = baseImageRegistry.registerBaseImage(
             baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
@@ -1545,7 +1526,7 @@ contract SessionLifecycleTest is Test {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: _teeRequirements(key, workloadMode),
-            pcrs: new PcrSpec[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -1572,7 +1553,12 @@ contract SessionLifecycleTest is Test {
             });
         }
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] = PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: attributes});
+        profiles[0] = PlatformProfile({
+            name: "test-platform",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _staticPcr23Policy(), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: attributes
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
         Attribute[] memory variantAttributes = new Attribute[](variantMode == 0 ? 0 : 1);
@@ -1582,8 +1568,11 @@ contract SessionLifecycleTest is Test {
                 value: variantMode == 2 ? relaxedMask : bytes32(TDX_TCB_STATUS_OK)
             });
         }
-        variants[0][0] =
-            MeasurementVariant({name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: variantAttributes});
+        variants[0][0] = MeasurementVariant({
+            name: "test-variant",
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: variantAttributes
+        });
         BaseImageSpec memory baseImage = BaseImageSpec({name: "tdx-tcb-base", version: version, uri: ""});
         ids.baseImageId = baseImageRegistry.registerBaseImage(
             baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
@@ -1608,7 +1597,7 @@ contract SessionLifecycleTest is Test {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: requirements,
-            pcrs: new PcrSpec[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -1640,12 +1629,19 @@ contract SessionLifecycleTest is Test {
     {
         BaseImageSpec memory baseImage = BaseImageSpec({name: "lifecycle-test-base", version: baseVersion, uri: ""});
         PlatformProfile[] memory profiles = new PlatformProfile[](1);
-        profiles[0] =
-            PlatformProfile({name: "test-platform", invariants: new PcrSpec[](0), attributes: new Attribute[](0)});
+        profiles[0] = PlatformProfile({
+            name: "test-platform",
+            pcrBankSelection: PcrBankSelection.Sha256,
+            invariantPcrPolicy: PcrPolicyBlock({pcrSpecs256: _staticPcr23Policy(), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
         MeasurementVariant[][] memory variants = new MeasurementVariant[][](1);
         variants[0] = new MeasurementVariant[](1);
-        variants[0][0] =
-            MeasurementVariant({name: "test-variant", overridePcrs: new PcrSpec[](0), attributes: new Attribute[](0)});
+        variants[0][0] = MeasurementVariant({
+            name: "test-variant",
+            variantPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)}),
+            attributes: new Attribute[](0)
+        });
 
         ids.baseImageId = baseImageRegistry.registerBaseImage(
             baseImage, profiles, variants, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01"
@@ -1663,7 +1659,7 @@ contract SessionLifecycleTest is Test {
             baseImageMode: AccessMode.WHITELIST,
             baseImageIds: allowedBaseImages,
             requirements: new AttributeRequirement[](0),
-            pcrs: new PcrSpec[](0)
+            workloadPcrPolicy: PcrPolicyBlock({pcrSpecs256: new PcrSpec256[](0), pcrSpecs384: new PcrSpec384[](0)})
         });
         ids.workloadId =
             workloadRegistry.registerWorkload(workload, uint64(block.timestamp + 1 hours), ownerIdentity, hex"01");
@@ -1682,11 +1678,19 @@ contract SessionLifecycleTest is Test {
         });
         evidence.tpmQuoteReport = _quoteReport(marker);
         evidence.tpmCertifyReport = _certifyReport(marker);
-        evidence.akPubCollateral =
-            AkPubCollateral({akPubCollateralType: AkPubCollateralType.AzureMaaJwt, data: abi.encode(marker)});
+        evidence.akPubCollateral = AkPubCollateral({
+            akPubCollateralType: AkPubCollateralType.AzureMaaJwt,
+            verificationBackendType: VerificationBackendType.Solidity,
+            data: abi.encode(marker)
+        });
         evidence.sessionKeySignature =
             abi.encode(abi.encodePacked("delegation-", marker), abi.encodePacked("possession-", marker));
         evidence.sessionKey = sessionKey;
+    }
+
+    function _staticPcr23Policy() private pure returns (PcrSpec256[] memory rules) {
+        rules = new PcrSpec256[](1);
+        rules[0] = PcrSpec256({pcrIndex: 23, comparison: abi.encode(uint16(0), bytes32(0))});
     }
 
     function _rotationEvidence(
@@ -1706,11 +1710,32 @@ contract SessionLifecycleTest is Test {
     }
 
     function _quoteReport(uint8 marker) private pure returns (TpmReport memory) {
-        PcrValue[] memory pcrValues = new PcrValue[](0);
-        TpmQuoteReport memory quote = TpmQuoteReport({
-            tpm2bAttest: abi.encodePacked("quote-attest-", marker),
+        PcrValue256[] memory pcrValues256 = new PcrValue256[](1);
+        pcrValues256[0] = PcrValue256({pcrIndex: 23, value: bytes32(0), eventLogHashes: new bytes32[](0)});
+        bytes memory tpmsAttest = abi.encodePacked(
+            bytes4(uint32(0xff544347)),
+            bytes2(uint16(0x8018)),
+            bytes2(0),
+            bytes2(uint16(32)),
+            bytes32(0),
+            bytes8(0),
+            bytes4(0),
+            bytes4(0),
+            bytes1(0),
+            bytes8(0),
+            bytes4(uint32(1)),
+            bytes2(uint16(0x000b)),
+            bytes1(uint8(3)),
+            bytes3(uint24(0x000080)),
+            bytes2(uint16(32)),
+            sha256(abi.encodePacked(bytes32(0)))
+        );
+        TpmQuoteEvidence memory quote = TpmQuoteEvidence({
+            tpmsAttest: tpmsAttest,
             tpmSignature: abi.encodePacked("quote-signature-", marker),
-            pcrValues: pcrValues
+            pcr0StartupLocality: 0xff,
+            pcrValues256: pcrValues256,
+            pcrValues384: new PcrValue384[](0)
         });
         return TpmReport({
             verificationBackendType: VerificationBackendType.Solidity,
@@ -1720,8 +1745,8 @@ contract SessionLifecycleTest is Test {
     }
 
     function _certifyReport(uint8 marker) private pure returns (TpmReport memory) {
-        TpmCertifyReport memory certify = TpmCertifyReport({
-            tpm2bAttest: abi.encodePacked("certify-attest-", marker),
+        TpmCertifyEvidence memory certify = TpmCertifyEvidence({
+            tpmsAttest: abi.encodePacked("certify-attest-", marker),
             tpmSignature: abi.encodePacked("certify-signature-", marker),
             tpmtPublic: hex"0000000000040072"
         });
@@ -1758,7 +1783,8 @@ contract SessionLifecycleTest is Test {
                 amdSevSnpCpuid: evidence.teeReport.teeType == TEEType.AmdSevSnp ? 0x191101 : 0,
                 amdSevSnpReportVersion: evidence.teeReport.teeType == TEEType.AmdSevSnp ? 3 : 0,
                 amdSevSnpLaunchMitigationVector: 0,
-                amdSevSnpCurrentMitigationVector: 0
+                amdSevSnpCurrentMitigationVector: 0,
+                teeReportBytesHash: bytes32(0)
             })
         );
     }
@@ -1793,22 +1819,31 @@ contract SessionLifecycleTest is Test {
         ) {
             teeResult.reportData = _azureReportData(teeResult.teeType, bindingHash, bytes32(0));
         }
+        teeResult.teeReportBytesHash = teeReportHash;
+        evidence.akPub = akPub;
         vm.mockCall(
             TEE_VERIFIER, abi.encodeCall(ITeeVerifier.verifyTeeReport, (evidence.teeReport)), abi.encode(teeResult)
         );
         vm.mockCall(
-            TEE_VERIFIER, abi.encodeCall(ITeeVerifier.getTeeReportHash, (evidence.teeReport)), abi.encode(teeReportHash)
+            AK_COLLATERAL_VERIFIER,
+            abi.encodeCall(
+                IAkCollateralVerifier.validateAkPub, (evidence.akPubCollateral.akPubCollateralType, evidence.akPub)
+            ),
+            abi.encode(LibKey.computeKeyFingerprint(akPub))
         );
         vm.mockCall(
             AK_COLLATERAL_VERIFIER,
             abi.encodeCall(IAkCollateralVerifier.verifyAkCollateral, (evidence.akPubCollateral)),
             abi.encode(
                 AkCollateralVerificationResult({
-                    valid: true,
-                    akPub: akPub,
                     akPubFingerprint: LibKey.computeKeyFingerprint(akPub),
                     teeType: teeResult.teeType,
-                    bindingHash: bindingHash
+                    bindingHash: bindingHash,
+                    amdSevSnpReportHash: bytes32(0),
+                    awsNitroRootCertHash: bytes32(0),
+                    qualifyingData: bytes32(0),
+                    documentTimestampSeconds: 0,
+                    pcrCommitment: PcrCommitment({pcrSelect: bytes32(0), pcrDigest: bytes32(0)})
                 })
             )
         );
@@ -1878,7 +1913,7 @@ contract SessionLifecycleTest is Test {
     }
 
     function _sessionId(TpmReport memory report, bytes32 teeReportHash) private pure returns (bytes32) {
-        TpmQuoteReport memory quote = abi.decode(report.data, (TpmQuoteReport));
+        TpmQuoteEvidence memory quote = abi.decode(report.data, (TpmQuoteEvidence));
         return keccak256(abi.encode(SESSION_DOMAIN, keccak256(quote.tpmSignature), teeReportHash));
     }
 
