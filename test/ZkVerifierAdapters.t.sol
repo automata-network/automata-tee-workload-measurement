@@ -13,6 +13,8 @@ import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol
 contract IntelTdxDcapZkVerifierAdapterTest is Test {
     bytes32 private constant PROGRAM_IDENTIFIER = 0x00ed85153a35a84ea1fff62d16ac42f850082f11caea923bf25c20a432bdae46;
     uint32 private constant TCB_EVALUATION_DATA_NUMBER = 19;
+    // Committed in the journal suffix, right after the 131-byte compact output.
+    uint64 private constant PROOF_TIMESTAMP = 1_700_000_000;
 
     MockAutomataDcapAttestation private dcapAttestation;
     IntelTdxDcapZkVerifierAdapter private adapter;
@@ -42,7 +44,7 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
     }
 
     function _proof(bytes memory output) private pure returns (ProgramBoundZkProof memory) {
-        bytes memory journal = abi.encodePacked(uint16(output.length), output, bytes32(uint256(1)));
+        bytes memory journal = abi.encodePacked(uint16(output.length), output, PROOF_TIMESTAMP, bytes32(uint256(1)));
         return ProgramBoundZkProof({programIdentifier: PROGRAM_IDENTIFIER, output: journal, proofBytes: hex"01020304"});
     }
 
@@ -68,6 +70,7 @@ contract IntelTdxDcapZkVerifierAdapterTest is Test {
         assertEq(actualOutput.quoteBodyType, 2);
         assertEq(actualOutput.tcbStatus, 5);
         assertEq(actualOutput.fmspc, bytes6(0x010203040506));
+        assertEq(actualOutput.proofTimestamp, PROOF_TIMESTAMP);
         assertEq(actualOutput.fullQuoteHash, fullQuoteHash);
         assertEq(actualOutput.quoteBodyHash, quoteBodyHash);
         assertEq(actualOutput.advisoryIdsHash, advisoryIdsHash);
