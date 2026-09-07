@@ -513,7 +513,7 @@ contract TeeVerifierSnpTest is Test {
         }
     }
 
-    function _tdxZkReport(bytes memory fullQuote, bytes memory quoteBody, uint16 quoteBodyType)
+    function _tdxZkReport(bytes memory fullQuote, bytes memory quoteBody, uint16 quoteBodyType, uint64 proofTimestamp)
         internal
         pure
         returns (TeeReport memory)
@@ -532,10 +532,12 @@ contract TeeVerifierSnpTest is Test {
             keccak256(quoteBody),
             keccak256("no advisories")
         );
+        // The proof-committed timestamp sits in the journal suffix, right after the
+        // 131-byte compact output.
         IntelTdxDcapZkEvidence memory evidence = IntelTdxDcapZkEvidence({
             proof: ProgramBoundZkProof({
                 programIdentifier: TDX_PROGRAM_IDENTIFIER,
-                output: abi.encodePacked(uint16(compactOutput.length), compactOutput),
+                output: abi.encodePacked(uint16(compactOutput.length), compactOutput, proofTimestamp),
                 proofBytes: hex""
             }),
             quoteBody: quoteBody
@@ -587,7 +589,8 @@ contract TeeVerifierSnpTest is Test {
         bytes memory quoteBody = _tdxQuoteBody(quote, 48, 584);
 
         TeeVerificationResult memory solidityResult = teeVerifier.verifyTeeReport(_tdxReport(quote));
-        TeeVerificationResult memory zkResult = teeVerifier.verifyTeeReport(_tdxZkReport(quote, quoteBody, 2));
+        TeeVerificationResult memory zkResult =
+            teeVerifier.verifyTeeReport(_tdxZkReport(quote, quoteBody, 2, uint64(block.timestamp)));
 
         assertEq(solidityResult.teeReportBytesHash, keccak256(quote));
         assertEq(zkResult.teeReportBytesHash, keccak256(quote));
@@ -601,7 +604,8 @@ contract TeeVerifierSnpTest is Test {
         bytes memory quoteBody = _tdxQuoteBody(quote, 54, 648);
 
         TeeVerificationResult memory solidityResult = teeVerifier.verifyTeeReport(_tdxReport(quote));
-        TeeVerificationResult memory zkResult = teeVerifier.verifyTeeReport(_tdxZkReport(quote, quoteBody, 3));
+        TeeVerificationResult memory zkResult =
+            teeVerifier.verifyTeeReport(_tdxZkReport(quote, quoteBody, 3, uint64(block.timestamp)));
 
         assertEq(solidityResult.teeReportBytesHash, keccak256(quote));
         assertEq(zkResult.teeReportBytesHash, keccak256(quote));
@@ -637,7 +641,7 @@ contract TeeVerifierSnpTest is Test {
         bytes memory quote = _td10Quote();
         bytes memory committedQuoteBody = _tdxQuoteBody(quote, 48, 584);
         bytes32 committedQuoteBodyHash = keccak256(committedQuoteBody);
-        TeeReport memory report = _tdxZkReport(quote, committedQuoteBody, 2);
+        TeeReport memory report = _tdxZkReport(quote, committedQuoteBody, 2, uint64(block.timestamp));
         IntelTdxDcapZkEvidence memory evidence = abi.decode(report.data, (IntelTdxDcapZkEvidence));
         evidence.quoteBody[0] = bytes1(uint8(1));
         report.data = abi.encode(evidence);
@@ -652,10 +656,54 @@ contract TeeVerifierSnpTest is Test {
 
     function test_tdx_zk_rejects_a_non_exact_quote_body_length() public {
         bytes memory quote = _td10Quote();
-        TeeReport memory report = _tdxZkReport(quote, new bytes(583), 2);
+        TeeReport memory report = _tdxZkReport(quote, new bytes(583), 2, uint64(block.timestamp));
 
         vm.expectRevert(abi.encodeWithSelector(TeeVerifier.InvalidDcapQuoteBodyLength.selector, 583, 584));
         teeVerifier.verifyTeeReport(report);
+    }
+
+    function test_tdx_zk_rejects_a_future_proof_timestamp() public {
+        vm.warp(10 days);
+        bytes memory quote = _td10Quote();
+        bytes memory quoteBody = _tdxQuoteBody(quote, 48, 584);
+        uint64 futureTimestamp = uint64(block.timestamp) + 5 minutes + 1;
+        TeeReport memory report = _tdxZkReport(quote, quoteBody, 2, futureTimestamp);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(TeeVerifier.DcapZkProofTimestampInFuture.selector, futureTimestamp, block.timestamp)
+        );
+        teeVerifier.verifyTeeReport(report);
+    }
+
+    function test_tdx_zk_accepts_a_proof_timestamp_within_clock_skew() public {
+        vm.warp(10 days);
+        bytes memory quote = _td10Quote();
+        bytes memory quoteBody = _tdxQuoteBody(quote, 48, 584);
+        TeeReport memory report = _tdxZkReport(quote, quoteBody, 2, uint64(block.timestamp) + 5 minutes);
+
+        TeeVerificationResult memory result = teeVerifier.verifyTeeReport(report);
+        assertTrue(result.valid);
+    }
+
+    function test_tdx_zk_rejects_a_stale_proof_timestamp() public {
+        vm.warp(10 days);
+        bytes memory quote = _td10Quote();
+        bytes memory quoteBody = _tdxQuoteBody(quote, 48, 584);
+        uint64 staleTimestamp = uint64(block.timestamp) - 1 hours - 1;
+        TeeReport memory report = _tdxZkReport(quote, quoteBody, 2, staleTimestamp);
+
+        vm.expectRevert(abi.encodeWithSelector(TeeVerifier.DcapZkProofTooOld.selector, staleTimestamp, block.timestamp));
+        teeVerifier.verifyTeeReport(report);
+    }
+
+    function test_tdx_zk_accepts_a_proof_at_the_maximum_age_boundary() public {
+        vm.warp(10 days);
+        bytes memory quote = _td10Quote();
+        bytes memory quoteBody = _tdxQuoteBody(quote, 48, 584);
+        TeeReport memory report = _tdxZkReport(quote, quoteBody, 2, uint64(block.timestamp) - 1 hours);
+
+        TeeVerificationResult memory result = teeVerifier.verifyTeeReport(report);
+        assertTrue(result.valid);
     }
 
     function test_tdx_rejects_invalid_reserved_attribute_bit() public {

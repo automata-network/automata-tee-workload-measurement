@@ -3,7 +3,7 @@ pragma solidity ^0.8.27;
 
 import {SignatureVerifier} from "../src/SignatureVerifier.sol";
 import {PublicIdentity} from "../src/types/Common.sol";
-import {ALGO_ID_ES256, ALGO_ID_ES256K} from "../src/types/Constants.sol";
+import {ALGO_ID_RS256, ALGO_ID_ES256, ALGO_ID_ES256K} from "../src/types/Constants.sol";
 import {TestSetup} from "./utils/TestSetup.sol";
 
 contract SignatureVerifierTest is TestSetup {
@@ -70,6 +70,146 @@ contract SignatureVerifierTest is TestSetup {
         assertTrue(verifier.verify(p256Identity, message, lowSignature));
         assertTrue(verifier.verify(p256Identity, message, highSignature));
         assertFalse(verifier.verify(p256Identity, keccak256("different message"), lowSignature));
+    }
+
+    /// @dev Builds a DER-encoded PKCS#1 RSAPublicKey (SEQUENCE { INTEGER n, INTEGER e })
+    ///      with a 256-byte modulus whose top bit is clear (no leading-zero padding).
+    function _rsaKey(bytes memory exponent) private pure returns (bytes memory) {
+        bytes memory n = new bytes(256);
+        n[0] = 0x01;
+        return abi.encodePacked(
+            bytes2(0x3082), // SEQUENCE, long-form length (2 bytes follow)
+            uint16(260 + 2 + exponent.length), // content: INTEGER n TLV + INTEGER e TLV
+            bytes2(0x0282), // INTEGER, long-form length
+            uint16(256),
+            n,
+            bytes1(0x02), // INTEGER
+            bytes1(uint8(exponent.length)),
+            exponent
+        );
+    }
+
+    /// @dev FIPS 186-4/186-5 §B.3.1: the RSA public exponent must be an odd integer with
+    ///      2^16 < e < 2^256. All exponents below are canonically encoded; non-canonical
+    ///      padding is covered by testRs256RejectsNonCanonicalDerIntegers.
+    function testRs256RejectsNonFipsExponents() public {
+        bytes32 message = keccak256("rsa exponent");
+        bytes memory signature = new bytes(256);
+
+        // e = 1: modular exponentiation degenerates to the identity operation.
+        PublicIdentity memory e1 = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"01")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"01"));
+        verifier.verify(e1, message, signature);
+
+        // e = 3: odd but below the FIPS lower bound of 2^16.
+        PublicIdentity memory e3 = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"03")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"03"));
+        verifier.verify(e3, message, signature);
+
+        // e = 17: another real-world exponent, still below the bound.
+        PublicIdentity memory e17 = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"11")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"11"));
+        verifier.verify(e17, message, signature);
+
+        // e = 65536 (2^16): the bound itself, excluded by FIPS (and even).
+        PublicIdentity memory e65536 = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"010000")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"010000"));
+        verifier.verify(e65536, message, signature);
+
+        // e = 16777472: even exponents are mathematically invalid for RSA.
+        PublicIdentity memory even = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"01010000")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"01010000"));
+        verifier.verify(even, message, signature);
+
+        // A 33-byte odd exponent exceeds the FIPS upper bound of 2^256.
+        bytes memory eOversized = new bytes(33);
+        eOversized[0] = 0x01;
+        eOversized[32] = 0x01;
+        PublicIdentity memory oversized = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(eOversized)});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, eOversized));
+        verifier.verify(oversized, message, signature);
+    }
+
+    /// @dev Non-canonical DER (non-minimal leading-zero padding) must not smuggle the
+    ///      degenerate exponent e = 1 past the FIPS check, and the modulus must be
+    ///      canonical so one mathematical key cannot appear under multiple encodings.
+    function testRs256RejectsNonCanonicalDerIntegers() public {
+        bytes32 message = keccak256("rsa exponent");
+        bytes memory signature = new bytes(256);
+
+        // The reported case: SEQUENCE { INTEGER 1, INTEGER 02 04 00000001 } — e = 1 with
+        // three leading zeros; DER decoding strips only the sign byte, leaving 00 00 01.
+        PublicIdentity memory reported = PublicIdentity({typeId: ALGO_ID_RS256, key: hex"3009020101020400000001"});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"000001"));
+        verifier.verify(reported, message, new bytes(1));
+
+        // Same trick against a full-size modulus.
+        PublicIdentity memory padded = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"00000001")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"000001"));
+        verifier.verify(padded, message, signature);
+
+        // Deeper padding: e = 1 with four leading zeros.
+        PublicIdentity memory deepPadded = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"0000000001")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"00000001"));
+        verifier.verify(deepPadded, message, signature);
+
+        // The modulus must also be canonically encoded: two leading zeros survive
+        // sign-byte stripping with one zero left over.
+        bytes memory paddedModulus = new bytes(258);
+        paddedModulus[2] = 0x01;
+        bytes memory key = abi.encodePacked(
+            bytes2(0x3082),
+            uint16(262 + 5), // INTEGER n TLV (4 + 258) + INTEGER e TLV (2 + 3)
+            bytes2(0x0282),
+            uint16(258),
+            paddedModulus,
+            bytes1(0x02),
+            bytes1(0x03),
+            hex"010001"
+        );
+        bytes memory strippedModulus = new bytes(257);
+        strippedModulus[1] = 0x01;
+        PublicIdentity memory malleable = PublicIdentity({typeId: ALGO_ID_RS256, key: key});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaModulus.selector, strippedModulus));
+        verifier.verify(malleable, message, signature);
+    }
+
+    /// @dev Regression: with e = 1 the PKCS#1 v1.5 verification equation is an identity,
+    ///      so the padded digest encoding itself verifies as a "signature". The
+    ///      non-canonical encoding used to reach this point; it must now revert.
+    function testRs256NonCanonicalExponentOneCannotForge() public {
+        bytes32 message = keccak256("forged");
+
+        // PKCS#1 v1.5 encoding of the digest: 0x00 0x01 || PS(0xFF*202) || 0x00 || DigestInfo || H
+        bytes memory ps = new bytes(202);
+        for (uint256 i; i < 202; i++) {
+            ps[i] = 0xFF;
+        }
+        bytes memory em =
+            abi.encodePacked(uint16(0x0001), ps, bytes1(0x00), hex"3031300d060960864801650304020105000420", message);
+
+        PublicIdentity memory id = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"00000001")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"000001"));
+        verifier.verify(id, message, em);
+    }
+
+    function testRs256AcceptsFipsCompliantExponents() public view {
+        // A wrong signature returns false; the exponent check must not revert.
+
+        // The standard exponent 65537, used by TPM AKs and MAA signing keys.
+        PublicIdentity memory standard = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"010001")});
+        assertFalse(verifier.verify(standard, keccak256("rsa exponent"), new bytes(256)));
+
+        // 65539: any odd exponent above 2^16 is FIPS-compliant.
+        PublicIdentity memory other = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"010003")});
+        assertFalse(verifier.verify(other, keccak256("rsa exponent"), new bytes(256)));
+
+        // A 32-byte odd exponent is the largest still below 2^256.
+        bytes memory eMax = new bytes(32);
+        eMax[0] = 0x01;
+        eMax[31] = 0x01;
+        PublicIdentity memory maximal = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(eMax)});
+        assertFalse(verifier.verify(maximal, keccak256("rsa exponent"), new bytes(256)));
     }
 
     function _sign(bytes32 message) private pure returns (bytes memory) {

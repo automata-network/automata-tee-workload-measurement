@@ -234,7 +234,11 @@ function verify(
 #### RS256 (typeId = 1)
 1. Parse DER-encoded PKCS#1 RSA public key from `identity.key`
 2. Extract modulus (n) and exponent (e) via ASN.1 decoding
-3. Call `RSA.pkcs1Sha256(hash, signature, e, n)`
+3. Require `e` to satisfy FIPS 186-4/186-5 §B.3.1 (an odd integer with
+   `2^16 < e < 2^256`), otherwise revert `InvalidRsaExponent`. The degenerate
+   `e = 1` would make modular exponentiation an identity operation, allowing
+   PKCS#1 v1.5 forgery without the private key
+4. Call `RSA.pkcs1Sha256(hash, signature, e, n)`
 
 #### ES256 (typeId = 2)
 1. Validate `key.length == 65 && key[0] == 0x04` (SEC1 uncompressed point; `src/SignatureVerifier.sol:85`)

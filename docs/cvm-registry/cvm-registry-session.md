@@ -366,18 +366,22 @@ Rotation steps:
 1. Load old session context, verify old TPM signing key fingerprint, AK fingerprint, owner fingerprint match
 2. Run TPM quote verification with nonce (step 4)
 3. Run TPM certify verification (step 5)
-4. Verify rotation authorization: old TPM signing key signs `keccak256(abi.encode(SESSION_ROTATE_KEY_DOMAIN, block.chainid, address(this), oldSessionId, newTpmSigningKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))`
-5. Compute new session ID from tpmSignatureHash + teeReportBytesHash
-6. Verify session key delegation (step 6)
-7. Require the inherited workload and base image to remain active, require
+4. Reject successor keys identical to the predecessor's TPM signing key or session key
+   (`RotationReusedKey`); the AK intentionally carries over. Rotation revokes the predecessor
+   and clears its session-key fingerprint mapping, so carried-over keys would otherwise be
+   accepted again
+5. Verify rotation authorization: old TPM signing key signs `keccak256(abi.encode(SESSION_ROTATE_KEY_DOMAIN, block.chainid, address(this), oldSessionId, newTpmSigningKeyFingerprint, newSessionKeyFingerprint, teeReportBytesHash))`
+6. Compute new session ID from tpmSignatureHash + teeReportBytesHash
+7. Verify session key delegation (step 6)
+8. Require the inherited workload and base image to remain active, require
    the base image to remain allowed by the workload, and evaluate the current
    PCR rules with empty provider PCR requirements. Rotation has no new TEE report, so it does
    not re-evaluate verified TEE attributes or current AMD registry defaults;
    it inherits the security state accepted by the predecessor's full
    attestation.
-8. Owner signs `sha256(abi.encode(SESSION_ROTATE_KEY_MSG, chainid, address(this), opExpiresAt, oldSessionId, newSessionId))`
-9. Revoke old session, create new session **preserving old sessionExpiresAt** (NOT fresh TTL)
-10. Emit SessionRevoked + SessionKeyRotated + AttestationKeysRevealed
+9. Owner signs `sha256(abi.encode(SESSION_ROTATE_KEY_MSG, chainid, address(this), opExpiresAt, oldSessionId, newSessionId))`
+10. Revoke old session, create new session **preserving old sessionExpiresAt** (NOT fresh TTL)
+11. Emit SessionRevoked + SessionKeyRotated + AttestationKeysRevealed
 
 ### `renewSession`
 
@@ -486,7 +490,8 @@ its lifetime, the session record remains on chain. `SessionRegistry` does not
 recover the virtual machine. Cloud orchestration must restart or replace it.
 A replacement that needs a trusted session must submit fresh attestation:
 
-- `rotateKey` changes the TPM signing key and session key. It uses the same AK,
+- `rotateKey` changes the TPM signing key and session key. Both successor keys must
+  differ from the predecessor's (`RotationReusedKey` otherwise). It uses the same AK,
   policy tuple, and absolute `sessionExpiresAt`; it does not extend the
   session or verify a new TEE report.
 - `renewSession` requires an active predecessor and authorization from its TPM
@@ -546,6 +551,7 @@ function verifySessionSignature(
 | `AzureTeeReportDataMismatch(bytes32 actualBindingHash, bytes32 expectedBindingHash, bytes32 actualPadding)` | Verified Azure TEE report does not contain the MAA-signed HCL binding followed by 32 zero bytes |
 | `GcpTdxRtmr3Mismatch(bytes actualRtmr3, bytes expectedRtmr3)` | GCP TDX RTMR3 binding mismatch |
 | `SessionKeyDelegationFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint)` | Delegation signature invalid |
+| `RotationReusedKey(bytes32 fingerprint)` | Rotation successor reuses the predecessor's TPM signing key or session key |
 | `InvalidPcrComparisonType(uint16 algorithm, uint8 pcrIndex, uint256 encodedType)` | The comparison type word does not fit `uint16` |
 | `UnsupportedPcrComparison(uint16 algorithm, uint8 pcrIndex, uint16 comparisonType)` | `TpmVerifier` does not support the comparison type |
 | `NonCanonicalPcrComparison(uint16 algorithm, uint8 pcrIndex)` | Decode and re-encode did not reproduce the exact comparison bytes |

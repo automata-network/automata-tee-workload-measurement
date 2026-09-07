@@ -24,6 +24,17 @@ contract SignatureVerifier is ISignatureVerifier {
     /// @notice Thrown when an unsupported algorithm type is provided
     error UnsupportedAlgorithm(uint8 typeId);
 
+    /// @notice RSA public exponent violates the FIPS 186-4 §B.3.1 constraint (an odd integer
+    ///         with 2^16 < e < 2^256). The degenerate e = 1 would make the RSA verification
+    ///         equation an identity operation, allowing PKCS#1 v1.5 forgery without the
+    ///         private key; even exponents are mathematically invalid for RSA.
+    error InvalidRsaExponent(bytes exponent);
+
+    /// @notice RSA modulus is empty or carries non-canonical DER encoding (non-minimal
+    ///         leading zero padding), which would let one mathematical key appear under
+    ///         multiple byte encodings.
+    error InvalidRsaModulus(bytes modulus);
+
     /// @notice ECDSA r/s component is wider than 32 bytes after DER stripping
     error InputTooLong(uint256 length);
 
@@ -70,6 +81,33 @@ contract SignatureVerifier is ISignatureVerifier {
         // Extract modulus (n) and exponent (e) as bytes
         bytes memory n = keyMem.uintBytesAt(nPtr);
         bytes memory e = keyMem.uintBytesAt(ePtr);
+
+        // Both INTEGERs must be canonically encoded. uintBytesAt strips at most one
+        // leading zero (the sign byte for integers whose top bit is set), so a remaining
+        // leading zero means non-minimal padding. Checking the modulus too ensures one
+        // mathematical key cannot appear under multiple byte encodings.
+        if (n.length == 0 || n[0] == 0) {
+            revert InvalidRsaModulus(n);
+        }
+        if (e.length == 0 || e.length > 32 || e[0] == 0) {
+            revert InvalidRsaExponent(e);
+        }
+
+        // FIPS 186-4/186-5 §B.3.1 enforced on the decoded value, not the encoding: the
+        // public exponent must be an odd integer with 2^16 < e < 2^256. The 32-byte bound
+        // above makes this decode exact — e < 2^256 holds by construction and the shifting
+        // cannot overflow. The degenerate e = 1 would make modular exponentiation an
+        // identity operation, so an attacker could construct a valid PKCS#1 v1.5 signature
+        // without the private key; even exponents are mathematically invalid for RSA. All
+        // RSA signature paths (owner identities, TPM certified keys, MAA signing keys)
+        // flow through here.
+        uint256 exponentValue;
+        for (uint256 i = 0; i < e.length; i++) {
+            exponentValue = (exponentValue << 8) | uint8(e[i]);
+        }
+        if (exponentValue <= (1 << 16) || (exponentValue & 1) == 0) {
+            revert InvalidRsaExponent(e);
+        }
 
         // Copy signature from calldata to memory (OZ RSA requires memory)
         bytes memory sigMem = signature;

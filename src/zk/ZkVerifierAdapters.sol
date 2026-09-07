@@ -26,10 +26,38 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
     error UnsupportedDcapCompactOutputType(uint16 actual);
     error UnsupportedDcapCompactOutputVersion(uint16 actual);
 
+    /// @dev Intel TDX DCAP ZK journal layout (333 bytes, committed by the guest program
+    ///      and bound to the verified proof). All offsets below are journal-absolute:
+    ///
+    ///      offset  len   content
+    ///      0       2     big-endian compact output length (= 131)
+    ///      2       131   compact output:
+    ///                    2..13    quoteVersion(2) | quoteBodyType(2) | tcbStatus(1) | fmspc(6)
+    ///                    13..29   format guard (all zero)
+    ///                    29..33   "ATKJ" magic
+    ///                    33..35   format type (= 1)
+    ///                    35..37   format version (= 1)
+    ///                    37..69   fullQuoteHash
+    ///                    69..101  quoteBodyHash
+    ///                    101..133 advisoryIdsHash
+    ///      133     8     big-endian proof-committed timestamp (Unix seconds)
+    ///      141     192   collateral hashes, 32 bytes each: TCB info, QE identity,
+    ///                    Root CA cert, TCB signing cert, Root CRL, PCK CRL
+    ///
+    ///      The DCAP attestation contract verifies the collateral hashes against
+    ///      on-chain PCCS state at the committed timestamp, then returns only the
+    ///      compact output; the timestamp is read from the journal directly.
+    ///      Mirrored in crates/automata-tee-workload-measurement/src/session_registry.rs
+    ///      — keep the two copies in sync.
     uint256 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_V1_LENGTH = 131;
     bytes4 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_MAGIC = 0x41544b4a; // "ATKJ"
     uint16 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_TYPE = 1;
     uint16 private constant INTEL_TDX_DCAP_COMPACT_OUTPUT_VERSION = 1;
+
+    /// @dev Offset of the proof-committed timestamp inside the full ZK journal:
+    ///      two-byte length prefix + 131-byte compact output. These are the same
+    ///      eight bytes the DCAP attestation contract uses for collateral lookups.
+    uint256 private constant INTEL_TDX_DCAP_JOURNAL_TIMESTAMP_OFFSET = 2 + INTEL_TDX_DCAP_COMPACT_OUTPUT_V1_LENGTH;
 
     IDcapAttestation public immutable dcapAttestation;
     IDcapAttestation.ZkCoProcessorType public immutable zkCoProcessorType;
@@ -94,11 +122,19 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
         if (formatVersion != INTEL_TDX_DCAP_COMPACT_OUTPUT_VERSION) {
             revert UnsupportedDcapCompactOutputVersion(formatVersion);
         }
+        // The proof-committed timestamp immediately follows the compact output in the
+        // ZK journal — the same eight bytes the DCAP attestation contract uses for its
+        // collateral lookups. The journal is bound to the verified proof, so the
+        // timestamp cannot be forged without invalidating the proof.
+        uint64 proofTimestamp = uint64(
+            bytes8(proof.output[INTEL_TDX_DCAP_JOURNAL_TIMESTAMP_OFFSET:INTEL_TDX_DCAP_JOURNAL_TIMESTAMP_OFFSET + 8])
+        );
         return IntelTdxDcapCompactOutputV1({
             quoteVersion: quoteVersion,
             quoteBodyType: quoteBodyType,
             tcbStatus: tcbStatus,
             fmspc: fmspc,
+            proofTimestamp: proofTimestamp,
             fullQuoteHash: fullQuoteHash,
             quoteBodyHash: quoteBodyHash,
             advisoryIdsHash: advisoryIdsHash

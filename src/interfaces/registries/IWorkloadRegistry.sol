@@ -43,7 +43,9 @@ interface IWorkloadRegistry {
     ///      keccak256(abi.encode(WORKLOAD_DOMAIN, ownerFingerprint, spec.name, spec.version))
     ///      The owner fingerprint qualifies the name, so each publisher has its own
     ///      name space and a name cannot be squatted across publishers.
-    /// @param spec Complete workload specification (name, version, policy, pcrs)
+    /// @param spec Complete workload specification (name, version, policy, pcrs).
+    ///      `sessionTtl` must not exceed `MAX_SESSION_TTL` (100 years); 0 selects the
+    ///      SessionRegistry default.
     /// @param opExpiresAt Signature expiration timestamp (must be >= block.timestamp)
     /// @param ownerIdentity The public key identity of the workload owner
     /// @param ownerSignature Signature over the workload registration data by ownerIdentity

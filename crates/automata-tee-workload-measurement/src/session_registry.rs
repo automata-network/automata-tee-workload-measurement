@@ -544,6 +544,28 @@ pub fn compute_tee_report_hash(tee_report: &TeeReport) -> Result<B256> {
     }
 }
 
+/// Intel TDX DCAP ZK journal layout (333 bytes, committed by the guest program
+/// and bound to the verified proof). All offsets below are journal-absolute:
+///
+/// offset  len   content
+/// 0       2     big-endian compact output length (= 131)
+/// 2       131   compact output:
+///               2..13    quoteVersion(2) | quoteBodyType(2) | tcbStatus(1) | fmspc(6)
+///               13..29   format guard (all zero)
+///               29..33   "ATKJ" magic
+///               33..35   format type (= 1)
+///               35..37   format version (= 1)
+///               37..69   fullQuoteHash
+///               69..101  quoteBodyHash
+///               101..133 advisoryIdsHash
+/// 133     8     big-endian proof-committed timestamp (Unix seconds) — the same
+///               bytes the DCAP attestation contract uses for collateral lookups;
+///               freshness is enforced on-chain by TeeVerifier, not checked here
+/// 141     192   collateral hashes, 32 bytes each: TCB info, QE identity,
+///               Root CA cert, TCB signing cert, Root CRL, PCK CRL
+///
+/// Mirrored in `IntelTdxDcapZkVerifierAdapter` (src/zk/ZkVerifierAdapters.sol)
+/// — keep the two copies in sync.
 fn verify_and_extract_intel_tdx_full_quote_hash(evidence: &IntelTdxDcapZkEvidence) -> Result<B256> {
     const JOURNAL_LENGTH: usize = 333;
     const COMPACT_OUTPUT_V1_LENGTH: usize = 131;
