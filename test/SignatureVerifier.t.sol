@@ -90,8 +90,8 @@ contract SignatureVerifierTest is TestSetup {
     }
 
     /// @dev FIPS 186-4/186-5 §B.3.1: the RSA public exponent must be an odd integer with
-    ///      2^16 < e < 2^256. DER decoding strips leading zero bytes, so the check applies
-    ///      to the decoded integer value, not the encoding.
+    ///      2^16 < e < 2^256. All exponents below are canonically encoded; non-canonical
+    ///      padding is covered by testRs256RejectsNonCanonicalDerIntegers.
     function testRs256RejectsNonFipsExponents() public {
         bytes32 message = keccak256("rsa exponent");
         bytes memory signature = new bytes(256);
@@ -128,6 +128,69 @@ contract SignatureVerifierTest is TestSetup {
         PublicIdentity memory oversized = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(eOversized)});
         vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, eOversized));
         verifier.verify(oversized, message, signature);
+    }
+
+    /// @dev Non-canonical DER (non-minimal leading-zero padding) must not smuggle the
+    ///      degenerate exponent e = 1 past the FIPS check, and the modulus must be
+    ///      canonical so one mathematical key cannot appear under multiple encodings.
+    function testRs256RejectsNonCanonicalDerIntegers() public {
+        bytes32 message = keccak256("rsa exponent");
+        bytes memory signature = new bytes(256);
+
+        // The reported case: SEQUENCE { INTEGER 1, INTEGER 02 04 00000001 } — e = 1 with
+        // three leading zeros; DER decoding strips only the sign byte, leaving 00 00 01.
+        PublicIdentity memory reported = PublicIdentity({typeId: ALGO_ID_RS256, key: hex"3009020101020400000001"});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"000001"));
+        verifier.verify(reported, message, new bytes(1));
+
+        // Same trick against a full-size modulus.
+        PublicIdentity memory padded = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"00000001")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"000001"));
+        verifier.verify(padded, message, signature);
+
+        // Deeper padding: e = 1 with four leading zeros.
+        PublicIdentity memory deepPadded = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"0000000001")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"00000001"));
+        verifier.verify(deepPadded, message, signature);
+
+        // The modulus must also be canonically encoded: two leading zeros survive
+        // sign-byte stripping with one zero left over.
+        bytes memory paddedModulus = new bytes(258);
+        paddedModulus[2] = 0x01;
+        bytes memory key = abi.encodePacked(
+            bytes2(0x3082),
+            uint16(262 + 5), // INTEGER n TLV (4 + 258) + INTEGER e TLV (2 + 3)
+            bytes2(0x0282),
+            uint16(258),
+            paddedModulus,
+            bytes1(0x02),
+            bytes1(0x03),
+            hex"010001"
+        );
+        bytes memory strippedModulus = new bytes(257);
+        strippedModulus[1] = 0x01;
+        PublicIdentity memory malleable = PublicIdentity({typeId: ALGO_ID_RS256, key: key});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaModulus.selector, strippedModulus));
+        verifier.verify(malleable, message, signature);
+    }
+
+    /// @dev Regression: with e = 1 the PKCS#1 v1.5 verification equation is an identity,
+    ///      so the padded digest encoding itself verifies as a "signature". The
+    ///      non-canonical encoding used to reach this point; it must now revert.
+    function testRs256NonCanonicalExponentOneCannotForge() public {
+        bytes32 message = keccak256("forged");
+
+        // PKCS#1 v1.5 encoding of the digest: 0x00 0x01 || PS(0xFF*202) || 0x00 || DigestInfo || H
+        bytes memory ps = new bytes(202);
+        for (uint256 i; i < 202; i++) {
+            ps[i] = 0xFF;
+        }
+        bytes memory em =
+            abi.encodePacked(uint16(0x0001), ps, bytes1(0x00), hex"3031300d060960864801650304020105000420", message);
+
+        PublicIdentity memory id = PublicIdentity({typeId: ALGO_ID_RS256, key: _rsaKey(hex"00000001")});
+        vm.expectRevert(abi.encodeWithSelector(SignatureVerifier.InvalidRsaExponent.selector, hex"000001"));
+        verifier.verify(id, message, em);
     }
 
     function testRs256AcceptsFipsCompliantExponents() public view {
