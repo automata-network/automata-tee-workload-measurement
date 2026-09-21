@@ -6,6 +6,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {TeeVerifier} from "../src/TeeVerifier.sol";
 import {ZkVerifierRegistry} from "../src/ZkVerifierRegistry.sol";
 import {ISnpAttestation, VerificationResult} from "../src/interfaces/external/ISnpAttestation.sol";
+import {IDcapAttestationV2} from "../src/interfaces/external/IDcapAttestationV2.sol";
+import {OutputV2Codec} from "../src/lib/dcap-v2/OutputV2Codec.sol";
 import {IDcapAttestation} from "../src/interfaces/external/IDcapAttestation.sol";
 import {IZkVerifierRegistry} from "../src/interfaces/registries/IZkVerifierRegistry.sol";
 import {MockAutomataSnpAttestation} from "./mocks/MockAutomataSnpAttestation.sol";
@@ -36,7 +38,7 @@ contract TeeVerifierSnpTest is Test {
     MockAutomataDcapAttestation internal dcap;
     AmdSevSnpZkVerifierAdapter internal snpAdapter;
 
-    function setUp() public {
+    function setUp() public virtual {
         snp = new MockAutomataSnpAttestation();
         dcap = new MockAutomataDcapAttestation();
         ZkVerifierRegistry implementation = new ZkVerifierRegistry();
@@ -76,7 +78,7 @@ contract TeeVerifierSnpTest is Test {
             address(tdxAdapter),
             true
         );
-        teeVerifier = new TeeVerifier(IDcapAttestation(address(dcap)), IZkVerifierRegistry(address(registry)));
+        teeVerifier = new TeeVerifier(IDcapAttestationV2(address(dcap)), IZkVerifierRegistry(address(registry)));
     }
 
     /// @dev A deterministic, structurally valid, full-size SEV-SNP report.
@@ -516,6 +518,7 @@ contract TeeVerifierSnpTest is Test {
     function _tdxZkReport(bytes memory fullQuote, bytes memory quoteBody, uint16 quoteBodyType)
         internal
         pure
+        virtual
         returns (TeeReport memory)
     {
         uint16 quoteVersion = uint16(uint8(fullQuote[0])) | (uint16(uint8(fullQuote[1])) << 8);
@@ -697,7 +700,8 @@ contract TeeVerifierSnpTest is Test {
         uint8[4] memory statuses = [uint8(6), 7, 10, type(uint8).max];
         for (uint256 i = 0; i < statuses.length; i++) {
             dcap.setTcbStatus(statuses[i]);
-            vm.expectRevert(abi.encodeWithSelector(TeeVerifier.DcapTcbStatusNotAccepted.selector, statuses[i]));
+            if (statuses[i] > 9) vm.expectRevert(OutputV2Codec.InvalidOutputV2.selector);
+            else vm.expectRevert(abi.encodeWithSelector(TeeVerifier.DcapTcbStatusNotAccepted.selector, statuses[i]));
             teeVerifier.verifyTeeReport(_tdxReport(quote));
         }
     }

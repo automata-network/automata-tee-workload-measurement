@@ -5,6 +5,9 @@ import {IDcapAttestation} from "../../src/interfaces/external/IDcapAttestation.s
 
 /// @title MockAutomataDcapAttestation
 /// @notice Mock DCAP attestation verifier for testing with real TDX quotes
+import {OutputV2} from "../../src/lib/dcap-v2/OutputV2.sol";
+import {OutputV2Codec} from "../../src/lib/dcap-v2/OutputV2Codec.sol";
+
 contract MockAutomataDcapAttestation is IDcapAttestation {
     // Quote body sizes
     uint256 private constant TD10_BODY_SIZE = 584;
@@ -92,6 +95,27 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
         );
 
         return (true, output);
+    }
+
+    function verifyAndAttestOnChainV2(bytes calldata input, uint32 tcbEval, bool minCheck)
+        external payable returns (bool, bytes memory, bytes memory)
+    {
+        require(tcbEval == 0 && minCheck, "expected standard collateral and minimal mode");
+        (, bytes memory legacy) = this.verifyAndAttestOnChain(input);
+        bytes memory body = new bytes(legacy.length - 11);
+        for (uint256 i; i < body.length; ++i) body[i] = legacy[11 + i];
+        OutputV2 memory out;
+        out.formatMajorVersion = 2;
+        out.formatMinorVersion = 1;
+        out.quoteVersion = uint16(uint8(legacy[0])) << 8 | uint16(uint8(legacy[1]));
+        out.quoteBodyType = uint16(uint8(legacy[2])) << 8 | uint16(uint8(legacy[3]));
+        // Encode valid status first so tests can return malformed upstream status too.
+        out.advisoryIDs = new string[](0);
+        out.fullQuoteHash = keccak256(input);
+        out.quoteBodyHash = keccak256(body);
+        bytes memory output = OutputV2Codec.encode(out);
+        output[9] = bytes1(tcbStatus);
+        return (true, output, body);
     }
 
     function verifyAndAttestWithZKProof(

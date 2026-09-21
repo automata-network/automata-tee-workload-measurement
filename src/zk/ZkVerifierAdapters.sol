@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
+import {IDcapAttestationV2} from "../interfaces/external/IDcapAttestationV2.sol";
+import {IntelTdxDcapV2} from "../lib/IntelTdxDcapV2.sol";
+
 import {IDcapAttestation} from "../interfaces/external/IDcapAttestation.sol";
 import {ISnpAttestation, VerifierJournal} from "../interfaces/external/ISnpAttestation.sol";
 import {
@@ -103,6 +106,30 @@ contract IntelTdxDcapZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
             quoteBodyHash: quoteBodyHash,
             advisoryIdsHash: advisoryIdsHash
         });
+    }
+}
+
+/// @notice V2 uses the explicit accepted minimal program and standard collateral.
+/// The caller's program ID is authenticated by DCAP, never replaced with a default.
+contract IntelTdxDcapV2ZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
+    error DcapProofVerificationFailed(bytes output);
+    error DcapVerifiedOutputMismatch();
+    IDcapAttestationV2 public immutable dcapAttestation;
+
+    constructor(IDcapAttestationV2 dcapAttestation_) {
+        dcapAttestation = dcapAttestation_;
+    }
+
+    function verifyProof(ProgramBoundZkProof calldata proof)
+        external returns (IntelTdxDcapCompactOutputV1 memory)
+    {
+        (bool success, bytes memory output) = dcapAttestation.verifyAndAttestWithZKProofV2(
+            proof.output, IDcapAttestationV2.ZkCoProcessorType.Succinct,
+            proof.proofBytes, proof.programIdentifier, 0, true
+        );
+        if (!success) revert DcapProofVerificationFailed(output);
+        if (keccak256(output) != keccak256(proof.output)) revert DcapVerifiedOutputMismatch();
+        return IntelTdxDcapV2.decode(output);
     }
 }
 

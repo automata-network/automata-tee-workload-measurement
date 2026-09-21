@@ -2,7 +2,8 @@
 pragma solidity ^0.8.27;
 
 import {TeeReport, TEEType, VerificationBackendType, TeeVerificationResult} from "./types/Evidence.sol";
-import {IDcapAttestation} from "./interfaces/external/IDcapAttestation.sol";
+import {IntelTdxDcapV2} from "./lib/IntelTdxDcapV2.sol";
+import {IDcapAttestationV2} from "./interfaces/external/IDcapAttestationV2.sol";
 import {VerificationResult} from "./interfaces/external/ISnpAttestation.sol";
 import {ITeeVerifier} from "./interfaces/ITeeVerifier.sol";
 import {IZkVerifierRegistry} from "./interfaces/registries/IZkVerifierRegistry.sol";
@@ -41,7 +42,7 @@ contract TeeVerifier is ITeeVerifier {
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice DCAP attestation verifier contract for Intel TDX quotes
-    IDcapAttestation public immutable dcapAttestation;
+    IDcapAttestationV2 public immutable dcapAttestation;
 
     /// @notice Exact program and adapter registry for every ZK proof.
     IZkVerifierRegistry public immutable zkVerifierRegistry;
@@ -66,12 +67,6 @@ contract TeeVerifier is ITeeVerifier {
     uint256 private constant DCAP_QUOTE_HEADER_SIZE = 48;
     uint256 private constant DCAP_VERSION_5_BODY_HEADER_SIZE = 6;
     uint32 private constant INTEL_TDX_TEE_TYPE = 0x81;
-
-    /// @dev Offset of quote body in DCAP output (2+2+1+6 byte header)
-    uint256 private constant DCAP_QUOTE_BODY_OFFSET = 11;
-
-    /// @dev Offset of tcbStatus in DCAP output (2-byte version + 2-byte quoteBodyType)
-    uint256 private constant DCAP_TCB_STATUS_OFFSET = 4;
 
     /// @dev DCAP TCB statuses 6 (Revoked), 7 (Unrecognized), and unknown values are hard failures.
     uint8 private constant TCB_STATUS_OUT_OF_DATE_CONFIGURATION_NEEDED = 5;
@@ -170,7 +165,10 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice The supplied Intel TDX quote body length does not match its verified body type.
     error InvalidDcapQuoteBodyLength(uint256 actual, uint256 expected);
 
-    /// @notice The supplied Intel TDX quote body does not match the body committed by the ZK proof.
+    /// @notice The raw quote does not match the full-quote hash returned by DCAP V2.
+    error DcapFullQuoteHashMismatch(bytes32 expected, bytes32 actual);
+
+    /// @notice The supplied body does not match its authenticated DCAP hash.
     error DcapQuoteBodyHashMismatch(bytes32 expected, bytes32 actual);
 
     /// @notice The supplied Intel TDX quote version is unsupported.
@@ -243,7 +241,7 @@ contract TeeVerifier is ITeeVerifier {
     /// @notice Initializes the TeeVerifier with vendor-specific attestation contracts
     /// @param _dcapAttestation Address of the DCAP attestation verifier contract
     /// @param _zkVerifierRegistry Exact ZK program and adapter registry
-    constructor(IDcapAttestation _dcapAttestation, IZkVerifierRegistry _zkVerifierRegistry) {
+    constructor(IDcapAttestationV2 _dcapAttestation, IZkVerifierRegistry _zkVerifierRegistry) {
         dcapAttestation = _dcapAttestation;
         zkVerifierRegistry = _zkVerifierRegistry;
     }
@@ -281,53 +279,8 @@ contract TeeVerifier is ITeeVerifier {
         revert UnsupportedGcpTeeType(result.teeType);
     }
 
-    /// @dev Extracts the full quote body from DCAP packed output bytes
-    /// @param output The DCAP verifier output (abi.encodePacked format)
-    /// @return quoteBody The extracted TD10 (584 bytes) or TD15 (648 bytes) quote body
-    function extractDcapQuoteBody(bytes memory output) private pure returns (bytes memory quoteBody) {
-        // Validate minimum length to read quoteBodyType
-        if (output.length < 4) {
-            revert TeeReportTooShort(output.length, 4);
-        }
-
-        // Read quoteBodyType (uint16 BE) from bytes [2:4]
-        uint16 quoteBodyType;
-        assembly ("memory-safe") {
-            // Load word containing bytes [0:32]
-            let word := mload(add(output, 0x20))
-            // Shift right 224 bits (28 bytes) to align bytes [2:4] to low position, mask to 16 bits
-            quoteBodyType := and(shr(224, word), 0xFFFF)
-        }
-
-        // Determine body size based on quote type
-        uint256 bodySize;
-        if (quoteBodyType == QUOTE_BODY_TYPE_TD10) {
-            bodySize = TD10_QUOTE_BODY_SIZE;
-        } else if (quoteBodyType == QUOTE_BODY_TYPE_TD15) {
-            bodySize = TD15_QUOTE_BODY_SIZE;
-        } else {
-            revert UnsupportedDcapBodyType(quoteBodyType);
-        }
-
-        // Validate output length
-        if (output.length < DCAP_QUOTE_BODY_OFFSET + bodySize) {
-            revert TeeReportTooShort(output.length, DCAP_QUOTE_BODY_OFFSET + bodySize);
-        }
-
-        // Allocate quote body buffer
-        quoteBody = new bytes(bodySize);
-
-        // MCOPY copies exactly bodySize bytes. This avoids the old ceiling-rounded mload/mstore
-        // loop, whose final mload read up to 31 bytes beyond the logical end of output.
-        assembly ("memory-safe") {
-            let src := add(add(output, 0x20), DCAP_QUOTE_BODY_OFFSET)
-            let dst := add(quoteBody, 0x20)
-            mcopy(dst, src, bodySize)
-        }
-    }
-
     /// @dev Extracts the 64-byte reportData from a DCAP quote body
-    /// @param quoteBody The TD10 or TD15 quote body (output of extractDcapQuoteBody)
+    /// @param quoteBody The TD10 or TD15 quote body
     /// @return reportData The extracted 64-byte reportData field at offset 520
     function extractDcapReportData(bytes memory quoteBody) external pure returns (bytes memory reportData) {
         // Validate minimum length to contain reportData
@@ -576,18 +529,24 @@ contract TeeVerifier is ITeeVerifier {
         if (teeReport.verificationBackendType == VerificationBackendType.Solidity) {
             // Direct on-chain verification
             _requireExactDcapQuote(teeReport.data);
-            (bool success, bytes memory output) = dcapAttestation.verifyAndAttestOnChain(teeReport.data);
-            // Surface DCAP failure with the verifier's raw output so off-chain decoders
-            // can pick out the specific reason.
-            if (!success) {
-                revert DcapVerificationFailed(output);
-            }
-            if (output.length <= DCAP_TCB_STATUS_OFFSET) {
-                revert TeeReportTooShort(output.length, DCAP_TCB_STATUS_OFFSET + 1);
-            }
-            tcbStatus = uint8(output[DCAP_TCB_STATUS_OFFSET]);
-            quoteBody = extractDcapQuoteBody(output);
+            (bool success, bytes memory output, bytes memory verifiedBody) =
+                dcapAttestation.verifyAndAttestOnChainV2(teeReport.data, 0, true);
+            if (!success) revert DcapVerificationFailed(output);
+            IntelTdxDcapCompactOutputV1 memory compact = IntelTdxDcapV2.decode(output);
             teeReportBytesHash = keccak256(teeReport.data);
+            if (compact.fullQuoteHash != teeReportBytesHash) {
+                revert DcapFullQuoteHashMismatch(compact.fullQuoteHash, teeReportBytesHash);
+            }
+            uint256 expectedBodyLength = _dcapQuoteBodySize(compact.quoteBodyType);
+            if (verifiedBody.length != expectedBodyLength) {
+                revert InvalidDcapQuoteBodyLength(verifiedBody.length, expectedBodyLength);
+            }
+            bytes32 bodyHash = keccak256(verifiedBody);
+            if (compact.quoteBodyHash != bodyHash) {
+                revert DcapQuoteBodyHashMismatch(compact.quoteBodyHash, bodyHash);
+            }
+            tcbStatus = compact.tcbStatus;
+            quoteBody = verifiedBody;
         } else {
             IntelTdxDcapZkEvidence memory zkEvidence = abi.decode(teeReport.data, (IntelTdxDcapZkEvidence));
             address adapter = zkVerifierRegistry.resolveVerifierAdapter(
