@@ -61,6 +61,11 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     ///         deny every base image and leave the workload permanently unusable. Workloads are
     ///         immutable and the name/version pair stays claimed, so this is rejected up front.
     error EmptyBaseImageWhitelist();
+    /// @notice `sessionTtl` exceeds the supported maximum. Sessions add the TTL to the current
+    ///         block timestamp, and an oversized TTL would make session registration, renewal,
+    ///         and recovery revert on the uint64 expiry computation while the immutable
+    ///         workload keeps the name/version claimed.
+    error SessionTtlTooLong(uint64 sessionTtl, uint64 maxSessionTtl);
 
     // ============================================================================
     // Events
@@ -74,6 +79,14 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     // ============================================================================
 
     ISignatureVerifier public immutable signatureVerifier;
+
+    /// @notice Maximum accepted workload session TTL. A TTL of 0 selects the SessionRegistry
+    ///         default; any nonzero TTL must not exceed this bound. The bound sits roughly
+    ///         nine orders of magnitude below the uint64 overflow point of the expiry
+    ///         computation (~5.8e11 years), so overflow safety is not the constraint; the
+    ///         point is that a TTL beyond a century is indistinguishable from a permanent
+    ///         session and almost certainly a mistake.
+    uint64 public constant MAX_SESSION_TTL = 100 * 365 days;
 
     mapping(bytes32 => WorkloadSpecStorage) private _workloads;
     mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageSet;
@@ -124,6 +137,13 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         // is unrecoverable under that identifier. Reject it rather than record it.
         if (spec.baseImageMode == AccessMode.WHITELIST && spec.baseImageIds.length == 0) {
             revert EmptyBaseImageWhitelist();
+        }
+
+        // Same one-shot rationale as the empty whitelist: SessionRegistry adds the TTL to the
+        // current block timestamp, so a TTL near the uint64 range would make every session
+        // registration, renewal, and recovery revert under this permanently claimed identifier.
+        if (spec.sessionTtl > MAX_SESSION_TTL) {
+            revert SessionTtlTooLong(spec.sessionTtl, MAX_SESSION_TTL);
         }
 
         // The owner fingerprint is an input to the identifier, so it must be

@@ -99,6 +99,10 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
     error SessionKeyDelegationFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint);
     error SessionKeyPossessionFailed(bytes32 messageHash, bytes32 sessionKeyFingerprint);
     error SessionFingerprintInUse(bytes32 sessionKeyFingerprint, bytes32 activeSessionId);
+    /// @notice A key rotation tried to carry the predecessor's TPM signing key or session key
+    ///         over to the successor session. Rotation revokes the predecessor and clears its
+    ///         session-key fingerprint mapping, so reused keys would be accepted again.
+    error RotationReusedKey(bytes32 fingerprint);
     error WorkloadNotActive(bytes32 workloadId);
     error BaseImageNotActive(bytes32 baseImageId);
     error BaseImageNotAllowed(bytes32 baseImageId);
@@ -674,6 +678,19 @@ contract SessionRegistry is ISessionRegistry, OwnableUpgradeable, UUPSUpgradeabl
         TpmCertifyVerificationResult memory certifyResult =
             tpmVerifier.verifyTpmCertify(evidence.tpmCertifyReport, evidence.akPub);
         bytes32 sessionKeyFingerprint = LibKey.computeKeyFingerprint(evidence.sessionKey);
+
+        // The successor must not reuse the predecessor's TPM signing key or session key:
+        // _finalizeRotation revokes the predecessor and clears its session-key fingerprint
+        // mapping, so carried-over keys would be accepted again. The AK intentionally
+        // carries over.
+        CVMSessionStorage storage predecessor = _sessions[oldSessionId];
+        if (certifyResult.certifiedKeyFingerprint == predecessor.session.tpmSigningKeyFingerprint) {
+            revert RotationReusedKey(certifyResult.certifiedKeyFingerprint);
+        }
+        if (sessionKeyFingerprint == predecessor.session.sessionKeyFingerprint) {
+            revert RotationReusedKey(sessionKeyFingerprint);
+        }
+
         _verifyRotationAuthorization(
             oldSessionId,
             certifyResult.certifiedKeyFingerprint,

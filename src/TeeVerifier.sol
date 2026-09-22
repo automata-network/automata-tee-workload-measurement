@@ -104,6 +104,15 @@ contract TeeVerifier is ITeeVerifier {
     /// @dev Minimum valid quote body length (must contain reportData)
     uint256 private constant DCAP_MIN_OUTPUT_LEN = 584; // TD10_QUOTE_BODY_SIZE (520 + 64)
 
+    /// @dev Maximum accepted age of a DCAP ZK proof, measured from the proof-committed
+    ///      timestamp to the current block. Bounds how long evidence verified against
+    ///      since-updated collateral or TCB state can still create a Session.
+    uint64 private constant DCAP_ZK_PROOF_MAXIMUM_AGE_SECONDS = 1 hours;
+
+    /// @dev Tolerance for prover clock skew: proof timestamps slightly ahead of the
+    ///      current block are accepted.
+    uint64 private constant DCAP_ZK_PROOF_ALLOWED_FUTURE_CLOCK_DIFFERENCE_SECONDS = 5 minutes;
+
     // ═══════════════════════════════════════════════════════════════════════════════════════
     // Constants - SNP Raw Report Layout
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -172,6 +181,12 @@ contract TeeVerifier is ITeeVerifier {
 
     /// @notice The supplied Intel TDX quote body does not match the body committed by the ZK proof.
     error DcapQuoteBodyHashMismatch(bytes32 expected, bytes32 actual);
+
+    /// @notice The DCAP ZK proof-committed timestamp is too far ahead of the current block timestamp.
+    error DcapZkProofTimestampInFuture(uint64 proofTimestamp, uint256 blockTimestamp);
+
+    /// @notice The DCAP ZK proof-committed timestamp is older than the maximum accepted proof age.
+    error DcapZkProofTooOld(uint64 proofTimestamp, uint256 blockTimestamp);
 
     /// @notice The supplied Intel TDX quote version is unsupported.
     error UnsupportedDcapQuoteVersion(uint16 actual);
@@ -595,6 +610,7 @@ contract TeeVerifier is ITeeVerifier {
             );
             IntelTdxDcapCompactOutputV1 memory compactOutput =
                 IIntelTdxDcapZkVerifierAdapter(adapter).verifyProof(zkEvidence.proof);
+            _verifyDcapZkProofFreshness(compactOutput.proofTimestamp);
             uint256 expectedBodyLength = _dcapQuoteBodySize(compactOutput.quoteBodyType);
             if (zkEvidence.quoteBody.length != expectedBodyLength) {
                 revert InvalidDcapQuoteBodyLength(zkEvidence.quoteBody.length, expectedBodyLength);
@@ -633,6 +649,22 @@ contract TeeVerifier is ITeeVerifier {
             amdSevSnpCurrentMitigationVector: 0,
             teeReportBytesHash: teeReportBytesHash
         });
+    }
+
+    /// @dev Rejects DCAP ZK proofs whose proof-committed timestamp is in the future
+    ///      (beyond prover clock-skew tolerance) or older than the maximum proof age,
+    ///      so evidence verified against since-updated collateral or TCB state cannot
+    ///      be admitted. The timestamp comes from the proof-bound journal suffix
+    ///      (see IntelTdxDcapZkVerifierAdapter). The Solidity backend verifies collateral
+    ///      at call time and is not subject to this check.
+    function _verifyDcapZkProofFreshness(uint64 proofTimestamp) private view {
+        uint256 currentTimestamp = block.timestamp;
+        if (uint256(proofTimestamp) > currentTimestamp + DCAP_ZK_PROOF_ALLOWED_FUTURE_CLOCK_DIFFERENCE_SECONDS) {
+            revert DcapZkProofTimestampInFuture(proofTimestamp, currentTimestamp);
+        }
+        if (currentTimestamp > uint256(proofTimestamp) + DCAP_ZK_PROOF_MAXIMUM_AGE_SECONDS) {
+            revert DcapZkProofTooOld(proofTimestamp, currentTimestamp);
+        }
     }
 
     function _dcapQuoteBodySize(uint16 quoteBodyType) private pure returns (uint256) {
