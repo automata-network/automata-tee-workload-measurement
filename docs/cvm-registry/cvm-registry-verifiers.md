@@ -393,7 +393,8 @@ TEE report to the MAA-signed HCL data and prevents report splicing.
 GCP provides X.509 certificate chain:
 1. ABI-decode `bytes[]` array of DER certificates from collateral data
 2. Call `tpmAttestation.verifyCertChain(certs)` → returns `CertPubkey`
-3. Convert `CertPubkey` → `PublicIdentity`
+3. Require `certs[0]` to satisfy the non-CA attestation constraints; generic chain verification also accepts CA targets
+4. Convert `CertPubkey` → `PublicIdentity`
 
 Binding: `bindingHash = bytes32(0)`. AK is bound to TEE via PCR15 computation (verified in SessionRegistry step 7).
 

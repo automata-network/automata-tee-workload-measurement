@@ -652,6 +652,8 @@ contract AkCollateralVerifier is IAkCollateralVerifier, TpmBase {
         // Verify certificate chain and extract leaf public key
         // Library caches intermediate certs (non-view), reverts on failure
         CertPubkey memory certPubkey = tpmAttestation.verifyCertChain(certs);
+        // Generic chain validation also accepts CA targets; an attestation key must not be a CA.
+        LibX509.checkCAConstraints(certs[0], 0, true);
 
         // Convert to PublicIdentity
         PublicIdentity memory akPub = LibKey.certPubkeyToPublicIdentity(certPubkey);
