@@ -120,12 +120,14 @@ contract IntelTdxDcapV2ZkVerifierAdapter is IIntelTdxDcapZkVerifierAdapter {
         dcapAttestation = dcapAttestation_;
     }
 
-    function verifyProof(ProgramBoundZkProof calldata proof)
-        external returns (IntelTdxDcapCompactOutputV1 memory)
-    {
+    function verifyProof(ProgramBoundZkProof calldata proof) external returns (IntelTdxDcapCompactOutputV1 memory) {
         (bool success, bytes memory output) = dcapAttestation.verifyAndAttestWithZKProofV2(
-            proof.output, IDcapAttestationV2.ZkCoProcessorType.Succinct,
-            proof.proofBytes, proof.programIdentifier, 0, true
+            proof.output,
+            IDcapAttestationV2.ZkCoProcessorType.Succinct,
+            proof.proofBytes,
+            proof.programIdentifier,
+            0,
+            true
         );
         if (!success) revert DcapProofVerificationFailed(output);
         if (keccak256(output) != keccak256(proof.output)) revert DcapVerifiedOutputMismatch();

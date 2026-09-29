@@ -98,12 +98,16 @@ contract MockAutomataDcapAttestation is IDcapAttestation {
     }
 
     function verifyAndAttestOnChainV2(bytes calldata input, uint32 tcbEval, bool minCheck)
-        external payable returns (bool, bytes memory, bytes memory)
+        external
+        payable
+        returns (bool, bytes memory, bytes memory)
     {
         require(tcbEval == 0 && minCheck, "expected standard collateral and minimal mode");
         (, bytes memory legacy) = this.verifyAndAttestOnChain(input);
         bytes memory body = new bytes(legacy.length - 11);
-        for (uint256 i; i < body.length; ++i) body[i] = legacy[11 + i];
+        for (uint256 i; i < body.length; ++i) {
+            body[i] = legacy[11 + i];
+        }
         OutputV2 memory out;
         out.formatMajorVersion = 2;
         out.formatMinorVersion = 1;
