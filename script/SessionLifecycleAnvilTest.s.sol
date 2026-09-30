@@ -205,13 +205,13 @@ contract AnvilLifecycleTpmVerifier is ITpmAttestation {
 
     function removeCA(bytes calldata) external {}
 
-    function isCertificateRevoked(bytes calldata) external pure returns (bool) {
+    function isCertificateRevoked(bytes[] calldata) external pure returns (bool) {
         return false;
     }
 
     function removeIntermediateCerts(bytes32[] calldata) external {}
 
-    function updateCRL(bytes calldata, bytes calldata) external {}
+    function updateCRL(bytes calldata, bytes[] calldata) external {}
 
     function verifyCertSignature(bytes calldata, CertPubkey memory) external pure returns (bool) {
         return true;

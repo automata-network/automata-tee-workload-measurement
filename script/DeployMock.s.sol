@@ -7,6 +7,7 @@ import {MockAutomataDcapAttestation} from "../test/mocks/MockAutomataDcapAttesta
 import {MockAutomataSnpAttestation} from "../test/mocks/MockAutomataSnpAttestation.sol";
 import {ISnpAttestation} from "../src/interfaces/external/ISnpAttestation.sol";
 import {MockTpmAttestation} from "../test/mocks/MockTpmAttestation.sol";
+import {IDcapAttestationV2} from "../src/interfaces/external/IDcapAttestationV2.sol";
 import {TeeVerifier, ITeeVerifier} from "../src/TeeVerifier.sol";
 import {ZkVerifierRegistry} from "../src/ZkVerifierRegistry.sol";
 import {AkCollateralVerifier} from "../src/bases/AkCollateralVerifier.sol";
@@ -99,7 +100,7 @@ contract DeployMock is Script, DeploymentConfig {
             );
 
         // 3. TeeVerifier with mock backends
-        d.teeVerifier = new TeeVerifier(d.dcapAttestation, d.zkVerifierRegistry);
+        d.teeVerifier = new TeeVerifier(IDcapAttestationV2(address(d.dcapAttestation)), d.zkVerifierRegistry);
         console.log("TeeVerifier deployed at:", address(d.teeVerifier));
 
         // 4. Read existing shared contract addresses

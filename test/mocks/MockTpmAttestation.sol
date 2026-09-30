@@ -90,7 +90,7 @@ contract MockTpmAttestation is ITpmAttestation {
     function removeCA(bytes calldata) external {}
 
     /// @inheritdoc ICertChainRegistry
-    function isCertificateRevoked(bytes calldata) external pure returns (bool) {
+    function isCertificateRevoked(bytes[] calldata) external pure returns (bool) {
         return false;
     }
 
@@ -98,7 +98,7 @@ contract MockTpmAttestation is ITpmAttestation {
     function removeIntermediateCerts(bytes32[] calldata) external {}
 
     /// @inheritdoc ICertChainRegistry
-    function updateCRL(bytes calldata, bytes calldata) external {}
+    function updateCRL(bytes calldata, bytes[] calldata) external {}
 
     /// @inheritdoc ICertChainRegistry
     function verifyCertSignature(bytes calldata, CertPubkey memory) external pure returns (bool) {
