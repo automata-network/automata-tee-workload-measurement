@@ -359,6 +359,62 @@ contract SessionLifecycleTest is Test {
         );
     }
 
+    /// @dev Rotation revokes the predecessor and clears its session-key fingerprint mapping, so a
+    ///      successor that carried the predecessor's TPM signing key over would be accepted again.
+    function testRotateKeyRejectsPredecessorTpmSigningKeyReuse() public {
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        bytes32 oldSessionId = keccak256("old-rotate-tpm-key-reuse");
+        _seedSession(
+            oldSessionId,
+            false,
+            uint64(block.timestamp + 1 days),
+            ownerFingerprint,
+            oldAk,
+            oldTpmSigningKey,
+            oldSessionKey,
+            oldPolicy
+        );
+
+        PublicIdentity memory newSessionKey = _identity(ALGO_ID_ES256K, 0x15);
+        SessionKeyRotationEvidence memory evidence = _rotationEvidence(0x31, oldAk, oldTpmSigningKey, newSessionKey);
+        _mockQuote(ownerFingerprint, 0);
+        _mockCertifiedKey(oldTpmSigningKey); // the certified "new" key is the predecessor's TPM signing key
+
+        bytes32 reusedFingerprint = LibKey.computeKeyFingerprint(oldTpmSigningKey);
+        vm.expectRevert(abi.encodeWithSelector(SessionRegistry.RotationReusedKey.selector, reusedFingerprint));
+        sessionRegistry.rotateKey(
+            oldSessionId, keccak256("tee"), evidence, uint64(block.timestamp + 5 minutes), ownerIdentity, hex"01"
+        );
+    }
+
+    /// @dev Same rationale for the session key: the predecessor's mapping is cleared on rotation,
+    ///      so reusing its session key would re-register the retired fingerprint.
+    function testRotateKeyRejectsPredecessorSessionKeyReuse() public {
+        bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
+        bytes32 oldSessionId = keccak256("old-rotate-session-key-reuse");
+        _seedSession(
+            oldSessionId,
+            false,
+            uint64(block.timestamp + 1 days),
+            ownerFingerprint,
+            oldAk,
+            oldTpmSigningKey,
+            oldSessionKey,
+            oldPolicy
+        );
+
+        PublicIdentity memory newTpmSigningKey = _identity(ALGO_ID_ES256, 0x16);
+        SessionKeyRotationEvidence memory evidence = _rotationEvidence(0x32, oldAk, oldTpmSigningKey, oldSessionKey);
+        _mockQuote(ownerFingerprint, 0);
+        _mockCertifiedKey(newTpmSigningKey);
+
+        bytes32 reusedFingerprint = LibKey.computeKeyFingerprint(oldSessionKey);
+        vm.expectRevert(abi.encodeWithSelector(SessionRegistry.RotationReusedKey.selector, reusedFingerprint));
+        sessionRegistry.rotateKey(
+            oldSessionId, keccak256("tee"), evidence, uint64(block.timestamp + 5 minutes), ownerIdentity, hex"01"
+        );
+    }
+
     function testRenewSessionAllowsFreshAkAndPolicyAndGrantsFreshTtl() public {
         bytes32 ownerFingerprint = LibKey.computeKeyFingerprint(ownerIdentity);
         bytes32 oldSessionId = keccak256("old-renew-session");

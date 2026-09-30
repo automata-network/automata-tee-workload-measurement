@@ -26,11 +26,18 @@ struct IntelTdxDcapZkEvidence {
 }
 
 /// @notice Compact Atakit output derived from the full Intel TDX DCAP VerifiedOutput.
+/// @dev Parsed from the 333-byte ZK journal by IntelTdxDcapZkVerifierAdapter;
+///      the journal layout is documented there.
 struct IntelTdxDcapCompactOutputV1 {
     uint16 quoteVersion;
     uint16 quoteBodyType;
     uint8 tcbStatus;
     bytes6 fmspc;
+    /// @dev Unix timestamp (seconds) committed by the ZK proof in the journal suffix —
+    ///      the same bytes the DCAP attestation contract uses for collateral lookups.
+    ///      Sourced from the journal rather than the compact output; TeeVerifier enforces
+    ///      its freshness.
+    uint64 proofTimestamp;
     bytes32 fullQuoteHash;
     bytes32 quoteBodyHash;
     /// @dev keccak256(abi.encode(bytes32("ATKJ_ADVISORY_IDS_V1"), sortedUniqueAdvisoryIds)).

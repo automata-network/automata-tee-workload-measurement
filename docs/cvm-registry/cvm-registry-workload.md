@@ -160,6 +160,8 @@ every base image.
 | `InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength)` | A reserved Boolean has the wrong number of values, or an Intel TDX or AMD SEV-SNP packed requirement does not contain exactly one value |
 | `InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue)` | A reserved Boolean is invalid, the Intel TDX TCB mask is invalid, or an AMD SEV-SNP packed value has an invalid layout |
 | `NotWhitelisted(bytes32 ownerFingerprint)` | Owner fingerprint not whitelisted |
+| `EmptyBaseImageWhitelist()` | `WHITELIST` mode with an empty `baseImageIds` set |
+| `SessionTtlTooLong(uint64 sessionTtl, uint64 maxSessionTtl)` | `sessionTtl` exceeds `MAX_SESSION_TTL` (100 years) |
 
 ## Events
 
@@ -179,7 +181,8 @@ every base image.
 5. **AMD SEV-SNP packed requirements**: `tcb.minimum` and `platform-info.policy` each accept exactly one valid packed value. A missing requirement resolves to the active exact-CPUID `AmdSnpSecurityPolicyRegistry` default during verification. An explicit requirement replaces that workload-side default. Only the *layout* of the value is validated here, never its magnitude — a workload may state a value weaker than the registry default, which takes effect if and only if the base image states a matching relaxation. See [the default-not-floor section](cvm-registry-amd-snp-policy.md) before relying on the registry record as a minimum.
 6. **Base-image set**: `baseImageIds` are stored without a `BaseImageRegistry` lookup. An empty `WHITELIST` denies every base image; an empty `BLACKLIST` allows every base image.
 7. **Signature expiry**: `block.timestamp <= opExpiresAt`
-8. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration.
+8. **Session TTL bound**: `sessionTtl <= MAX_SESSION_TTL` (100 years). `0` selects the SessionRegistry default (30 days). The bound is ~10⁹× below the uint64 overflow point of the expiry computation (~5.8×10¹¹ years), so its purpose is not overflow safety but rejecting TTLs that are indistinguishable from a permanent session — an unrecoverable mistake under a permanently claimed identifier.
+9. **Registration gating**: If `registrationRestricted()` and owner not in `_whitelist`, revert `NotWhitelisted`. False = open registration.
 
 ## Initialization
 

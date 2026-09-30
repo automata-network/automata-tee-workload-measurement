@@ -167,13 +167,14 @@ contract TeeVerifierDcapV2Test is TeeVerifierSnpTest {
         );
     }
 
-    function _tdxZkReport(bytes memory fullQuote, bytes memory body, uint16 bodyType)
+    function _tdxZkReport(bytes memory fullQuote, bytes memory body, uint16 bodyType, uint64 proofTimestamp)
         internal
         pure
         override
         returns (TeeReport memory)
     {
         OutputV2 memory out;
+        out.timestamp = proofTimestamp;
         out.formatMajorVersion = 2;
         out.formatMinorVersion = 1;
         out.quoteVersion = uint16(uint8(fullQuote[0]));
@@ -198,8 +199,10 @@ contract TeeVerifierDcapV2Test is TeeVerifierSnpTest {
     function testV1AndV2RoutesCoexist() public {
         bytes memory quote = _td10Quote();
         bytes memory body = _tdxQuoteBody(quote, 48, 584);
-        TeeVerificationResult memory oldResult = teeVerifier.verifyTeeReport(super._tdxZkReport(quote, body, 2));
-        TeeVerificationResult memory newResult = teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 2));
+        TeeVerificationResult memory oldResult =
+            teeVerifier.verifyTeeReport(super._tdxZkReport(quote, body, 2, uint64(block.timestamp)));
+        TeeVerificationResult memory newResult =
+            teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 2, uint64(block.timestamp)));
         assertEq(oldResult.teeReportBytesHash, newResult.teeReportBytesHash);
         assertEq(oldResult.reportData, newResult.reportData);
         assertEq(dcap.lastProgramIdentifier(), TDX_PROGRAM_IDENTIFIER);
@@ -208,13 +211,13 @@ contract TeeVerifierDcapV2Test is TeeVerifierSnpTest {
     function testWrongProgramAndFormatAreRejected() public {
         bytes memory quote = _td10Quote();
         bytes memory body = _tdxQuoteBody(quote, 48, 584);
-        TeeReport memory report = _tdxZkReport(quote, body, 2);
+        TeeReport memory report = _tdxZkReport(quote, body, 2, uint64(block.timestamp));
         IntelTdxDcapZkEvidence memory evidence = abi.decode(report.data, (IntelTdxDcapZkEvidence));
         evidence.proof.programIdentifier = TDX_PROGRAM_IDENTIFIER;
         report.data = abi.encode(evidence);
         vm.expectRevert();
         teeVerifier.verifyTeeReport(report);
-        report = super._tdxZkReport(quote, body, 2);
+        report = super._tdxZkReport(quote, body, 2, uint64(block.timestamp));
         evidence = abi.decode(report.data, (IntelTdxDcapZkEvidence));
         evidence.proof.programIdentifier = V2_ID;
         evidence.proof.proofBytes = hex"01020304";
@@ -229,7 +232,7 @@ contract TeeVerifierDcapV2Test is TeeVerifierSnpTest {
 
     function testV2ForwardsExactProgramAndRejectsFailedOrChangedOutput() public {
         bytes memory quote = _td10Quote();
-        TeeReport memory report = _tdxZkReport(quote, _tdxQuoteBody(quote, 48, 584), 2);
+        TeeReport memory report = _tdxZkReport(quote, _tdxQuoteBody(quote, 48, 584), 2, uint64(block.timestamp));
         v2.configure(TDX_PROGRAM_IDENTIFIER, false, false);
         vm.expectRevert();
         teeVerifier.verifyTeeReport(report);
@@ -246,18 +249,18 @@ contract TeeVerifierDcapV2Test is TeeVerifierSnpTest {
         bytes memory body = _tdxQuoteBody(quote, 48, 584);
         body[121] = 0x01;
         vm.expectRevert();
-        teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 2));
+        teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 2, uint64(block.timestamp)));
         body[121] = 0;
         body[123] = 0;
         vm.expectRevert(TeeVerifier.TdxSeptVeDisableRequired.selector);
-        teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 2));
+        teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 2, uint64(block.timestamp)));
         quote = _td15Quote();
         body = _tdxQuoteBody(quote, 54, 648);
         body[600] = 0x01;
         vm.expectRevert(TeeVerifier.TdxMigrationServiceTdNotSupported.selector);
-        teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 3));
+        teeVerifier.verifyTeeReport(_tdxZkReport(quote, body, 3, uint64(block.timestamp)));
         body[600] = 0;
-        TeeReport memory report = _tdxZkReport(quote, body, 3);
+        TeeReport memory report = _tdxZkReport(quote, body, 3, uint64(block.timestamp));
         IntelTdxDcapZkEvidence memory evidence = abi.decode(report.data, (IntelTdxDcapZkEvidence));
         evidence.proof.output[9] = 0x06;
         report.data = abi.encode(evidence);

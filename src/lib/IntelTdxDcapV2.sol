@@ -16,6 +16,7 @@ library IntelTdxDcapV2 {
             revert UnsupportedTdxQuote(out.quoteVersion, out.quoteBodyType);
         }
         return IntelTdxDcapCompactOutputV1({
+            proofTimestamp: out.timestamp,
             quoteVersion: out.quoteVersion,
             quoteBodyType: out.quoteBodyType,
             tcbStatus: out.tcbStatus,

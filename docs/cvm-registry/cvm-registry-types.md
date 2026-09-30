@@ -185,6 +185,7 @@ struct IntelTdxDcapJournalV1 {
     uint16 quoteBodyType;
     uint8 tcbStatus;
     bytes6 fmspc;
+    uint64 proofTimestamp; // from the journal suffix, not the compact output body
     bytes32 fullQuoteHash;
     bytes32 quoteBodyHash;
     bytes32 advisoryIdsHash;
@@ -221,7 +222,12 @@ The proved DCAP journal uses a 131-byte internal body. After the 11-byte
 Automata header, it contains 16 zero bytes, `ATKJ`, `uint16(1)` format type,
 `uint16(1)` format version, `fullQuoteHash`, `quoteBodyHash`, and
 `advisoryIdsHash`. The full journal is 333 bytes after adding the two-byte
-length and 200-byte collateral commitment suffix.
+length and 200-byte collateral commitment suffix, whose first eight bytes are
+the big-endian `proofTimestamp` committed by the proof — the same bytes the
+DCAP attestation contract uses for its collateral lookups. `TeeVerifier`
+rejects a `proofTimestamp` more than 5 minutes ahead of the current block and
+any proof older than 1 hour, so evidence verified against since-updated
+collateral or TCB state cannot create a Session.
 
 `advisoryIdsHash` is
 `keccak256(abi.encode(bytes32("ATKJ_ADVISORY_IDS_V1"), sortedUniqueAdvisoryIds))`.
