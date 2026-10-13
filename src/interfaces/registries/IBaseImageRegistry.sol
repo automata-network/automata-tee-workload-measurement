@@ -35,7 +35,48 @@ struct MeasurementVariantStorage {
     PcrPolicyBlockMetadata variantPcrPolicyMetadata;
 }
 
+/// @notice Independently verifiable selected variant. URI is unsigned by variantSignature.
+struct SignedBaseImageVariant {
+    BaseImageSpec baseImage;
+    bytes32 ownerFingerprint;
+    PublicIdentity ownerIdentity;
+    PlatformProfile platformProfile;
+    MeasurementVariant measurementVariant;
+    bytes variantSignature;
+}
+
 interface IBaseImageRegistry {
+    /// @notice Publish existing image/profile/variant types with one durable signature per variant.
+    /// @dev ownerSignature binds the V2 operation domain, chain, registry, deadline, all data,
+    ///      and variantSignatures. Each inner signature binds image ID, full profile, and variant.
+    function registerBaseImageV2(
+        BaseImageSpec calldata spec,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
+        bytes[][] calldata variantSignatures,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 baseImageId);
+
+    /// @notice Append independently signed variants without modifying existing profiles or variants.
+    function addPlatformVariantsV2(
+        bytes32 baseImageId,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
+        bytes[][] calldata variantSignatures,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external;
+
+    /// @notice Get policy bytes, publisher identity, and durable signature for a selected variant.
+    /// @dev Reverts for V1 variants without a durable signature. Does not assert non-revocation.
+    function getSignedVariant(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
+        external
+        view
+        returns (SignedBaseImageVariant memory);
+
     // ============================================================================
     // Events
     // ============================================================================

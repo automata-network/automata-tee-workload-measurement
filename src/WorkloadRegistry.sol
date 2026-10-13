@@ -13,6 +13,7 @@ import {
 import {
     WORKLOAD_DOMAIN,
     WORKLOAD_REGISTER_MSG,
+    WORKLOAD_REGISTER_MSG_V2,
     WORKLOAD_DEACTIVATE_MSG,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
@@ -24,8 +25,9 @@ import {
     TDX_TCB_STATUS_CONFIGURABLE_MASK,
     TEE_ATTRIBUTE_TRUE
 } from "./types/Constants.sol";
-import {IWorkloadRegistry, WorkloadSpecStorage} from "./interfaces/registries/IWorkloadRegistry.sol";
+import {IWorkloadRegistry, WorkloadSpecStorage, SignedWorkload} from "./interfaces/registries/IWorkloadRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
+import {PublisherPolicy} from "./lib/PublisherPolicy.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
 import {PcrPolicy} from "./lib/PcrPolicy.sol";
@@ -42,6 +44,8 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     // Errors
     // ============================================================================
 
+    error WorkloadSignatureUnavailable(bytes32 workloadId);
+    error InvalidWorkloadSignature(bytes32 messageHash, bytes32 signerFingerprint);
     error WorkloadAlreadyExists(bytes32 workloadId);
     error WorkloadNotFound(bytes32 workloadId);
     error WorkloadNotActive(bytes32 workloadId);
@@ -91,7 +95,9 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     mapping(bytes32 => WorkloadSpecStorage) private _workloads;
     mapping(bytes32 => mapping(bytes32 => bool)) private _baseImageSet;
     mapping(bytes32 => bool) private _whitelist;
-    uint256[47] private __gap;
+    mapping(bytes32 => bytes) private _workloadSignatures;
+    mapping(bytes32 => PublicIdentity) private _publisherIdentities;
+    uint256[45] private __gap;
 
     // ============================================================================
     // Constructor & Initialization
@@ -122,6 +128,28 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 workloadId) {
+        return _registerWorkload(spec, opExpiresAt, ownerIdentity, ownerSignature, "", false);
+    }
+
+    /// @inheritdoc IWorkloadRegistry
+    function registerWorkloadV2(
+        WorkloadSpec calldata spec,
+        bytes calldata workloadSignature,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 workloadId) {
+        return _registerWorkload(spec, opExpiresAt, ownerIdentity, ownerSignature, workloadSignature, true);
+    }
+
+    function _registerWorkload(
+        WorkloadSpec calldata spec,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature,
+        bytes memory workloadSignature,
+        bool v2
+    ) private returns (bytes32 workloadId) {
         // Check signature expiration
         if (block.timestamp > opExpiresAt) {
             revert SignatureExpired(opExpiresAt, uint64(block.timestamp));
@@ -164,11 +192,24 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         _checkRegistrationAllowed(ownerFingerprint);
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
-        bytes32 message = sha256(abi.encode(WORKLOAD_REGISTER_MSG, block.chainid, address(this), opExpiresAt, spec));
+        bytes32 message = v2
+            ? sha256(
+                abi.encode(WORKLOAD_REGISTER_MSG_V2, block.chainid, address(this), opExpiresAt, spec, workloadSignature)
+            )
+            : sha256(abi.encode(WORKLOAD_REGISTER_MSG, block.chainid, address(this), opExpiresAt, spec));
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
             revert InvalidSignature(message, ownerFingerprint);
+        }
+
+        if (v2) {
+            bytes32 digest = PublisherPolicy.workloadDigest(workloadId, spec);
+            if (workloadSignature.length == 0 || !signatureVerifier.verify(ownerIdentity, digest, workloadSignature)) {
+                revert InvalidWorkloadSignature(digest, ownerFingerprint);
+            }
+            _workloadSignatures[workloadId] = workloadSignature;
+            _publisherIdentities[ownerFingerprint] = ownerIdentity;
         }
 
         // Store workload
@@ -224,6 +265,20 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         _workloads[workloadId].isRevoked = true;
 
         emit WorkloadDeactivated(workloadId, ownerFingerprint);
+    }
+
+    /// @inheritdoc IWorkloadRegistry
+    function getSignedWorkload(bytes32 workloadId) external view returns (SignedWorkload memory) {
+        if (!_workloads[workloadId].exists) revert WorkloadNotFound(workloadId);
+        bytes memory signature = _workloadSignatures[workloadId];
+        if (signature.length == 0) revert WorkloadSignatureUnavailable(workloadId);
+        bytes32 publisher = _workloads[workloadId].owner;
+        return SignedWorkload({
+            spec: _loadWorkload(workloadId),
+            ownerFingerprint: publisher,
+            ownerIdentity: _publisherIdentities[publisher],
+            workloadSignature: signature
+        });
     }
 
     /// @inheritdoc IWorkloadRegistry

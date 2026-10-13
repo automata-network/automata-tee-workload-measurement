@@ -17,6 +17,8 @@ import {
     PLATFORM_PROFILE_DOMAIN,
     PLATFORM_VARIANT_DOMAIN,
     BASEIMAGE_REGISTER_MSG,
+    BASEIMAGE_REGISTER_MSG_V2,
+    BASEIMAGE_UPDATE_MSG_V2,
     BASEIMAGE_DEACTIVATE_MSG,
     BASEIMAGE_UPDATE_MSG,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
@@ -33,9 +35,11 @@ import {
     IBaseImageRegistry,
     BaseImageSpecStorage,
     PlatformProfileStorage,
-    MeasurementVariantStorage
+    MeasurementVariantStorage,
+    SignedBaseImageVariant
 } from "./interfaces/registries/IBaseImageRegistry.sol";
 import {ISignatureVerifier} from "./interfaces/ISignatureVerifier.sol";
+import {PublisherPolicy} from "./lib/PublisherPolicy.sol";
 import {LibKey} from "./lib/LibKey.sol";
 import {AmdSnpPolicy} from "./lib/AmdSnpPolicy.sol";
 import {PcrPolicy} from "./lib/PcrPolicy.sol";
@@ -54,6 +58,9 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     // Errors
     // ============================================================================
 
+    error VariantSignatureArrayLengthMismatch(uint256 expected, uint256 actual);
+    error VariantSignatureUnavailable(bytes32 variantId);
+    error InvalidVariantSignature(bytes32 messageHash, bytes32 signerFingerprint);
     error BaseImageAlreadyExists(bytes32 baseImageId);
     error BaseImageNotFound(bytes32 baseImageId);
     error BaseImageNotActive(bytes32 baseImageId);
@@ -107,7 +114,10 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
     mapping(bytes32 => MeasurementVariantStorage) private _variants;
     mapping(bytes32 => bool) private _whitelist;
 
-    uint256[46] private __gap;
+    // Consume two reserved slots; existing storage and records remain unchanged.
+    mapping(bytes32 => bytes) private _variantSignatures;
+    mapping(bytes32 => PublicIdentity) private _publisherIdentities;
+    uint256[44] private __gap;
 
     // ============================================================================
     // Constructor & Initialization
@@ -140,6 +150,50 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external returns (bytes32 baseImageId) {
+        return _registerBaseImage(
+            spec,
+            platformProfiles,
+            measurementVariants,
+            opExpiresAt,
+            ownerIdentity,
+            ownerSignature,
+            new bytes[][](0),
+            false
+        );
+    }
+
+    /// @inheritdoc IBaseImageRegistry
+    function registerBaseImageV2(
+        BaseImageSpec calldata spec,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
+        bytes[][] calldata variantSignatures,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 baseImageId) {
+        return _registerBaseImage(
+            spec,
+            platformProfiles,
+            measurementVariants,
+            opExpiresAt,
+            ownerIdentity,
+            ownerSignature,
+            variantSignatures,
+            true
+        );
+    }
+
+    function _registerBaseImage(
+        BaseImageSpec calldata spec,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature,
+        bytes[][] memory variantSignatures,
+        bool v2
+    ) private returns (bytes32 baseImageId) {
         // Validate parallel array invariant
         uint256 platformCount = platformProfiles.length;
         if (platformCount != measurementVariants.length) {
@@ -187,21 +241,40 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         _checkRegistrationAllowed(ownerFingerprint);
 
         // Build signed message (operation-specific domain, no msg.sender, raw params)
-        bytes32 message = sha256(
-            abi.encode(
-                BASEIMAGE_REGISTER_MSG,
-                block.chainid,
-                address(this),
-                opExpiresAt,
-                spec,
-                platformProfiles,
-                measurementVariants
+        bytes32 message = v2
+            ? sha256(
+                abi.encode(
+                    BASEIMAGE_REGISTER_MSG_V2,
+                    block.chainid,
+                    address(this),
+                    opExpiresAt,
+                    spec,
+                    platformProfiles,
+                    measurementVariants,
+                    variantSignatures
+                )
             )
-        );
+            : sha256(
+                abi.encode(
+                    BASEIMAGE_REGISTER_MSG,
+                    block.chainid,
+                    address(this),
+                    opExpiresAt,
+                    spec,
+                    platformProfiles,
+                    measurementVariants
+                )
+            );
 
         // Verify signature
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
             revert InvalidSignature(message, ownerFingerprint);
+        }
+
+        if (v2) {
+            _verifyAndStoreVariantSignatures(
+                baseImageId, platformProfiles, measurementVariants, variantSignatures, ownerIdentity, ownerFingerprint
+            );
         }
 
         // Store base image
@@ -312,6 +385,50 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         PublicIdentity calldata ownerIdentity,
         bytes calldata ownerSignature
     ) external {
+        _addPlatformVariants(
+            baseImageId,
+            platformProfiles,
+            measurementVariants,
+            opExpiresAt,
+            ownerIdentity,
+            ownerSignature,
+            new bytes[][](0),
+            false
+        );
+    }
+
+    /// @inheritdoc IBaseImageRegistry
+    function addPlatformVariantsV2(
+        bytes32 baseImageId,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
+        bytes[][] calldata variantSignatures,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external {
+        _addPlatformVariants(
+            baseImageId,
+            platformProfiles,
+            measurementVariants,
+            opExpiresAt,
+            ownerIdentity,
+            ownerSignature,
+            variantSignatures,
+            true
+        );
+    }
+
+    function _addPlatformVariants(
+        bytes32 baseImageId,
+        PlatformProfile[] calldata platformProfiles,
+        MeasurementVariant[][] calldata measurementVariants,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature,
+        bytes[][] memory variantSignatures,
+        bool v2
+    ) private {
         // Validate parallel array invariant
         uint256 platformCount = platformProfiles.length;
         if (platformCount != measurementVariants.length) {
@@ -359,20 +476,39 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
 
         // Build and verify signature
-        bytes32 message = sha256(
-            abi.encode(
-                BASEIMAGE_UPDATE_MSG,
-                block.chainid,
-                address(this),
-                opExpiresAt,
-                baseImageId,
-                platformProfiles,
-                measurementVariants
+        bytes32 message = v2
+            ? sha256(
+                abi.encode(
+                    BASEIMAGE_UPDATE_MSG_V2,
+                    block.chainid,
+                    address(this),
+                    opExpiresAt,
+                    baseImageId,
+                    platformProfiles,
+                    measurementVariants,
+                    variantSignatures
+                )
             )
-        );
+            : sha256(
+                abi.encode(
+                    BASEIMAGE_UPDATE_MSG,
+                    block.chainid,
+                    address(this),
+                    opExpiresAt,
+                    baseImageId,
+                    platformProfiles,
+                    measurementVariants
+                )
+            );
 
         if (!signatureVerifier.verify(ownerIdentity, message, ownerSignature)) {
             revert InvalidSignature(message, ownerFingerprint);
+        }
+
+        if (v2) {
+            _verifyAndStoreVariantSignatures(
+                baseImageId, platformProfiles, measurementVariants, variantSignatures, ownerIdentity, ownerFingerprint
+            );
         }
 
         // Append-only: existing profile and variant ids cannot be overwritten.
@@ -432,6 +568,54 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
         }
 
         emit BaseImageUpdated(baseImageId, ownerFingerprint);
+    }
+
+    /// @inheritdoc IBaseImageRegistry
+    function getSignedVariant(bytes32 baseImageId, bytes32 platformProfileId, bytes32 variantId)
+        external
+        view
+        returns (SignedBaseImageVariant memory result)
+    {
+        _requireValidHierarchy(baseImageId, platformProfileId, variantId);
+        bytes memory signature = _variantSignatures[variantId];
+        if (signature.length == 0) revert VariantSignatureUnavailable(variantId);
+        bytes32 publisher = _baseImages[baseImageId].owner;
+        return SignedBaseImageVariant({
+            baseImage: _baseImages[baseImageId].spec,
+            ownerFingerprint: publisher,
+            ownerIdentity: _publisherIdentities[publisher],
+            platformProfile: _loadPlatformProfile(platformProfileId),
+            measurementVariant: _loadMeasurementVariant(variantId),
+            variantSignature: signature
+        });
+    }
+
+    function _verifyAndStoreVariantSignatures(
+        bytes32 baseImageId,
+        PlatformProfile[] calldata profiles,
+        MeasurementVariant[][] calldata variants,
+        bytes[][] memory signatures,
+        PublicIdentity calldata identity,
+        bytes32 publisher
+    ) private {
+        if (signatures.length != profiles.length) {
+            revert VariantSignatureArrayLengthMismatch(profiles.length, signatures.length);
+        }
+        for (uint256 i; i < profiles.length; ++i) {
+            if (signatures[i].length != variants[i].length) {
+                revert VariantSignatureArrayLengthMismatch(variants[i].length, signatures[i].length);
+            }
+            bytes32 profileId = keccak256(abi.encode(PLATFORM_PROFILE_DOMAIN, baseImageId, profiles[i].name));
+            for (uint256 j; j < variants[i].length; ++j) {
+                bytes32 digest = PublisherPolicy.variantDigest(baseImageId, profiles[i], variants[i][j]);
+                if (signatures[i][j].length == 0 || !signatureVerifier.verify(identity, digest, signatures[i][j])) {
+                    revert InvalidVariantSignature(digest, publisher);
+                }
+                bytes32 variantId = keccak256(abi.encode(PLATFORM_VARIANT_DOMAIN, profileId, variants[i][j].name));
+                _variantSignatures[variantId] = signatures[i][j];
+            }
+        }
+        _publisherIdentities[publisher] = identity;
     }
 
     /// @inheritdoc IBaseImageRegistry

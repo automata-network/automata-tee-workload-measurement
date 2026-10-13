@@ -83,6 +83,8 @@ test/                                   # Integration tests and benchmarks
 
 ## Documentation
 
+- **[Publisher Policy Signatures](./docs/publisher-policy-signatures.md)** — V2 publication, per-variant signatures, signed workload policies, and independent client verification
+
 - **[Developer Guide](./docs/DEVELOPER_GUIDE.md)** — Detailed technical documentation covering each registry, the session registration verification sequence, session lifecycle, and data structures
 - **[Integration Guide](./docs/INTEGRATION_GUIDE.md)** — How to integrate via the Rust client SDK or your own Solidity smart contract
 

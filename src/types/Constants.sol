@@ -76,6 +76,13 @@ uint64 constant SNP_PLATFORM_INFO_CIPHERTEXT_HIDING_DRAM_EN = uint64(1) << 4;
 uint64 constant SNP_PLATFORM_INFO_ALIAS_CHECK_COMPLETE = uint64(1) << 5;
 uint64 constant SNP_PLATFORM_INFO_SUPPORTED_MASK = uint64(0x3f);
 
+// Durable publisher signatures authenticate policy data independently of publication expiry.
+bytes32 constant BASEIMAGE_VARIANT_SIGNATURE_DOMAIN = keccak256("CVM_BASEIMAGE_VARIANT_SIGNATURE_V1");
+bytes32 constant WORKLOAD_POLICY_SIGNATURE_DOMAIN = keccak256("CVM_WORKLOAD_POLICY_SIGNATURE_V1");
+bytes32 constant BASEIMAGE_REGISTER_MSG_V2 = keccak256("CVM_MSG_BASEIMAGE_REGISTER_V2");
+bytes32 constant BASEIMAGE_UPDATE_MSG_V2 = keccak256("CVM_MSG_BASEIMAGE_UPDATE_V2");
+bytes32 constant WORKLOAD_REGISTER_MSG_V2 = keccak256("CVM_MSG_WORKLOAD_REGISTER_V2");
+
 // ─── Operation Message Separators ──────────────────────────────────────
 /// @dev Message separator for base image registration message signatures
 bytes32 constant BASEIMAGE_REGISTER_MSG = keccak256("CVM_MSG_BASEIMAGE_REGISTER_V1");
