@@ -1,5 +1,6 @@
 pub mod base_image_registry;
 pub mod pcr_comparison;
+pub mod publisher_policy;
 pub mod relay;
 pub mod session_registry;
 pub mod stubs;
