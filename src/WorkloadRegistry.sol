@@ -20,6 +20,7 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
     TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID,
     TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TDX_TCB_STATUS_OK,
     TDX_TCB_STATUS_CONFIGURABLE_MASK,
@@ -60,6 +61,7 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
     error DuplicateRequirementKey(bytes32 key);
     error InvalidTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
     error InvalidTeeAttributeRequirementValue(bytes32 key, bytes32 actualValue);
+    error BaseImageOnlyAttributeRequirement(bytes32 key);
     error NotWhitelisted(bytes32 ownerFingerprint);
     /// @notice `AccessMode.WHITELIST` was registered with an empty `baseImageIds` set, which would
     ///         deny every base image and leave the workload permanently unusable. Workloads are
@@ -436,7 +438,9 @@ contract WorkloadRegistry is IWorkloadRegistry, OwnableUpgradeable, PausableUpgr
         uint256 len = requirements.length;
         for (uint256 i = 0; i < len; i++) {
             bytes32 key = requirements[i].key;
-            if (key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
+            if (key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID) {
+                revert BaseImageOnlyAttributeRequirement(key);
+            } else if (key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED) {
                 bytes32[] calldata allowedValues = requirements[i].allowedValues;
                 if (allowedValues.length != 1) {
                     revert InvalidTeeAttributeRequirementLength(key, allowedValues.length);

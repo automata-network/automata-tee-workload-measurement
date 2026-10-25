@@ -44,6 +44,8 @@ bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA =
 bytes32 constant TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED =
     keccak256("atakit.attestation.v1.tee.intel-tdx.tcb.status.allowed");
 bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM = keccak256("atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum");
+bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID =
+    keccak256("atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum.by-cpuid");
 bytes32 constant TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY =
     keccak256("atakit.attestation.v1.tee.amd-sev-snp.platform-info.policy");
 

@@ -26,6 +26,7 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
     TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID,
     TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TDX_TCB_STATUS_OK,
     TDX_TCB_STATUS_CONFIGURABLE_MASK,
@@ -978,7 +979,8 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
     function _isBooleanTeeAttributeKey(bytes32 key) private pure returns (bool) {
         return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
-            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA;
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID;
     }
 
     // ============================================================================
