@@ -979,8 +979,7 @@ contract BaseImageRegistry is IBaseImageRegistry, OwnableUpgradeable, PausableUp
 
     function _isBooleanTeeAttributeKey(bytes32 key) private pure returns (bool) {
         return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
-            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA
-            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID;
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA || key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID;
     }
 
     // ============================================================================
