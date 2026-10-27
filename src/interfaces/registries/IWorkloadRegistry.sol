@@ -17,7 +17,28 @@ struct WorkloadSpecStorage {
     PcrPolicyBlockMetadata workloadPcrPolicyMetadata;
 }
 
+struct SignedWorkload {
+    WorkloadSpec spec;
+    bytes32 ownerFingerprint;
+    PublicIdentity ownerIdentity;
+    bytes workloadSignature;
+}
+
 interface IWorkloadRegistry {
+    /// @notice Register a workload with separate durable policy and expiring publication signatures.
+    /// @dev The V2 publication signature also binds workloadSignature.
+    function registerWorkloadV2(
+        WorkloadSpec calldata spec,
+        bytes calldata workloadSignature,
+        uint64 opExpiresAt,
+        PublicIdentity calldata ownerIdentity,
+        bytes calldata ownerSignature
+    ) external returns (bytes32 workloadId);
+
+    /// @notice Return the exact stored policy with its durable signature and publisher identity.
+    /// @dev Reverts for V1 records without a durable signature. Does not assert non-revocation.
+    function getSignedWorkload(bytes32 workloadId) external view returns (SignedWorkload memory);
+
     // ============================================================================
     // Events
     // ============================================================================

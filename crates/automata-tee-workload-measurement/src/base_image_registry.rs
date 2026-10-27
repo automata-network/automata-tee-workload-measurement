@@ -128,6 +128,45 @@ impl BaseImageRegistry {
         measurement_variants: Vec<Vec<MeasurementVariant>>,
         op_expiry_seconds: u64,
     ) -> Result<BaseImageResult> {
+        self.register_base_image_impl(
+            signer,
+            spec,
+            platform_profiles,
+            measurement_variants,
+            op_expiry_seconds,
+            false,
+        )
+        .await
+    }
+
+    pub async fn register_base_image_v2(
+        &self,
+        signer: &PrivateKeySigner,
+        spec: BaseImageSpec,
+        platform_profiles: Vec<PlatformProfile>,
+        measurement_variants: Vec<Vec<MeasurementVariant>>,
+        op_expiry_seconds: u64,
+    ) -> Result<BaseImageResult> {
+        self.register_base_image_impl(
+            signer,
+            spec,
+            platform_profiles,
+            measurement_variants,
+            op_expiry_seconds,
+            true,
+        )
+        .await
+    }
+
+    async fn register_base_image_impl(
+        &self,
+        signer: &PrivateKeySigner,
+        spec: BaseImageSpec,
+        platform_profiles: Vec<PlatformProfile>,
+        measurement_variants: Vec<Vec<MeasurementVariant>>,
+        op_expiry_seconds: u64,
+        with_policy_signatures: bool,
+    ) -> Result<BaseImageResult> {
         // The publisher is part of the identifier, so the owner identity has to
         // be computed before it rather than after the duplicate check.
         let owner_identity = PublicIdentity::secp256k1(signer);
@@ -165,19 +204,47 @@ impl BaseImageRegistry {
 
         // Build and sign the message
         // Message: sha256(abi.encode(domain, chainId, contractAddr, opExpiresAt, spec, profiles, variants))
-        let sig_bytes = sign_message(
-            &(
-                keccak256(b"CVM_MSG_BASEIMAGE_REGISTER_V1"),
-                U256::from(chain_id),
-                *self.stub.address(),
-                U256::from(op_expires_at),
-                spec.clone(),
-                platform_profiles.clone(),
-                measurement_variants.clone(),
-            ),
-            &signer,
-        )
-        .await?;
+        let variant_signatures = if with_policy_signatures {
+            crate::publisher_policy::sign_variants(
+                signer,
+                image_id,
+                &platform_profiles,
+                &measurement_variants,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
+        let sig_bytes = if with_policy_signatures {
+            sign_message(
+                &(
+                    keccak256("CVM_MSG_BASEIMAGE_REGISTER_V2"),
+                    U256::from(chain_id),
+                    *self.stub.address(),
+                    U256::from(op_expires_at),
+                    spec.clone(),
+                    platform_profiles.clone(),
+                    measurement_variants.clone(),
+                    variant_signatures.clone(),
+                ),
+                signer,
+            )
+            .await?
+        } else {
+            sign_message(
+                &(
+                    keccak256(b"CVM_MSG_BASEIMAGE_REGISTER_V1"),
+                    U256::from(chain_id),
+                    *self.stub.address(),
+                    U256::from(op_expires_at),
+                    spec.clone(),
+                    platform_profiles.clone(),
+                    measurement_variants.clone(),
+                ),
+                &signer,
+            )
+            .await?
+        };
 
         debug!("spec: {:?}", spec);
         debug!("platform_profiles: {:?}", platform_profiles);
@@ -187,16 +254,32 @@ impl BaseImageRegistry {
         debug!("sig_bytes: {:?}", sig_bytes);
 
         // Call the contract
-        let call = self.stub.registerBaseImage(
-            spec,
-            platform_profiles,
-            measurement_variants,
-            op_expires_at,
-            owner_identity.into(),
-            sig_bytes,
-        );
-
-        let pending = call.send_ex().await?;
+        let pending = if with_policy_signatures {
+            self.stub
+                .registerBaseImageV2(
+                    spec,
+                    platform_profiles,
+                    measurement_variants,
+                    variant_signatures,
+                    op_expires_at,
+                    owner_identity.into(),
+                    sig_bytes,
+                )
+                .send_ex()
+                .await?
+        } else {
+            self.stub
+                .registerBaseImage(
+                    spec,
+                    platform_profiles,
+                    measurement_variants,
+                    op_expires_at,
+                    owner_identity.into(),
+                    sig_bytes,
+                )
+                .send_ex()
+                .await?
+        };
 
         let tx_hash = pending.tx_hash();
 
@@ -305,6 +388,45 @@ impl BaseImageRegistry {
         measurement_variants: Vec<Vec<MeasurementVariant>>,
         op_expiry_seconds: u64,
     ) -> Result<BaseImageResult> {
+        self.add_platform_variants_impl(
+            signer,
+            base_image_id,
+            platform_profiles,
+            measurement_variants,
+            op_expiry_seconds,
+            false,
+        )
+        .await
+    }
+
+    pub async fn add_platform_variants_v2(
+        &self,
+        signer: &PrivateKeySigner,
+        base_image_id: B256,
+        platform_profiles: Vec<PlatformProfile>,
+        measurement_variants: Vec<Vec<MeasurementVariant>>,
+        op_expiry_seconds: u64,
+    ) -> Result<BaseImageResult> {
+        self.add_platform_variants_impl(
+            signer,
+            base_image_id,
+            platform_profiles,
+            measurement_variants,
+            op_expiry_seconds,
+            true,
+        )
+        .await
+    }
+
+    async fn add_platform_variants_impl(
+        &self,
+        signer: &PrivateKeySigner,
+        base_image_id: B256,
+        platform_profiles: Vec<PlatformProfile>,
+        measurement_variants: Vec<Vec<MeasurementVariant>>,
+        op_expiry_seconds: u64,
+        with_policy_signatures: bool,
+    ) -> Result<BaseImageResult> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
         let op_expires_at = op_expires_at(op_expiry_seconds);
@@ -312,19 +434,47 @@ impl BaseImageRegistry {
         let chain_id = self.stub.provider().chain_id();
 
         // Message: sha256(abi.encode(BASEIMAGE_UPDATE_MSG, chainId, contractAddr, opExpiresAt, baseImageId, profiles, variants))
-        let sig_bytes = sign_message(
-            &(
-                keccak256(b"CVM_MSG_BASEIMAGE_UPDATE_V1"),
-                U256::from(chain_id),
-                *self.stub.address(),
-                U256::from(op_expires_at),
+        let variant_signatures = if with_policy_signatures {
+            crate::publisher_policy::sign_variants(
+                signer,
                 base_image_id,
-                platform_profiles.clone(),
-                measurement_variants.clone(),
-            ),
-            signer,
-        )
-        .await?;
+                &platform_profiles,
+                &measurement_variants,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
+        let sig_bytes = if with_policy_signatures {
+            sign_message(
+                &(
+                    keccak256("CVM_MSG_BASEIMAGE_UPDATE_V2"),
+                    U256::from(chain_id),
+                    *self.stub.address(),
+                    U256::from(op_expires_at),
+                    base_image_id,
+                    platform_profiles.clone(),
+                    measurement_variants.clone(),
+                    variant_signatures.clone(),
+                ),
+                signer,
+            )
+            .await?
+        } else {
+            sign_message(
+                &(
+                    keccak256(b"CVM_MSG_BASEIMAGE_UPDATE_V1"),
+                    U256::from(chain_id),
+                    *self.stub.address(),
+                    U256::from(op_expires_at),
+                    base_image_id,
+                    platform_profiles.clone(),
+                    measurement_variants.clone(),
+                ),
+                signer,
+            )
+            .await?
+        };
 
         info!(
             address = %self.stub.address(),
@@ -333,18 +483,32 @@ impl BaseImageRegistry {
             "Submitting addPlatformVariants transaction"
         );
 
-        let pending = self
-            .stub
-            .addPlatformVariants(
-                base_image_id,
-                platform_profiles,
-                measurement_variants,
-                op_expires_at,
-                owner_identity.into(),
-                sig_bytes,
-            )
-            .send_ex()
-            .await?;
+        let pending = if with_policy_signatures {
+            self.stub
+                .addPlatformVariantsV2(
+                    base_image_id,
+                    platform_profiles,
+                    measurement_variants,
+                    variant_signatures,
+                    op_expires_at,
+                    owner_identity.into(),
+                    sig_bytes,
+                )
+                .send_ex()
+                .await?
+        } else {
+            self.stub
+                .addPlatformVariants(
+                    base_image_id,
+                    platform_profiles,
+                    measurement_variants,
+                    op_expires_at,
+                    owner_identity.into(),
+                    sig_bytes,
+                )
+                .send_ex()
+                .await?
+        };
 
         let tx_hash = pending.tx_hash();
         info!(tx_hash = %tx_hash, "Transaction submitted");

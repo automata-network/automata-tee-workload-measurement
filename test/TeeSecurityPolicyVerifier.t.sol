@@ -14,6 +14,7 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID,
     TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TEE_ATTRIBUTE_INTEL_TDX_DEBUG,
     TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED,
@@ -26,6 +27,8 @@ contract TeeSecurityPolicyVerifierTest is Test {
     uint24 private constant MILAN_CPUID = 0x190101;
     uint24 private constant GENOA_CPUID = 0x191101;
     bytes32 private constant MINIMUM_TCB = 0x00000000de1d000400000000de1d000400000000de1d000400000000de1d0004;
+    bytes32 private constant MILAN_TCB = 0x00000000db18000400000000db18000400000000db18000400000000db180004;
+    bytes32 private constant GENOA_TCB = 0x00000000581c000c00000000581c000c00000000581c000c00000000581c000c;
     bytes32 private constant PLATFORM_INFO_POLICY = 0x0000000000000000000000000000000000000000000000010000000000000020;
     bytes32 private constant SOURCE_DIGEST = keccak256("policy-source");
 
@@ -131,6 +134,65 @@ contract TeeSecurityPolicyVerifierTest is Test {
 
         Attribute[] memory attributes = new Attribute[](0);
         verifier.verifyTeePolicy(inputs, attributes, attributes, new AttributeRequirement[](0));
+    }
+
+    function testCpuidScopedBaseImageTcbUsesVerifiedReportCpuid() public {
+        AmdSnpSecurityPolicyUpdate[] memory updates = new AmdSnpSecurityPolicyUpdate[](2);
+        updates[0] = _activeUpdate(MILAN_CPUID, 1);
+        updates[0].minimumTcb = MILAN_TCB;
+        updates[1] = _activeUpdate(GENOA_CPUID, 1);
+        updates[1].minimumTcb = GENOA_TCB;
+        vm.prank(OWNER);
+        registry.updatePolicies(updates, SOURCE_DIGEST);
+
+        bytes32 milanKey = keccak256("atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum.cpuid.190101");
+        bytes32 genoaKey = keccak256("atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum.cpuid.191101");
+        assertEq(milanKey, 0xbc0cb95326ec02376a4a025200b48a33202411d9c3b05a6139346d36255923da);
+        assertEq(genoaKey, 0x047308af688571121aa6a3b952e56255cf75667e90fcda64b42bb1f4e5a5a140);
+        Attribute[] memory profile = new Attribute[](3);
+        profile[0] = Attribute(TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID, TEE_ATTRIBUTE_TRUE);
+        profile[1] = Attribute(milanKey, MILAN_TCB);
+        profile[2] = Attribute(genoaKey, GENOA_TCB);
+        Attribute[] memory none = new Attribute[](0);
+        AttributeRequirement[] memory requirements = new AttributeRequirement[](0);
+
+        VerifiedTeePolicyInputs memory inputs = _validInputs();
+        inputs.amdSevSnpCpuid = MILAN_CPUID;
+        inputs.amdSevSnpTcbValues = MILAN_TCB;
+        verifier.verifyTeePolicy(inputs, profile, none, requirements);
+
+        inputs.amdSevSnpCpuid = GENOA_CPUID;
+        inputs.amdSevSnpTcbValues = GENOA_TCB;
+        verifier.verifyTeePolicy(inputs, profile, none, requirements);
+
+        inputs.amdSevSnpTcbValues = MILAN_TCB;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TeeSecurityPolicyVerifier.TeeAttributeBaseImageMismatch.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+                GENOA_TCB,
+                MILAN_TCB
+            )
+        );
+        verifier.verifyTeePolicy(inputs, profile, none, requirements);
+
+        Attribute[] memory missingGenoa = new Attribute[](2);
+        missingGenoa[0] = profile[0];
+        missingGenoa[1] = profile[1];
+        vm.expectRevert(abi.encodeWithSelector(TeeSecurityPolicyVerifier.AttributeNotFound.selector, genoaKey));
+        verifier.verifyTeePolicy(inputs, missingGenoa, none, requirements);
+
+        AttributeRequirement[] memory baseImageOnly = new AttributeRequirement[](1);
+        baseImageOnly[0].key = TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID;
+        baseImageOnly[0].allowedValues = new bytes32[](1);
+        baseImageOnly[0].allowedValues[0] = TEE_ATTRIBUTE_TRUE;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TeeSecurityPolicyVerifier.BaseImageOnlyAttributeRequirement.selector,
+                TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID
+            )
+        );
+        verifier.verifyTeePolicy(inputs, profile, none, baseImageOnly);
     }
 
     function testVerifyAmdSnpPolicyUsesRegistryDefaultsWhenBothSidesAreMissing() public {

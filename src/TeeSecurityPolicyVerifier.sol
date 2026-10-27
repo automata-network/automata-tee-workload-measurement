@@ -11,6 +11,7 @@ import {
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA,
     TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM,
+    TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID,
     TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY,
     TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG_BIT,
     TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA_BIT,
@@ -39,6 +40,12 @@ contract TeeSecurityPolicyVerifier is ITeeSecurityPolicyVerifier {
     error AttributeValueNotAllowed(bytes32 key, bytes32 actualValue);
     error EmptyTeeAttributeRequirement(bytes32 key);
     error InvalidPackedTeeAttributeRequirementLength(bytes32 key, uint256 actualLength);
+    error InvalidCpuidTcbPolicyMarker(bytes32 actualValue);
+    error ConflictingCpuidTcbPolicy();
+    error BaseImageOnlyAttributeRequirement(bytes32 key);
+
+    bytes16 private constant HEX_DIGITS = "0123456789abcdef";
+    string private constant SNP_TCB_CPUID_PREFIX = "atakit.attestation.v1.tee.amd-sev-snp.tcb.minimum.cpuid.";
 
     constructor(IAmdSnpSecurityPolicyRegistry amdSnpSecurityPolicyRegistry_) {
         amdSnpSecurityPolicyRegistry = amdSnpSecurityPolicyRegistry_;
@@ -51,6 +58,11 @@ contract TeeSecurityPolicyVerifier is ITeeSecurityPolicyVerifier {
         Attribute[] calldata variantAttributes,
         AttributeRequirement[] calldata requirements
     ) external view {
+        for (uint256 i = 0; i < requirements.length; i++) {
+            if (requirements[i].key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID) {
+                revert BaseImageOnlyAttributeRequirement(requirements[i].key);
+            }
+        }
         _verifyGenericAttributes(profileAttributes, variantAttributes, requirements);
 
         if (inputs.teeType == TEEType.IntelTDX) {
@@ -136,9 +148,25 @@ contract TeeSecurityPolicyVerifier is ITeeSecurityPolicyVerifier {
             requirements
         );
 
-        bytes32 baseTcb = _effectiveAttribute(
-            profileAttributes, variantAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, policy.minimumTcb
+        bytes32 baseTcb;
+        (bool cpuidScoped, bytes32 marker) = _findEffectiveAttribute(
+            profileAttributes, variantAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID
         );
+        if (cpuidScoped) {
+            if (marker != TEE_ATTRIBUTE_TRUE) revert InvalidCpuidTcbPolicyMarker(marker);
+            (bool hasGlobal,) =
+                _findEffectiveAttribute(profileAttributes, variantAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM);
+            if (hasGlobal) revert ConflictingCpuidTcbPolicy();
+            bytes32 key = _cpuidTcbMinimumKey(inputs.amdSevSnpCpuid);
+            (bool found, bytes32 selectedTcb) = _findEffectiveAttribute(profileAttributes, variantAttributes, key);
+            if (!found) revert AttributeNotFound(key);
+            AmdSnpPolicy.validateTcb(selectedTcb);
+            baseTcb = selectedTcb;
+        } else {
+            baseTcb = _effectiveAttribute(
+                profileAttributes, variantAttributes, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, policy.minimumTcb
+            );
+        }
         bytes32 workloadTcb =
             _requirementOrDefault(requirements, TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM, policy.minimumTcb);
         if (!AmdSnpPolicy.tcbMeetsMinimum(inputs.amdSevSnpTcbValues, baseTcb)) {
@@ -289,9 +317,18 @@ contract TeeSecurityPolicyVerifier is ITeeSecurityPolicyVerifier {
         }
     }
 
+    function _cpuidTcbMinimumKey(uint24 cpuid) private pure returns (bytes32) {
+        bytes memory digits = new bytes(6);
+        for (uint256 i = 0; i < 6; i++) {
+            digits[i] = HEX_DIGITS[(uint256(cpuid) >> ((5 - i) * 4)) & 0x0f];
+        }
+        return keccak256(abi.encodePacked(SNP_TCB_CPUID_PREFIX, digits));
+    }
+
     function _isTeeAttributeKey(bytes32 key) private pure returns (bool) {
         return key == TEE_ATTRIBUTE_INTEL_TDX_DEBUG || key == TEE_ATTRIBUTE_AMD_SEV_SNP_DEBUG
             || key == TEE_ATTRIBUTE_AMD_SEV_SNP_MIGRATE_MA || key == TEE_ATTRIBUTE_INTEL_TDX_TCB_STATUS_ALLOWED
-            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM || key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY;
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM || key == TEE_ATTRIBUTE_AMD_SEV_SNP_TCB_MINIMUM_BY_CPUID
+            || key == TEE_ATTRIBUTE_AMD_SEV_SNP_PLATFORM_INFO_POLICY;
     }
 }

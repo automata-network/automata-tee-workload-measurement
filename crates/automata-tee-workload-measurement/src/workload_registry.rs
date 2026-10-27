@@ -45,6 +45,27 @@ impl WorkloadRegistry {
         spec: WorkloadSpec,
         op_expiry_seconds: u64,
     ) -> Result<B256> {
+        self.register_workload_impl(signer, spec, op_expiry_seconds, false)
+            .await
+    }
+
+    pub async fn register_workload_v2(
+        &self,
+        signer: &PrivateKeySigner,
+        spec: WorkloadSpec,
+        op_expiry_seconds: u64,
+    ) -> Result<B256> {
+        self.register_workload_impl(signer, spec, op_expiry_seconds, true)
+            .await
+    }
+
+    async fn register_workload_impl(
+        &self,
+        signer: &PrivateKeySigner,
+        spec: WorkloadSpec,
+        op_expiry_seconds: u64,
+        with_policy_signatures: bool,
+    ) -> Result<B256> {
         let owner_identity = PublicIdentity::secp256k1(signer);
 
         let op_expires_at = op_expires_at(op_expiry_seconds);
@@ -69,17 +90,37 @@ impl WorkloadRegistry {
 
         // Build and sign the message
         // Message: sha256(abi.encode(WORKLOAD_REGISTER_MSG, chainId, contractAddr, opExpiresAt, spec))
-        let sig_bytes = sign_message(
-            &(
-                keccak256(b"CVM_MSG_WORKLOAD_REGISTER_V1"),
-                U256::from(chain_id),
-                *self.stub.address(),
-                U256::from(op_expires_at),
-                spec.clone(),
-            ),
-            signer,
-        )
-        .await?;
+        let workload_signature = if with_policy_signatures {
+            crate::publisher_policy::sign_workload(signer, workload_id, &spec).await?
+        } else {
+            Default::default()
+        };
+        let sig_bytes = if with_policy_signatures {
+            sign_message(
+                &(
+                    keccak256("CVM_MSG_WORKLOAD_REGISTER_V2"),
+                    U256::from(chain_id),
+                    *self.stub.address(),
+                    U256::from(op_expires_at),
+                    spec.clone(),
+                    workload_signature.clone(),
+                ),
+                signer,
+            )
+            .await?
+        } else {
+            sign_message(
+                &(
+                    keccak256(b"CVM_MSG_WORKLOAD_REGISTER_V1"),
+                    U256::from(chain_id),
+                    *self.stub.address(),
+                    U256::from(op_expires_at),
+                    spec.clone(),
+                ),
+                signer,
+            )
+            .await?
+        };
 
         debug!("spec: {:?}", spec);
         debug!("op_expires_at: {}", op_expires_at);
@@ -87,11 +128,23 @@ impl WorkloadRegistry {
         debug!("sig_bytes: {:?}", sig_bytes);
 
         // Call the contract
-        let pending = self
-            .stub
-            .registerWorkload(spec, op_expires_at, owner_identity.into(), sig_bytes)
-            .send_ex()
-            .await?;
+        let pending = if with_policy_signatures {
+            self.stub
+                .registerWorkloadV2(
+                    spec,
+                    workload_signature,
+                    op_expires_at,
+                    owner_identity.into(),
+                    sig_bytes,
+                )
+                .send_ex()
+                .await?
+        } else {
+            self.stub
+                .registerWorkload(spec, op_expires_at, owner_identity.into(), sig_bytes)
+                .send_ex()
+                .await?
+        };
 
         let tx_hash = pending.tx_hash();
 
